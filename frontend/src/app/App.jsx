@@ -3616,10 +3616,33 @@ function LibraryApp() {
       window.removeEventListener("gamma:mirror-changed", loadMerges);
     };
   }, [loadMerges]);
+  // One chip open at a time, and the page's conflicts in tree order: the
+  // chip's ‹ › walk them and a decision opens the next one, so a page of
+  // conflicts is worked through without hunting for the chips.
+  const [mergeOpen, setMergeOpen] = useState(null);
+  useEffect(() => { setMergeOpen(null); }, [focusedBlockId]);
+  const mergeOrder = useMemo(
+    () => (merges ? flattenBlocks(blocks).map((b) => b.id).filter((id) => merges.has(id)) : []),
+    [merges, blocks],
+  );
+  function showMerge(id) {
+    setMergeOpen(id);
+    if (id) jumpToRef.current?.(focusedBlockId, id);
+  }
+  function stepMerge(fromId, delta) {
+    if (!mergeOrder.length) { setMergeOpen(null); return; }
+    const i = Math.max(0, mergeOrder.indexOf(fromId));
+    showMerge(mergeOrder[(i + delta + mergeOrder.length) % mergeOrder.length]);
+  }
+  const mergeNav = (id) => ({ index: mergeOrder.indexOf(id) + 1, total: mergeOrder.length, onStep: (delta) => stepMerge(id, delta) });
   async function resolveMerge(conflict, choice) {
     await apiJson(`${API}/mirrors/${encodeURIComponent(mirrorWs)}/conflicts/${conflict.id}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }),
     });
+    // on to the next conflict down the page (the one above when it was the last), else done
+    const rest = mergeOrder.filter((id) => id !== conflict.block_id);
+    const i = Math.max(0, mergeOrder.indexOf(conflict.block_id));
+    showMerge(rest.length ? rest[Math.min(i, rest.length - 1)] : null);
     window.dispatchEvent(new CustomEvent("gamma:mirror"));
   }
   // Jump to a block on this page or another — the sync popover's lists and
@@ -5988,6 +6011,7 @@ function LibraryApp() {
       view: homeMode ? "home" : pageAttach ? "pdf" : "page", hasPdf: !!pageAttach,
       aiConfigured: !!aiInfo?.enabled && !!aiInfo?.models?.length,
       chatVisible: isPhone ? phonePanel === "chat" : !chatHidden && !collapsedWins.chat,
+      pdfChatVisible: !!pageAttach && !pdfHidden && !collapsedWins.pdf && !isPhone,
       guideAvailable: !settingsOpen,
     },
     onStepChange: () => setOpenPopover(null),
@@ -7671,6 +7695,9 @@ function LibraryApp() {
                   peers: collab.peers,
                   merges,
                   onResolveMerge: resolveMerge,
+                  mergeOpen,
+                  onMergeOpen: setMergeOpen,
+                  mergeNav,
                   enterNewNote,
                   // `above` inserts before `id` instead (the "+" handle with
                   // Alt held).
@@ -7846,7 +7873,6 @@ function LibraryApp() {
         <ChatDock
           {...common}
           session={chatSession}
-          onShowGuide={() => guide.start("ai-chat")}
           readOnly={shareMode}
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
@@ -8336,15 +8362,24 @@ function LibraryApp() {
                 Settings…
               </button>
               <div className="popoverDivider" />
-              <button
-                className="popoverItem"
-                data-guide="account.tour"
-                onClick={() => { setOpenPopover(null); guide.start("first-run"); }}
-                title="A one-minute walk through the main controls"
-              >
-                <HelpCircleIcon className="popoverItemIcon" size={15} />
-                Take the tour
-              </button>
+              <details className="accountTours">
+                <summary className="popoverItem" data-guide="account.tour">
+                  <HelpCircleIcon className="popoverItemIcon" size={15} />
+                  Tours <span className="accountToursArrow" aria-hidden="true">›</span>
+                </summary>
+                <div className="accountToursMenu" role="menu" aria-label="Tours">
+                  <button className="popoverItem" role="menuitem" data-guide="account.firstRun"
+                    onClick={() => { setOpenPopover(null); guide.start("first-run"); }}>Your first paper</button>
+                  <button className="popoverItem" role="menuitem" data-guide="account.aiChat"
+                    onClick={() => {
+                      setChatHidden(false);
+                      setCollapsedWins((prev) => ({ ...prev, chat: false }));
+                      if (isPhone) setPhonePanel("chat");
+                      setOpenPopover(null);
+                      guide.start("ai-chat");
+                    }}>AI chat</button>
+                </div>
+              </details>
               <div className="popoverDivider" />
               <button className="popoverItem popoverItemDanger" onClick={doLogout}>
                 <LogOutIcon className="popoverItemIcon" size={15} />

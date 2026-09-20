@@ -10,8 +10,9 @@ The connection is read-only and bound to one workspace. If tools are unavailable
 do not infer that sign-in failed: the workflow can be installed and OAuth approved
 while the current task has no MCP tools. If setup has not been completed, direct
 the user to Gamma's External assistants settings and the plugin README.
-If setup already succeeded, check `codex mcp get gamma` or the assistant's MCP
-status when available. Report the observed reason: managed requirements need an
+If setup already succeeded, check the current assistant's MCP status: in Codex,
+use `codex mcp get gamma`; in Claude Code, use `claude mcp get gamma` or `/mcp`.
+Report the observed reason: managed requirements need an
 administrator to allow the connection; authentication errors need sign-in; a
 healthy connection may need an app restart and a new task. If status cannot be
 checked, say that the cause is unverified rather than repeating installation.

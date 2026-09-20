@@ -1,6 +1,6 @@
-# Gamma PDF for Codex
+# Gamma PDF for Codex and Claude Code
 
-Search and read your Gamma pages, notes, highlights and PDF text from Codex.
+Search and read your Gamma pages, notes, highlights and PDF text from either assistant.
 
 ## Connect your library
 
@@ -20,6 +20,23 @@ the setup scripts; no Gamma desktop app is required.
 
 {install_intro}
 
+### Claude Code
+
+```text
+claude plugin marketplace add {install_source}
+claude plugin install gamma@gamma-local --scope user
+claude mcp add --transport http --scope user gamma <your-gamma-address>/mcp
+```
+
+Use the actual MCP URL from Gamma's settings. Start Claude Code, open `/mcp`,
+select `gamma`, and authenticate in your browser to approve a workspace.
+Start a new session and invoke `/gamma:gamma`, or ask about your Gamma library.
+To update later, run `claude plugin marketplace update gamma-local` followed by
+`claude plugin update gamma@gamma-local`, then start a new session.
+For an extracted marketplace, replace its contents with the newer release first.
+
+### Codex
+
 ```text
 codex plugin marketplace add {install_source}
 ```
@@ -38,8 +55,10 @@ This package contains no credentials and does not publish a public directory lis
 ## Publish this marketplace on GitHub
 
 Commit the contents of this directory as the root of your marketplace repository,
-including `.agents/` and `plugins/gamma/.codex-plugin/`. Once pushed, users can
-add it with `codex plugin marketplace add OWNER/REPO`. To release an update,
+including `.agents/`, `.claude-plugin/`, and both hidden manifest directories in
+`plugins/gamma/`. Once pushed, users can add it with
+`codex plugin marketplace add OWNER/REPO` or
+`claude plugin marketplace add OWNER/REPO`. To release an update,
 replace the package contents and push; users refresh their marketplace and
 reinstall the plugin, then start a new chat.
 

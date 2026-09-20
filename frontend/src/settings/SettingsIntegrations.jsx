@@ -2,7 +2,7 @@ import React from "react";
 import { API, apiJson, copyText } from "../shared/lib/utils";
 import { PaneHead, Section, Row, Segmented, Step } from "./SettingsKit";
 import { LinkIcon } from "../shared/ui/Icons";
-import { codexSetupCommand } from "./codexSetup";
+import { codexSetupCommand, claudeConnectCommand, claudePluginInstallCommands } from "./assistantSetup";
 
 function CopyField({ label, value, action, rows = 2 }) {
   const [status, setStatus] = React.useState("");
@@ -81,8 +81,9 @@ export function IntegrationSettings({ workspaceId }) {
   };
   const config = data ? `[mcp_servers.gamma]\nurl = ${JSON.stringify(data.mcp_url)}\nbearer_token_env_var = "GAMMA_TOKEN"` : "";
   const setup = data ? codexSetupCommand(data.mcp_url, platform) : "";
+  const isClaude = method === "claude";
   return <>
-    <PaneHead icon={LinkIcon} title="Integrations">Read-only access for Codex or any MCP assistant.</PaneHead>
+    <PaneHead icon={LinkIcon} title="Integrations">Read-only access for Codex, Claude Code, or any MCP assistant.</PaneHead>
     {loadError ? <div className="integrationDetails" role="alert">
       <p>Could not load your connections. {loadError}</p>
       <button className="uiBtn" onClick={() => refresh()}>Try again</button>
@@ -91,25 +92,54 @@ export function IntegrationSettings({ workspaceId }) {
       {data ? <div className="integrationDetails">
         {data.oauth_available ? <>
           <div role="group" aria-label="Connection method">
-            <Segmented value={method} onChange={setMethod} options={[["settings", "Any assistant"], ["terminal", "Codex CLI"]]} />
+            <Segmented value={method} onChange={setMethod} options={[["settings", "Any assistant"], ["terminal", "Codex CLI"], ["claude", "Claude Code"]]} />
           </div>
-          <Step n={1} title={method === "settings" ? "Add Gamma to your assistant" : "Install and connect Gamma PDF"}
-            hint={method === "settings" ? "In your assistant's settings, add an MCP server with this URL." : "Run this command on the computer where you use Codex. It installs the plugin and opens Gamma sign-in."}>
+          <Step n={1} title={method === "settings" ? "Add Gamma to your assistant" : isClaude ? "Connect Claude Code to Gamma" : "Install and connect Gamma PDF"}
+            hint={method === "settings" ? "In your assistant's settings, add an MCP server with this URL." : isClaude
+              ? "Run this command in a terminal on the computer where you use Claude Code. If Gamma is already connected at this address, continue to sign-in."
+              : "Run this command on the computer where you use Codex. It installs the plugin and opens Gamma sign-in."}>
             {method === "settings"
               ? <CopyField key="url" label="Gamma MCP server URL" value={data.mcp_url} action="Copy server URL" />
               : <>
                 <div role="group" aria-label="Terminal platform">
                   <Segmented value={platform} onChange={setPlatform} options={[["windows", "Windows PowerShell"], ["unix", "macOS / Linux"]]} />
                 </div>
-                <CopyField key="commands" label="Codex setup command" value={setup} action="Copy setup command" rows={4} />
-                <p className="settingDesc">Requires the <a href="https://learn.chatgpt.com/docs/cli" target="_blank" rel="noreferrer">Codex CLI</a>.
-                  Downloads the setup script and plugin from <a href="https://github.com/tim4431/Gamma/releases/latest" target="_blank" rel="noreferrer">Gamma's latest release</a>.</p>
+                {isClaude ? <>
+                  <CopyField key="claude-connect" label="Claude Code connection command" value={claudeConnectCommand(data.mcp_url, platform)} action="Copy connection command" />
+                  <p className="settingDesc">Requires <a href="https://code.claude.com/docs/en/setup" target="_blank" rel="noreferrer">Claude Code</a> and a running Gamma server.</p>
+                </> : <>
+                  <CopyField key="commands" label="Codex setup command" value={setup} action="Copy setup command" rows={4} />
+                  <p className="settingDesc">Requires the <a href="https://learn.chatgpt.com/docs/cli" target="_blank" rel="noreferrer">Codex CLI</a>.
+                    Downloads the setup script and plugin from <a href="https://github.com/tim4431/Gamma/releases/latest" target="_blank" rel="noreferrer">Gamma's latest release</a>.</p>
+                </>}
               </>}
           </Step>
           <Step n={2} title="Sign in and choose a workspace"
-            hint="Follow your assistant's sign-in prompt. Approve read-only access in Gamma. No token to create or paste." />
-          <Step n={3} title="Start a new chat"
-            hint={method === "terminal" ? 'Mention @Gamma PDF and ask about a paper, or say “Let me choose a paper”.' : 'Try asking: “Use Gamma to find my notes about…”'} />
+            hint={isClaude ? "Start Claude Code, run /mcp, select gamma, and authenticate. Sign in to Gamma in your browser and approve a workspace."
+              : "Follow your assistant's sign-in prompt. Approve read-only access in Gamma. No token to create or paste."} />
+          {isClaude ? <>
+            <Step n={3} title="Use the Gamma plugin"
+              hint="In Claude Code, open /plugin to see installed plugins. Start a new session and run /gamma:gamma, then ask about a paper or say “Let me choose a paper”.">
+              <p className="settingDesc">The plugin provides the Gamma workflow. The MCP connection above gives it access to your library.</p>
+              <details>
+                <summary>Install the plugin if it is missing</summary>
+                <p>Download the Claude Code plugin ZIP from <a href="https://github.com/tim4431/Gamma/releases/latest" target="_blank" rel="noreferrer">Gamma's latest release</a> and extract it into a permanent folder.
+                  Open a terminal in the folder containing <code>gamma-marketplace</code> and run:</p>
+                <CopyField label="Claude Code plugin install commands" value={claudePluginInstallCommands} action="Copy plugin install commands" rows={3} />
+                <p className="settingDesc">Choose the asset named <code>gamma-claude-code-plugin</code> followed by the version and <code>.zip</code>.
+                  Requires a release that includes the Claude Code plugin. Keep the extracted folder after installing.</p>
+              </details>
+            </Step>
+            <details className="integrationAdvanced">
+              <summary>Changed the server address?</summary>
+              <p>Open Gamma at its new address, then copy these commands to replace the connection. Your plugin stays installed.
+                Restart Claude Code and sign in again through <code>/mcp</code>.</p>
+              <CopyField label="Claude Code change server commands" value={claudeConnectCommand(data.mcp_url, platform, { replace: true })} action="Copy change server commands" rows={3} />
+              <p className="settingDesc">If Gamma runs on the same computer, localhost keeps working when your LAN IP changes.
+                For a remote server, use a stable HTTPS hostname and confirm it in Gamma's Settings → Server.</p>
+            </details>
+          </> : <Step n={3} title="Start a new chat"
+            hint={method === "terminal" ? 'Mention @Gamma PDF and ask about a paper, or say “Let me choose a paper”.' : 'Try asking: “Use Gamma to find my notes about…”'} />}
         </> : <>
           <p>Browser sign-in is not available for this Gamma address yet.</p>
           <p>An administrator can enable it by confirming the public server URL in Settings → Server.</p>

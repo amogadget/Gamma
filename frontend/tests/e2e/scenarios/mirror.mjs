@@ -99,20 +99,25 @@ export async function mirrorScenarios(env) {
       await page.locator(".mergeChip").click();
       const merge = page.getByRole("dialog", { name: "Merge", exact: true });
       await merge.getByText("Auto-merged", { exact: true }).waitFor();
+      // ours and theirs side by side with what each adds marked, the merged text under them, Keep on the current one
       assert((await merge.locator("mark.merge-mine").count()) >= 1 && (await merge.locator("mark.merge-theirs").count()) >= 1, "both sides coloured");
+      assertEq(await merge.locator(".mergeVersion").count(), 3, "ours, theirs and the merged text");
+      await merge.getByRole("button", { name: "Keep merged", exact: true }).waitFor();
+      assertEq(await merge.locator(".mergeNav").count(), 0, "one conflict: nothing to step through");
       await merge.getByRole("button", { name: "Use theirs", exact: true }).click();
       await until(() => page.locator(".mergeChip").count().then((n) => n === 0), { what: "the chip goes once resolved" });
       await page.getByRole("paragraph").filter({ hasText: "a note to copy (original)" }).first().waitFor();
       assertEq((await user.api(`/api/mirrors/${copy.workspace_id}`)).conflicts_open, 0);
       assertNoProblems(page);
 
-      // Remove origin keeps the workspace, drops the mirror.
+      // Remove origin (the row's "more" menu, then the confirm) keeps the workspace, drops the mirror.
       await page.getByRole("button", { name: "Account & settings", exact: true }).click();
       await page.getByRole("button", { name: "Settings…", exact: true }).click();
       await page.getByRole("dialog", { name: "Settings", exact: true }).waitFor();
       await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Workspaces", exact: true }).click();
-      await page.locator(".aiProvRow", { hasText: "clone of" }).locator(".aiProvActions .uiBtn").last().click();
-      await page.getByRole("button", { name: "Remove origin", exact: true }).click();
+      await page.locator(".aiProvRow", { hasText: "clone of" }).getByRole("button", { name: "More", exact: true }).click();
+      await page.getByRole("button", { name: "Remove origin", exact: true }).click(); // the menu row
+      await page.getByRole("button", { name: "Remove origin", exact: true }).click(); // the confirm
       await page.getByText("No clones yet.", { exact: true }).waitFor();
       assertEq((await user.api("/api/mirrors")).mirrors.length, 0);
       assert((await user.api("/api/workspaces/mine")).workspaces.some((w) => w.id === copy.workspace_id), "the workspace stays");

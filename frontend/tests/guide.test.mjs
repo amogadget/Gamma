@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { ANCHORS } from "../src/guide/anchors.js";
 import { EVENTS, eventMatches } from "../src/guide/events.js";
 import { TOURS } from "../src/guide/tours/index.js";
-import { canOfferTour, createGuideProgress, guideProgressKey } from "../src/guide/triggers.js";
+import { createGuideProgress, guideProgressKey } from "../src/guide/triggers.js";
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -40,36 +40,12 @@ test("tours reference registered anchors and catalogued events", () => {
 });
 
 const aiTour = TOURS["ai-chat"];
-const eligibleFacts = { aiConfigured: true, chatVisible: true, guideAvailable: true };
-const contact = { name: "chat.focused", payload: {} };
-
-test("contextual offers need both the intended interaction and current prerequisites", () => {
-  assert.equal(canOfferTour(aiTour, { facts: eligibleFacts }), false, "mounting alone is not contact");
-  assert.equal(canOfferTour(aiTour, { facts: eligibleFacts, event: contact }), true);
-  for (const key of Object.keys(eligibleFacts)) {
-    assert.equal(canOfferTour(aiTour, { facts: { ...eligibleFacts, [key]: false }, event: contact }), false, key);
-  }
-  assert.equal(canOfferTour(aiTour, { facts: eligibleFacts, event: { name: "chat.sent" } }), false);
-  assert.equal(canOfferTour(TOURS["first-run"], { facts: eligibleFacts, event: contact }), false);
-});
-
-test("offered, dismissed, running and completed versions do not prompt again", () => {
-  for (const state of ["offered", "dismissed", "running", "done"]) {
-    const args = { facts: eligibleFacts, event: contact, progress: { version: aiTour.version, state } };
-    assert.equal(canOfferTour(aiTour, args), false, state);
-    assert.equal(canOfferTour({ ...aiTour, version: aiTour.version + 1 }, args), true, "new version can be offered");
-    assert.equal(canOfferTour(aiTour, { ...args, progress: { version: aiTour.version + 1 } }), false, "downgrades never re-offer");
-  }
-});
-
-test("state-only requirements and event payload filters use the same eligibility rules", () => {
-  const tour = { ...aiTour, trigger: { requires: { hasPdf: true } } };
-  assert.equal(canOfferTour(tour, { facts: { hasPdf: true } }), true);
-  assert.equal(canOfferTour(tour, { facts: { hasPdf: false } }), false);
-  assert.equal(canOfferTour(tour, { facts: { hasPdf: true }, event: contact }), false);
-  tour.trigger = { event: "popover.opened", match: { name: "search" } };
-  assert.equal(canOfferTour(tour, { facts: {}, event: { name: "popover.opened", payload: { name: "add" } } }), false);
-  assert.equal(canOfferTour(tour, { facts: {}, event: { name: "popover.opened", payload: { name: "search" } } }), true);
+test("tours are manual and AI chat uses compact, conditional steps", () => {
+  for (const tour of Object.values(TOURS)) assert.equal(tour.trigger, undefined);
+  assert.deepEqual(aiTour.steps.map((s) => s.id), ["chat-question", "chat-voice", "chat-box", "chat-box-context"]);
+  assert.ok(aiTour.steps.every((s) => !s.body));
+  assert.equal(aiTour.steps[0].do[0].text, "summarize the paper for me");
+  assert.deepEqual(aiTour.steps[2].requires, { pdfChatVisible: true });
 });
 
 test("progress survives reload, separates accounts, and tolerates broken browser storage", () => {

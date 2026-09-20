@@ -1,4 +1,4 @@
-# Gamma MCP and Codex
+# Gamma MCP, Codex, and Claude Code
 
 Gamma exposes a read-only Streamable HTTP MCP endpoint at `/mcp`, on the same
 server as the app. Gamma's chat and MCP adapter share `gamma/ai_tools.py`:
@@ -16,7 +16,7 @@ servers, and connecting Codex does not invoke Gamma's AI provider.
 | `gamma/routers/integrations.py` | the session-only token management API |
 | `users.db` tables `integration_tokens`, `mcp_oauth` | migrations 6 and 7 ([migrations.md](migrations.md)) |
 | `frontend/src/settings/SettingsIntegrations.jsx`, `frontend/src/auth/McpConsent.jsx` | the Integrations pane, the consent screen |
-| `plugins/gamma/`, `tools/*codex*`, `.github/workflows/codex-plugin.yml` | the Codex plugin and its packaging |
+| `plugins/gamma/`, `tools/package_plugins.py`, `tools/release_plugins.py`, `.github/workflows/codex-plugin.yml` | the shared Codex / Claude Code plugin and its packaging |
 
 ## Connect
 
@@ -40,6 +40,47 @@ header must be removed (`codex mcp remove gamma`) and added again with just the
 URL before signing in. Installing the optional plugin does not install this
 per-user connection. A browser cannot directly edit Codex's configuration on
 your computer.
+
+### Claude Code
+
+Open **Settings → Integrations → Claude Code**. The connection command uses this
+Gamma server's MCP URL, with quoting for the selected terminal platform:
+
+```text
+claude mcp add --transport http --scope user gamma https://gamma.example.com/mcp
+```
+
+The same tab explains where the plugin appears (`/plugin`), how to invoke it
+(`/gamma:gamma`), and how to install it from an extracted release. Expand
+**Changed the server address?** for commands that replace the user-scoped MCP
+connection without reinstalling the plugin. Confirm a changed remote public URL
+in **Settings → Server** first, then reopen the setup tab and sign in again.
+Frontend command generation lives in `frontend/src/settings/assistantSetup.js`;
+both clients share shell-literal quoting, with `codexSetup.js` retained as an alias.
+
+Start Claude Code and open `/mcp`. Select `gamma` and authenticate in your browser;
+sign in to Gamma and approve the workspace. Start a new session. Check `/mcp` or
+`claude mcp get gamma` if tools are unavailable. Each assistant maintains its own
+connection and authorization; an existing Codex login does not connect Claude Code.
+See the [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+For the optional Gamma workflow, extract `gamma-claude-code-plugin-X.Y.Z.zip`
+from a Gamma release into a permanent directory, then run:
+
+```text
+claude plugin marketplace add <permanent-directory>/gamma-marketplace
+claude plugin install gamma@gamma-local --scope user
+```
+
+Start a new session and use `/gamma:gamma`, or ask about your Gamma library.
+The plugin uses the separately configured connection. To update after refreshing
+your extracted package or published marketplace, run
+`claude plugin marketplace update gamma-local` and
+`claude plugin update gamma@gamma-local`. Restart the session.
+
+For local development from this checkout, use `claude --plugin-dir ./plugins/gamma`.
+This loads the shared workflow without creating a marketplace; connect MCP separately.
+See the [plugin README](../../plugins/gamma/README.md) for both clients' setup.
 
 ### Manual tokens (advanced)
 
@@ -223,10 +264,17 @@ Setup does not remove existing marketplaces or plugins.
 
 ### Build and publish
 
-`plugins/gamma` is a skills-based Codex plugin. Its workflow uses the separately
-configured Gamma MCP server; this keeps per-installation addresses and credentials
+`plugins/gamma` is one skills-based plugin for Codex and Claude Code. Its workflow
+uses the separately configured Gamma MCP server; this keeps per-installation addresses and credentials
 out of a distributable package. A direct MCP connection also works without the
 plugin, including in the Codex IDE extension.
+
+Both native manifests point to the same `skills/gamma/SKILL.md`. Keep client UI
+metadata in its own manifest or `agents/openai.yaml`; keep library behavior in
+the shared skill and server. The builder rejects mismatched shared manifest
+metadata, and releases stamp both versions together. It copies only allowlisted
+files and writes each client's catalog around the same plugin directory, without
+symlinks or references outside the installed plugin. No second MCP backend is needed.
 
 From a Gamma checkout, build into a directory you will keep. Codex registers
 the source path and continues reading its catalog after installation; deleting
@@ -234,7 +282,7 @@ it breaks marketplace discovery even when the plugin remains cached. For
 example, in Windows PowerShell:
 
 ```powershell
-python tools/package_codex_plugin.py --output "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace" --archive
+python tools/package_plugins.py --output "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace" --archive
 codex plugin marketplace add "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace"
 ```
 
@@ -255,16 +303,19 @@ the generated instructions, pass `--github-repo OWNER/REPO`. This only formats
 the instructions; it does not create a repository or push files.
 
 For GitHub distribution, commit the **contents of the generated directory** at
-the root of a separate marketplace repository. Include `.agents/` and
-`plugins/gamma/.codex-plugin/`. After publication, users run:
+the root of a separate marketplace repository. Include `.agents/`,
+`.claude-plugin/`, `plugins/gamma/.codex-plugin/`, and
+`plugins/gamma/.claude-plugin/`. After publication, users run the command for their client:
 
 ```text
 codex plugin marketplace add OWNER/REPO
+claude plugin marketplace add OWNER/REPO
 ```
 
 They then install Gamma PDF from that marketplace in the plugin browser and
 connect their own library. The main Gamma repository itself is not a marketplace
-root. The `Codex plugin package` workflow checks the package and installers on
+root. The `Assistant plugin package` workflow checks both catalogs, shared files,
+release versions, checksums, and the Codex installers on
 Windows, macOS, and Linux and uploads preview assets.
 
 The existing `desktop.yml` Gamma release workflow also builds the plugin with
@@ -273,16 +324,23 @@ the computed release version and publishes these assets on the same `vX.Y.Z` rel
 - `gamma-codex-plugin-X.Y.Z.zip`
 - `install-gamma-codex.ps1` and `install-gamma-codex.sh`
 - `gamma-codex-SHA256SUMS.txt`
+- `gamma-claude-code-plugin-X.Y.Z.zip`
+- `gamma-claude-code-SHA256SUMS.txt`
+
+Both ZIPs contain identical bytes; separate names make the client downloads easy
+to find while keeping one build. The Codex installers retain their published names
+and behavior. The old `package_codex_plugin.py` entry point still builds the shared
+package; `release_codex_plugin.py` still emits only the original Codex asset names.
 
 Build-only runs keep them as CI artifacts. Keeping them on the existing
 release preserves the desktop updater's latest-release convention. Preview the
 assets locally with:
 
 ```text
-python tools/release_codex_plugin.py --output tmp/gamma-plugin-release --version 1.2.3
+python tools/release_plugins.py --output tmp/gamma-plugin-release --version 1.2.3
 ```
 
-The packager sets the version only in the exported manifest; it does not tag
+The packager sets the version only in the exported manifests; it does not tag
 or publish. Nothing here submits a public directory listing, which needs a
 stable public HTTPS endpoint and a review.
 

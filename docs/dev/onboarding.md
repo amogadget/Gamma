@@ -1,13 +1,13 @@
 # Onboarding: tours and contextual guides
 
-**Status: the engine, first-run tour, contextual triggers, and AI chat guide
+**Status: the engine, first-run tour and AI chat guide
 are built.** The welcome page, synced `onboarding` pref, first-sign-in
 invitation, checklist and standalone hints are still design.
 What exists: `frontend/src/guide/` (registry,
 event bus, `useGuide`, `GuideOverlay`, `tours/firstRun.js`), six `data-guide`
 anchors in the topbar, one `popover.opened` emit point in App, the node test
 `tests/guide.test.mjs` and the e2e step `scenarios/guide.mjs`. A tour starts
-from `/?guide=first-run` or the account menu's **Take the tour**; the first
+only from the account menu's **Tours** submenu; the first
 tour is a welcome card, the add-a-paper demo, then the user's own highlight
 on that paper, a typed note demonstration, an `llm` label demonstration, and a final spotlight
 on the Home button. Returning to the library emits `home.opened`, shows Done,
@@ -15,92 +15,23 @@ and completes the tour automatically; Finish can also close it. Progress is a lo
 (`gamma-guide:<tourId>`), not yet the synced pref. The seeded welcome page in
 `gamma/seed.py` is unchanged (guest workspaces only, hard-coded block tuples).
 
-## Contextual guides (implemented)
+## Manual tours (implemented)
 
-The box demonstration searches the PDF for the attention equation, scrolls to
-its page, and frames the rendered equation at the current zoom. Other PDFs
-without that equation retain the generic rectangle demonstration. Notes type
-through the real CodeMirror editor into an empty highlight note (or a separate
-demo note), preserving existing writing and resuming incomplete demo text on
-replay. The label demo uses the normal label field, whose add operation avoids
-duplicates and preserves the paper's other labels.
+The account menu's **Tours** submenu lists **Your first paper** and **AI chat**.
+Chat focus, page load, and `?guide=` URLs never start or offer a tour. The chat
+header has no guide button. Cards use short titles, without body paragraphs.
 
-Contextual tours reuse the same steps, spotlight, and event bus. Their
-`trigger` determines **when to offer** help; the invitation appears without
-dimming the app or moving focus. **Show me** starts the walkthrough.
-**Not now**, the close button, and Escape dismiss the offer. An offer,
-started tour, dismissal, or completion suppresses automatic offers for that
-version. Bump `version` only when the changed guide merits another invitation.
+AI chat starts in the message box and types `summarize the paper for me`, then
+points to voice input. Existing drafts are restored after the example; an
+empty composer keeps the example ready to edit. The tour never submits a
+message or starts recording. If the current page carries a PDF and its window
+is visible, it demonstrates Ctrl-drag and points to the resulting image in
+chat context. Hidden PDFs, notes pages, and phone chat omit those steps.
 
-The AI chat guide lives in `frontend/src/guide/tours/aiChat.js`. It is offered
-on deliberate pointer or keyboard contact with the composer, after
-`/api/ai/models` reports AI enabled with at least one model. A stale remembered
-provider id does not qualify; the default provider works without an explicit
-provider selection. Contact before setup does not consume the opportunity.
-The guide covers context attachments and `@` mentions, model/effort/context
-settings, tool permissions, and a sample question. It never fills or clears a
-draft, changes preferences, or sends a request. The user's own send completes
-the final step; **Got it** also finishes. The chat header's **Chat guide** info
-button replays it, as does `/?guide=ai-chat` once its prerequisites hold.
-
-To configure another guide, add a data file to `guide/tours/` and register it
-in `tours/index.js`:
-
-```js
-export default {
-  id: "ai-chat",
-  version: 1,
-  title: "Chat with your library",
-  estimate: "1 min",
-  trigger: {
-    event: "chat.focused", // a registered event; optional `match` filters payload
-    requires: { aiConfigured: true, chatVisible: true, guideAvailable: true },
-  },
-  invitation: {
-    anchor: "chat.composer",
-    placement: "top",
-    title: "A little context. Better answers.",
-    body: "Your AI is ready. Take a quick look around.",
-  },
-  steps: [/* ordinary tour steps */],
-};
-```
-
-- **First eligible use:** set `trigger.event` plus any `requires`. Use
-  `match: { name: "search" }` with `popover.opened` to target a particular menu.
-- **Requirements becoming true:** omit `event`, for example
-  `trigger: { requires: { hasPdf: true } }`. The engine checks current facts
-  when the app renders. Include all conditions that keep the guide relevant;
-  these conditions also govern manual entry and continued visibility.
-- **Facts and events:** App supplies facts through `useGuide`; feature code
-  emits named events where the interaction happens. Register new event and
-  anchor ids in `events.js` and `anchors.js`. The guide engine does not import
-  feature state. Step-level `requires` is a snapshot taken when a run starts.
-- **One guide at a time:** interactions during a running tour or an existing
-  invitation are ignored, not queued. A later eligible interaction can offer
-  the other guide. Share views and unavailable sessions disable all guides.
-  Closing chat, opening Settings, or losing AI configuration removes its guide.
-- **Persistence:** contextual progress is stored per account and origin at
-  `gamma-guide:<encoded-account>:<tourId>`, shared across that account's
-  workspaces in this browser. It is not yet synced across devices. Storage
-  failures fall back to memory for the mounted app. The original manually
-  started tour retains its existing `gamma-guide:first-run` key.
-- **Presentation:** invitations use the tour's theme tokens and placement,
-  without a backdrop. On narrow screens, a card for a lower control moves
-  above it so the composer remains usable. Reduced-motion settings apply.
-
-`tests/guide.test.mjs` checks trigger eligibility, version suppression,
-account isolation, storage failures, and registry consistency. Browser
-scenarios in `tests/e2e/scenarios/contextualGuide.mjs` exercise desktop and
-phone offers, draft preservation, user-driven completion, replay, dismissal,
-prerequisites, version changes, and coexistence with the first-run tour.
-
-Three behaviours the build settled that the design below did not spell out:
-a step whose event fires is marked **Done** for 1.1 seconds, then automatically
-advances; its navigation buttons hide during that acknowledgement. Dismissing
-or changing steps cancels the pending advance. The app closes any open popover on
-every step change (`onStepChange` from `useGuide`); and **demo steps** exist
-(next section), which the design had not planned.
+The paper tour frames the actual attention equation, types a note through
+CodeMirror without replacing existing writing, adds the `llm` label through
+the normal label field, and ends at Home. Successful user actions briefly
+show Done before advancing automatically.
 
 ## Demo steps
 
@@ -314,17 +245,11 @@ State machine: `idle` → `offered` (the small invitation card) → `running
   pick side, clamp to viewport). The app already positions popovers without a
   library.
 
-## Triggers and re-entry
+## Starting and replaying
 
-| Trigger | What happens |
-|---|---|
-| First sign-in of an account (no `onboarding` pref yet) | Home opens with the welcome page's card first; the invitation card appears once: "Take the 2-minute tour" / "Not now". Never a spotlight without consent. |
-| `/?guide=<tourId>` | Starts that tour (deep links from the user guide, the website and the e2e suite). Removed from the URL once started. |
-| Account menu → "Take the tour" (built) | Starts the first-run tour. Once the checklist exists this becomes "Getting started", opening the checklist popover where each item has "Show me", which runs the tour from that step. |
-| Checklist complete or dismissed | The menu item stays; the badge on the account button goes away. |
-| A tour's `version` is bumped | The invitation is offered again with "What changed"; progress for that tour resets. |
-| Guest account | Everything works from localStorage only; the daily wipe resets it, which is right for a demo. |
-| Share view (`shareMode`) | Nothing mounts. |
+Open **Account > Tours** and choose a tour. Every tour is manual and can be
+replayed. AI chat opens its dock if needed; PDF-specific steps are included
+only when the PDF is visible. Share views do not mount tours.
 
 ## Storage
 

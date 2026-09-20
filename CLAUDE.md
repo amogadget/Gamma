@@ -52,6 +52,9 @@ python manage.py setup                  # idempotent: guest account + missing wo
 uvicorn app:app --host 127.0.0.1 --port 9001 --reload
 
 # Frontend (React + Vite) — from frontend/
+# Node comes from fnm (winget) and is NOT on the PATH of a fresh shell: activate it first —
+#   PowerShell: fnm env --use-on-cd --shell power-shell | Out-String | Invoke-Expression; fnm use 24
+#   bash:       eval "$(fnm env --use-on-cd)"; fnm use 24
 npm run dev      # :5173, proxies /api → 127.0.0.1:9001
 npm run build
 

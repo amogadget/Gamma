@@ -240,24 +240,26 @@ function MenuSelect({ value, onChange, options, label, block, icon: TriggerIcon,
   );
 }
 
-// A button that opens a small action menu (the Users rows' Export / Import).
-// items: [{icon, label, title, onClick}].
-function ActionMenu({ label, icon: Icon, items, disabled }) {
+// A button that opens a small action menu (the Users rows' Export / Import,
+// a clone row's "more"). items: [{icon, label, title, onClick, danger?,
+// disabled?}]; `iconOnly` makes the trigger a square icon button whose
+// label is its tooltip.
+function ActionMenu({ label, icon: Icon, items, disabled, iconOnly = false }) {
   const [menu, close, triggerProps, triggerRef] = useDropdown();
   return (
     <>
-      <button type="button" className="uiBtn sm uiSelectBtn" disabled={disabled} {...triggerProps}>
-        {Icon ? <Icon size={13} /> : null}{label}
-        <ChevronDownIcon size={13} className="uiSelectChev" />
+      <button type="button" className={`uiBtn sm uiSelectBtn ${iconOnly ? "iconSq" : ""}`} disabled={disabled}
+        aria-label={label} title={iconOnly ? label : undefined} {...triggerProps}>
+        {Icon ? <Icon size={13} /> : null}{iconOnly ? null : label}
+        {iconOnly ? null : <ChevronDownIcon size={13} className="uiSelectChev" />}
       </button>
       {menu ? (
         <ContextMenu x={menu.x} y={menu.y} anchorRight onClose={close} ignoreRef={triggerRef}>
-          {items.map(({ icon: ItemIcon, label: lab, title, onClick }) => (
-            <button key={lab} className="ctxMenuItem ctxMenuItemIconed" title={title}
+          {items.map(({ icon: ItemIcon, label: lab, title, onClick, danger, disabled: off }) => (
+            <MenuItem key={lab} icon={ItemIcon} title={title} danger={danger} disabled={off}
               onClick={() => { close(); onClick(); }}>
-              {ItemIcon ? <span className="ctxMenuIcon"><ItemIcon size={14} /></span> : null}
               {lab}
-            </button>
+            </MenuItem>
           ))}
         </ContextMenu>
       ) : null}

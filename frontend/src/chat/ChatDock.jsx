@@ -152,7 +152,7 @@ export default function ChatDock({
   organizeFolder = null, toolRounds, agentReadChars, agentPerms, setAgentPerms, agentSystem,
   agentEnabled, setAgentEnabled, onLibraryChange, onNotesChange, onAgentEvent,
   // Opens a page the reply links to (/?page=<id>) in place.
-  onOpenPage, onShowGuide,
+  onOpenPage,
   onGrip, onGripDoubleClick, collapsed, onClose,
 }) {
   const [loadedMessages, setChatMessages] = useState([]);
@@ -966,12 +966,6 @@ export default function ChatDock({
           <SlidersIcon size={15} />
         </button>
         {findBtn}
-        {aiInfo?.enabled && onShowGuide ? (
-          <button type="button" className="ctlBtn" onClick={onShowGuide}
-            title="Chat guide" aria-label="Chat guide">
-            <InfoIcon size={15} />
-          </button>
-        ) : null}
         <span data-popover="chathistory" className="popoverAnchor">
           <button type="button" className={`ctlBtn ${historyOpen ? "modeActive" : ""}`}
             onClick={() => setOpenPopover((p) => (p === "chathistory" ? null : "chathistory"))}
@@ -1299,7 +1293,7 @@ export default function ChatDock({
         </div>
       ) : null}
       {chatImages.length ? (
-        <div className="chatImgPreviewRow">
+        <div className="chatImgPreviewRow" data-guide="chat.imageContext">
           {chatImages.map((src, i) => (
             <span key={i} className="chatImgPreview">
               <img src={src} alt="pasted figure" />
@@ -1312,8 +1306,6 @@ export default function ChatDock({
       <form
         className="chatInputRow"
         data-guide="chat.composer"
-        onPointerDownCapture={(e) => { if (e.isTrusted) guideEvents.emit("chat.focused"); }}
-        onFocusCapture={(e) => { if (e.isTrusted) guideEvents.emit("chat.focused"); }}
         onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
       >
         {dictation === "rec" ? (
@@ -1402,6 +1394,7 @@ export default function ChatDock({
           onAttach={(id) => setChatDocs((prev) => prev.includes(id) ? prev : [...prev, id])}
           onSend={sendChatMessage}
           className="chatInput chatInputArea"
+          data-guide="chat.input"
           rows={1}
           value={chatInput}
           onChange={setChatInput}
@@ -1429,7 +1422,7 @@ export default function ChatDock({
           </button>
         ) : (
           <>
-            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
+            <button className="uiBtn chatCircleBtn chatMicBtn" data-guide="chat.voice" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
               <MicIcon size={13} />
             </button>
             <button className="uiBtn primary chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">

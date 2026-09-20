@@ -150,40 +150,62 @@ dropping the link is **remove origin**. (The code and the API keep
 - **The header's sync pill** (`MirrorPopover.jsx`), shown while a clone is
   open, in the desktop app and in a browser alike: *up to date 14:37*,
   *cloning 21/79* (the first fill) or *syncing 3/5*, *sync problem*, *N
-  conflicts*, *not cloned yet*, *detached*. Click: a popover of icons and
-  numbers, words as tooltips — the clone's name with *origin · host*, the
-  state (one icon, one line; while a round runs a bar for the pages and a
-  line for the file in flight with its bytes), *Pull & push* (*Pull* on a
-  pull-only clone), *N conflicts* (a list, each one jumping to its block),
-  *Log* (a direction arrow per row, the row's `+3 −1 ~2` block counts in
-  diff colours, each row opening its page; the up-to-date line carries the
-  last round's totals) and a gear
-  that turns the popover into the clone's **sync settings**: cadence (Live
-  / 30 s / 5 min / Manual), *Push after an edit*, direction (*Pull & push*
-  / *Pull only*), *Force pull* / *Force push* (confirmed inline), *Detach*
-  / *Reattach*, *Remove origin*. Polls the mirror every 20 s, every 2 s
-  while a round runs (the log too while open); when a poll sees the numbers
-  move it raises `gamma:mirror-changed` so the page's conflict chips
-  refresh.
-- **The conflict chip** (`MergeResolver.jsx`): a block the sync merged or
-  had to decide on carries a small chip at its row's right end; its popover
-  shows the block's current text with each side's contribution coloured
-  (ours, theirs — a word-level LCS attribution of the result against both
-  versions), for a *diverged* block the version that was not kept, and
-  *Use ours* / *Use theirs* / *Keep merged*. App reads the page's conflicts
-  (`GET /api/mirrors/{ws}/conflicts?page=`) on open, every 15 s and on
-  `gamma:mirror` / `gamma:mirror-changed`; a decision is an ordinary edit
-  the next round pushes. The lists in the pill and in Settings jump to the
-  block (`gamma:jump`).
+  conflicts*, *not cloned yet*, *detached* (an unlink glyph). Click: a
+  popover of icons and numbers, words as tooltips — the clone's name with
+  *origin · host*, the state (one icon, one line, the last round's `+3 −1
+  ~2`; while a round runs a bar for the pages and a line for the file in
+  flight with its bytes), *Pull & push* (*Pull* on a pull-only clone), *N
+  conflicts* (the conflict cards below, each resolved in place or opened on
+  its block), *Log* (a direction arrow per row, the row's `+3 −1 ~2` block
+  counts in diff colours, each row opening its page) and a gear that turns
+  the popover into the clone's **sync settings**, built from the settings
+  kit's rows: *Check origin* (Live / 30 s / 5 min / Manual, a `Segmented`),
+  the *Push after an edit* toggle, *Direction* (*Pull & push* / *Pull
+  only*), then *Force pull* / *Force push* (confirmed inline; a pull-only
+  clone cannot force push), *Detach* / *Reattach*, and a danger *Remove
+  origin*. `mirrorState(info)` is the one reading of the status — icon,
+  tone, line, tooltip — that the popover and the Settings row share. Polls
+  the mirror every 20 s, every 2 s while a round runs (the log too while
+  open); when a poll sees the numbers move it raises `gamma:mirror-changed`
+  so the page's conflict chips refresh.
+- **The conflict card** (`MergeResolver.jsx`, `ConflictCard`): one surface
+  for every list — the chip on a block row, the pill's conflicts view,
+  Settings. A kind line (a merge glyph for *Auto-merged*, an arrow for a
+  restore, the long story as the hint), then the versions: **Ours** (this
+  clone) and **Theirs** (origin) side by side, each with the words the other
+  lacks highlighted in its colour, and for an auto-merge the **Merged** text
+  under them coloured by who wrote what (a word-level LCS attribution). The
+  version that is in the block now is tagged *in the block* and carries
+  **Keep**; the others carry **Use** — one click, no separate button row. A
+  *diverged* block (the adopt policy took one side) shows only ours and
+  theirs. The non-textual kinds (*Kept ours*, *Restored theirs*, the page
+  restores) show the one text involved and an *OK*. **The chip**: a block
+  the sync merged or had to decide on carries a small chip at its row's
+  right end; its popover is the card, and App owns which chip is open
+  (`mergeOpen`) and the page's conflicts in tree order (`mergeOrder`): the
+  card's ‹ n / N › step through them, and a decision opens the next one
+  down the page, so a page of conflicts is worked through in one pass. App
+  reads the page's conflicts (`GET /api/mirrors/{ws}/conflicts?page=`) on
+  open, every 15 s and on `gamma:mirror` / `gamma:mirror-changed`; a
+  decision is an ordinary edit the next round pushes. The lists in the pill
+  and in Settings jump to the block (`gamma:jump`).
 - **Settings → Workspaces → Clones** (`SettingsMirrors.jsx`): one row per
-  clone — direction, the same state line (progress while a round runs),
-  *detached* / *N conflicts* tags — with Open, *Pull & push* or *Reattach*,
-  Conflicts (the same coloured texts, *Open* jumps to the block), *Detach*
-  and the trash (*Remove origin*); an intro paragraph says what a clone
-  does. *Clone a remote workspace* asks for the origin server's address, a
-  write token made there, *Into* (a new workspace, or one of yours — an
-  imported backup, a clone whose origin was removed — with *If a page
-  differs*: take origin's or keep ours), a name and the direction.
+  clone whose avatar is its state (the same reading as the pill: a spinning
+  refresh while a round runs, a check when up to date, a warning on a
+  problem, an unlink glyph when detached), the name with its tags (*open*,
+  *pull only*, *detached*, *problem*, *N conflicts*), *clone of X · origin
+  host* and one short status line (progress and the file in flight while a
+  round runs; *up to date 14:37 · 2 pages pulled* after). Actions: Open,
+  *Pull & push* (*Reattach* when detached), *Conflicts* (the same cards,
+  each resolved there or opened on its block) and a "more" `ActionMenu` —
+  *Force pull*, *Force push* (off on a pull-only clone), *Detach*, and a
+  danger *Remove origin* — the forces and the removal confirmed by the
+  shared confirm box. No intro paragraph: the empty state's one sentence
+  says what a clone is. *Clone a remote workspace* asks for the origin
+  server's address, a write token made there, *Into* (a new workspace, or
+  one of yours — an imported backup, a clone whose origin was removed —
+  with *If a page differs*: take origin's or keep ours), a name and the
+  direction as two `IconChoices` tiles.
 - **The desktop switcher**: on a remote server every workspace row carries
   a *clone* chip on hover; once a clone exists the chip reads *open clone*
   and opens it (one clone per workspace — a second *clone* opens the

@@ -165,6 +165,33 @@ export async function settingsScenarios(env) {
         await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "codex-setup-mobile.png"), fullPage: true });
       }
       await page.setViewportSize({ width: 1280, height: 860 });
+      await page.getByRole("button", { name: "Claude Code", exact: true }).click();
+      assert(!await commandField.isVisible(), "Codex command is hidden in the Claude Code tab");
+      const claudeCommand = page.getByRole("textbox", { name: "Claude Code connection command", exact: true });
+      assertEq(await claudeCommand.inputValue(), `claude mcp add --transport http --scope user gamma '${server.base}/mcp'`);
+      await page.getByRole("button", { name: "Windows PowerShell", exact: true }).click();
+      assertEq(await claudeCommand.inputValue(), `claude mcp add --transport http --scope user gamma '${server.base}/mcp'`);
+      await page.getByRole("button", { name: "Copy connection command", exact: true }).click();
+      await page.getByText("Copied. You can paste it now.", { exact: true }).waitFor();
+      await page.getByText(/Start Claude Code, run \/mcp/).waitFor();
+      await page.getByText(/Start a new session and run \/gamma:gamma/).waitFor();
+      await page.getByText("Install the plugin if it is missing", { exact: true }).click();
+      const pluginCommands = await page.getByRole("textbox", { name: "Claude Code plugin install commands", exact: true }).inputValue();
+      assert(pluginCommands.includes("claude plugin marketplace add ./gamma-marketplace"));
+      assert(pluginCommands.includes("claude plugin install gamma@gamma-local --scope user"));
+      await page.getByText("Changed the server address?", { exact: true }).click();
+      const reconnect = await page.getByRole("textbox", { name: "Claude Code change server commands", exact: true }).inputValue();
+      assertEq(reconnect, `claude mcp remove gamma --scope user\nclaude mcp add --transport http --scope user gamma '${server.base}/mcp'`);
+      if (process.env.GAMMA_MCP_SCREENSHOTS) {
+        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "claude-setup-desktop.png"), fullPage: true });
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await claudeCommand.scrollIntoViewIfNeeded();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Claude setup fits a narrow viewport");
+      if (process.env.GAMMA_MCP_SCREENSHOTS) {
+        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "claude-setup-mobile.png"), fullPage: true });
+      }
+      await page.setViewportSize({ width: 1280, height: 860 });
       await page.getByText("Manual setup (advanced)", { exact: true }).click();
       const config = page.getByRole("textbox", { name: "Codex MCP configuration" });
       await config.waitFor();

@@ -1,4 +1,4 @@
-// The first-run guide (docs/dev/onboarding.md): ?guide= starts a tour, every
+// The first-run guide (docs/dev/onboarding.md): the account menu starts a tour, every
 // registered anchor for the home view is in the DOM, the demo step adds a
 // paper by itself (click Add, type the link, Enter — against an uploaded PDF
 // so no network is needed), the user's highlight checks the next step off,
@@ -23,8 +23,10 @@ export async function guideScenarios(env) {
     await ctx.addInitScript((url) => localStorage.setItem("gamma-guide-vars", JSON.stringify({ demoUrl: url })), `/api/uploads/${up.doc_id}.pdf`);
     const page = await openPage(ctx, `${server.base}/?ws=${alice.ws}&guide=first-run`);
     try {
+      await page.click('[data-guide="header.account"]');
+      await page.click('[data-guide="account.tour"]');
+      await page.click('[data-guide="account.firstRun"]');
       await page.waitForSelector('[data-guide-overlay="welcome"] .guideCard');
-      assert(!page.url().includes("guide="), "the guide param is consumed");
       for (const id of anchorsForView("home").filter((id) => !ANCHORS[id].open)) {
         assertEq(await page.locator(`[data-guide="${id}"]`).count(), 1, `anchor ${id} (${ANCHORS[id].description}) present once`);
       }
@@ -105,9 +107,10 @@ export async function guideScenarios(env) {
       assertEq(await page.evaluate(() => JSON.parse(localStorage.getItem("gamma-guide:first-run")).state), "done");
       await page.goto(`${server.base}/?ws=${alice.ws}&block=${paperId}`);
       await page.waitForSelector('[data-guide="pdf.textLayer"] span:visible');
-      // Manual re-entry: the account menu's "Take the tour".
+      // Manual re-entry through the Tours submenu.
       await page.click('[data-guide="header.account"]');
       await page.click('[data-guide="account.tour"]');
+      await page.click('[data-guide="account.firstRun"]');
       await page.waitForSelector('[data-guide-overlay="welcome"] .guideCard');
       await until(async () => await page.locator(".userPopover").count() === 0);
       // Replaying with the same PDF already open must still complete.
@@ -124,7 +127,10 @@ export async function guideScenarios(env) {
       await alice.api(`/api/blocks/${paperId}`, { method: "PUT", body: {
         properties: { ...block.properties, meta: { ...block.properties.meta, arxiv_id: "1706.03762" } },
       } });
-      await page.goto(`${server.base}/?ws=${alice.ws}&guide=first-run`);
+      await page.goto(`${server.base}/?ws=${alice.ws}`);
+      await page.click('[data-guide="header.account"]');
+      await page.click('[data-guide="account.tour"]');
+      await page.click('[data-guide="account.firstRun"]');
       await page.waitForSelector('[data-guide-overlay="welcome"] .guideCard');
       await page.evaluate(() => localStorage.removeItem("gamma-guide-vars"));
       const unexpected = [];
@@ -141,6 +147,7 @@ export async function guideScenarios(env) {
       await page.keyboard.press("Escape");
       await page.click('[data-guide="header.account"]');
       await page.click('[data-guide="account.tour"]');
+      await page.click('[data-guide="account.firstRun"]');
       await page.click(".guideCard .uiBtn.primary");
       await page.waitForSelector('[data-guide="add.urlInput"]:focus');
       await page.keyboard.press("Escape");

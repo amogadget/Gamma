@@ -1,23 +1,10 @@
-import { eventMatches } from "./events.js";
-
 export function factsMatch(requires, facts) {
   return Object.entries(requires || {}).every(([key, value]) => facts[key] === value);
 }
 
-// An event is consumed only while its prerequisites hold. State-only triggers
-// omit `event`; they are considered whenever the app's facts change.
-export function canOfferTour(tour, { facts, progress, event }) {
-  const trigger = tour.trigger;
-  if (!trigger || !factsMatch(trigger.requires, facts)) return false;
-  if (progress?.version >= tour.version) return false;
-  return trigger.event
-    ? !!event && eventMatches(trigger, event.name, event.payload)
-    : !event;
-}
-
 export function guideProgressKey(tour, scope) {
   // Keep the existing manually launched first-run tour's storage compatible.
-  return tour.trigger
+  return tour.id !== "first-run"
     ? `gamma-guide:${encodeURIComponent(scope)}:${tour.id}`
     : `gamma-guide:${tour.id}`;
 }

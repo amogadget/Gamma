@@ -9,7 +9,7 @@ import { TOURS } from "./tours/index.js";
 import { previewHighlight } from "./previewHighlight.js";
 import { previewArea } from "./previewArea.js";
 import { typeDemoNote } from "./typeDemoNote.js";
-import { canOfferTour, createGuideProgress, factsMatch } from "./triggers.js";
+import { createGuideProgress, factsMatch } from "./triggers.js";
 
 const VARS_KEY = "gamma-guide-vars"; // {name: value} overriding a tour's vars (tests, demos)
 const ANCHOR_WAIT_MS = 4000;
@@ -21,16 +21,6 @@ function readVars() {
   try { return JSON.parse(localStorage.getItem(VARS_KEY) || "{}") || {}; } catch { return {}; }
 }
 const fill = (text, vars) => String(text ?? "").replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
-
-// Strip ?guide= from the address once consumed, keeping every other param.
-function consumeGuideParam() {
-  const url = new URL(window.location.href);
-  const id = url.searchParams.get("guide");
-  if (!id) return null;
-  url.searchParams.delete("guide");
-  window.history.replaceState(window.history.state, "", url.toString());
-  return id;
-}
 
 async function waitAnchor(id, timeout = ANCHOR_WAIT_MS) {
   const started = performance.now();
@@ -71,7 +61,7 @@ const centerOf = (el) => { const b = el.getBoundingClientRect(); return { x: b.l
 async function runAction(action, vars, live, cancelled, seen, onCleanup, services) {
   const check = () => { if (cancelled()) throw new Error("cancelled"); };
   if (action.previewHighlight) return previewHighlight(live, cancelled, onCleanup);
-  if (action.previewArea) return previewArea(live, cancelled, onCleanup, services.findEquation);
+  if (action.previewArea) return previewArea(live, cancelled, onCleanup, action.context ? null : services.findEquation, action.context);
   if (action.note) return typeDemoNote(action.note, services.prepareNote, live, cancelled);
   if (action.wait) { await sleep(action.wait); return; }
   if (action.waitFor) { await waitEvent(action.waitFor, seen, action.timeout); return; }
@@ -87,6 +77,10 @@ async function runAction(action, vars, live, cancelled, seen, onCleanup, service
   if (action.type) {
     const el = await waitAnchor(action.type);
     const text = fill(action.text, vars);
+    const original = el.value;
+    if (action.preserveDraft) onCleanup(() => {
+      if (el.isConnected && text.startsWith(el.value) && (original || el.value !== text)) setInputValue(el, original);
+    });
     live({ anchor: action.type, cursor: centerOf(el) });
     await sleep(450); check();
     el.focus();
@@ -116,10 +110,8 @@ export function useGuide({ enabled = true, scope = "", facts = {}, services = {}
   servicesRef.current = services;
   // done: acknowledge the user's action before automatically advancing.
   const [run, setRun] = useState(null); // { tour, index, done } | null
-  const [offer, setOffer] = useState(null); // { tour, scope } | null
   const progress = useRef(null);
   if (!progress.current) progress.current = createGuideProgress();
-  const activity = useRef(null); // synchronously reserves the single guide surface
   // live: what a demo step is doing right now — the anchor it acts on, the
   // pointer's position, whether actions are still running.
   const [live, setLive] = useState({ anchor: null, cursor: null, busy: false });
@@ -132,11 +124,9 @@ export function useGuide({ enabled = true, scope = "", facts = {}, services = {}
   const start = useCallback((tourId, at = 0) => {
     const tour = TOURS[tourId];
     if (!tour) { console.warn(`guide: no tour "${tourId}"`); return false; }
-    if (!enabled || (tour.trigger && (!scope || !factsMatch(tour.trigger.requires, factsRef.current)))) return false;
+    if (!enabled) return false;
     const steps = tour.steps.filter((s) => factsMatch(s.requires, factsRef.current));
     if (!steps.length || at < 0 || at >= steps.length) return false;
-    activity.current = "running";
-    setOffer(null);
     setRun({ tour, scope, steps, index: at, done: false });
     progress.current.write(tour, scope, { state: "running", step: at });
     return true;
@@ -147,7 +137,6 @@ export function useGuide({ enabled = true, scope = "", facts = {}, services = {}
       if (r) progress.current.write(r.tour, r.scope, { state, step: r.index });
       return null;
     });
-    activity.current = null;
   }, []);
 
   const next = useCallback(() => {
@@ -155,8 +144,7 @@ export function useGuide({ enabled = true, scope = "", facts = {}, services = {}
       if (!r) return r;
       if (r.index + 1 >= steps.length) {
         progress.current.write(r.tour, r.scope, { state: "done" });
-        activity.current = null;
-        return null;
+            return null;
       }
       return { ...r, index: r.index + 1, done: false };
     });
@@ -168,57 +156,11 @@ export function useGuide({ enabled = true, scope = "", facts = {}, services = {}
 
   const dismiss = useCallback(() => stop("dismissed"), [stop]);
 
-  const dismissOffer = useCallback(() => {
-    if (offer) progress.current.write(offer.tour, offer.scope, { state: "dismissed" });
-    setOffer(null);
-    activity.current = null;
-  }, [offer]);
-  const acceptOffer = useCallback(() => {
-    if (offer) start(offer.tour.id);
-  }, [offer, start]);
-
-  // ?guide=<id> starts a tour once the app is ready for it.
-  const consumed = useRef(false);
+  // Tours are started exclusively from the account menu.
+  const runAvailable = enabled && run?.scope === scope;
   useEffect(() => {
-    if (!enabled || consumed.current) return;
-    const id = new URL(window.location.href).searchParams.get("guide");
-    if (id && TOURS[id] && !start(id)) return; // wait for contextual prerequisites
-    consumeGuideParam();
-    consumed.current = true;
-  });
-
-  // Events are considered at the moment of use, never queued behind another
-  // tour. State-only triggers are rechecked against the latest app facts.
-  const consider = useCallback((event) => {
-    if (!enabled || !scope || activity.current) return;
-    const tour = Object.values(TOURS).find((candidate) => canOfferTour(candidate, {
-      facts: factsRef.current, progress: progress.current.read(candidate, scope), event,
-    }));
-    if (!tour) return;
-    activity.current = "offered";
-    progress.current.write(tour, scope, { state: "offered" });
-    setOffer({ tour, scope });
-  }, [enabled, scope]);
-  useEffect(() => guideEvents.subscribe((name, payload) => consider({ name, payload })), [consider]);
-  useEffect(() => { consider(); });
-
-  // Closing the relevant surface, losing a prerequisite, or switching account
-  // removes contextual help. A previously shown offer is still remembered.
-  const runAvailable = enabled && run?.scope === scope
-    && (!run?.tour.trigger || factsMatch(run.tour.trigger.requires, facts));
-  const offerAvailable = enabled && offer?.scope === scope && factsMatch(offer?.tour.trigger.requires, facts);
-  useEffect(() => {
-    if (run && !runAvailable) { setRun(null); activity.current = null; }
-    if (offer && !offerAvailable) { setOffer(null); activity.current = null; }
-  }, [run, runAvailable, offer, offerAvailable]);
-  useEffect(() => {
-    if (!offerAvailable || !offer) return undefined;
-    const onKey = (e) => {
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); dismissOffer(); }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [offer, offerAvailable, dismissOffer]);
+    if (run && !runAvailable) setRun(null);
+  }, [run, runAvailable]);
 
   // Task-driven completion: the current step's event fires → the step is done.
   const step = run ? steps[run.index] : null;
@@ -302,8 +244,6 @@ export function useGuide({ enabled = true, scope = "", facts = {}, services = {}
 
   return {
     running: !!run && runAvailable,
-    offer: offerAvailable ? offer?.tour : null,
-    acceptOffer, dismissOffer,
     tour: run?.tour || null,
     step,
     index: run?.index ?? 0,

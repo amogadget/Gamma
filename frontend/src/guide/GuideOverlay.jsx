@@ -184,7 +184,7 @@ export default function GuideOverlay({ guide }) {
             <button className="uiClose uiCloseSm guideClose" onClick={dismiss} title={inviting ? "Dismiss guide (Esc)" : "Leave the tour (Esc)"} aria-label={inviting ? "Dismiss guide" : "Leave the tour"}>×</button>
           </div>
           <div className="guideTitle">{step.title}</div>
-          <div className="guideBody">{renderBody(step.body)}</div>
+          {step.body ? <div className="guideBody">{renderBody(step.body)}</div> : null}
           <div className="guideFoot">
             {!inviting ? <span className="guideDots" aria-hidden="true">
               {Array.from({ length: count }, (_, i) => <i key={i} className={i === index ? "on" : i < index ? "done" : ""} />)}

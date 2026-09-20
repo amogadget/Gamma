@@ -4,7 +4,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Exercise the viewer's real rectangle-drag path, then cancel before release
 // would capture an image or create a pending annotation.
-export async function previewArea(live, cancelled, onCleanup, findEquation) {
+export async function previewArea(live, cancelled, onCleanup, findEquation, context = false) {
   const equation = await findEquation?.();
   if (cancelled()) return;
   const viewerElement = anchorElement("pdf.viewer");
@@ -91,5 +91,12 @@ export async function previewArea(live, cancelled, onCleanup, findEquation) {
       await sleep(frames === 1 ? 0 : 30);
     }
     await sleep(1000); check();
+    if (context) {
+      emit("pointerup", x + width, y + height);
+      dragging = false;
+      await sleep(200); check();
+      document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      await sleep(500);
+    }
   } finally { clear(); }
 }

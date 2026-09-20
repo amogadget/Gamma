@@ -1,4 +1,4 @@
-name: Codex plugin package
+name: Assistant plugin package
 
 on:
   workflow_dispatch:
@@ -6,8 +6,12 @@ on:
     paths:
       - 'plugins/gamma/**'
       - 'tools/*codex*'
+      - 'tools/*plugins*'
+      - 'tools/marketplace-README.md'
       - 'frontend/src/settings/codexSetup.js'
+      - 'frontend/src/settings/assistantSetup.js'
       - 'frontend/tests/codexSetup.test.mjs'
+      - 'frontend/tests/assistantSetup.test.mjs'
       - 'docs/dev/mcp.md'
       - 'PRIVACY.md'
       - '.github/workflows/codex-plugin.yml'
@@ -28,8 +32,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s tools -p 'test_*codex*.py'
-      - run: node --test frontend/tests/codexSetup.test.mjs
-      - run: python tools/release_codex_plugin.py --output dist/codex-plugin --version 0.0.0-preview
+      - run: python -m unittest discover -s tools -p 'test_plugins.py'
+      - run: node --test frontend/tests/codexSetup.test.mjs frontend/tests/assistantSetup.test.mjs
+      - run: python tools/release_plugins.py --output dist/codex-plugin --version 0.0.0-preview
       - uses: actions/upload-artifact@v4
         with:
           name: gamma-codex-marketplace-${{ matrix.os }}

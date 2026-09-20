@@ -1,26 +1,23 @@
 // Settings → Workspaces → Clones: the mirrors of this account — local
 // workspaces that follow a workspace on another Gamma server, in git's
 // words a clone and its origin (docs/dev/mirror.md, GUI for /api/mirrors*).
-// A row per clone with its sync status, Open, Pull & push or Reattach, the
-// conflicts (coloured texts, Open jumps to the block, Keep merged / Use
-// ours / Use theirs), Detach and Remove origin. "Clone a remote workspace"
+// A row per clone, its avatar the clone's state (syncing, up to date, a
+// problem, detached): Open, Pull & push (Reattach when detached), the
+// conflicts, and a "more" menu with force pull / force push, detach and
+// remove origin. The conflicts view lists the same cards as the row chips,
+// each resolved here or opened on its block. "Clone a remote workspace"
 // asks for the server address and a write token made there (Settings →
 // Integrations on that server), into a new workspace or an existing one.
 import React from "react";
 import { API, apiJson } from "../shared/lib/utils";
-import { Section, Row, SubDialog, Field, Segmented, Empty } from "./SettingsKit";
-import { MenuSelect } from "../shared/ui/Menus";
-import { AlertCircleIcon, CheckIcon, CloudDownloadIcon, HardDriveIcon, LinkIcon, PlusIcon, RefreshIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
-import { bytes, roundSummary } from "../collaboration/MirrorPopover";
-import { MERGE_KIND, MergeLegend, MergeText } from "../collaboration/MergeResolver";
-
-const KIND_TEXT = Object.fromEntries(Object.entries(MERGE_KIND).map(([k, v]) => [k, v.long]));
-
-function when(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return isNaN(d) ? "" : d.toLocaleString();
-}
+import { Section, SubDialog, Field, IconChoices, Segmented, Empty } from "./SettingsKit";
+import { ActionMenu, MenuSelect } from "../shared/ui/Menus";
+import {
+  AlertCircleIcon, ArrowDownIcon, ArrowUpDownIcon, CheckIcon, CloudDownloadIcon, HardDriveIcon, LinkIcon, MoreIcon,
+  PlusIcon, RefreshIcon, TrashIcon, UnlinkIcon, UploadIcon,
+} from "../shared/ui/Icons";
+import { bytes, clock, hostOf, isPullOnly, mirrorState, roundSummary } from "../collaboration/MirrorPopover";
+import { ConflictCard } from "../collaboration/MergeResolver";
 
 // The account's mirrors (null while loading). `enabled` false (a guest, or
 // signed out) reads nothing: the endpoint would refuse.
@@ -34,20 +31,26 @@ export function useMirrors(enabled = true) {
   return [mirrors, refresh];
 }
 
+// The row's status line: the state in a few words, the file in flight
+// while a round runs, the last round's totals when up to date.
 export function mirrorStatusLine(m) {
   const s = m.status || {};
-  const dir = s.mode === "pull" || m.mode === "pull" ? "pull only" : "pull & push";
   const p = s.progress;
-  if (m.detached || m.mode === "off") return `detached${s.detached_at ? ` ${when(s.detached_at)}` : ""} · reattach to merge what both sides did meanwhile`;
-  if (s.running) {
+  const st = mirrorState(m);
+  if (m.detached || m.mode === "off") return `detached${s.detached_at ? ` ${clock(s.detached_at)}` : ""} · reattach to merge what both sides did meanwhile`;
+  if (st.tone === "busy") {
     const file = p?.file ? ` · ${p.file.dir === "up" ? "pushing" : "pulling"} ${p.file.name} ${bytes(p.file.done)}${p.file.total ? ` / ${bytes(p.file.total)}` : ""}` : "";
-    return `${dir} · ${p?.total ? `${p.first ? "cloning" : "syncing"} ${p.done} of ${p.total} pages…` : "syncing…"}${file}`;
+    return `${p?.total ? `${p.first ? "cloning" : "syncing"} ${p.done} of ${p.total} pages…` : "syncing…"}${file}`;
   }
-  if (s.last_error) return `${dir} · problem: ${s.last_error}`;
-  if (!s.last_sync) return `${dir} · ${s.interrupted ? "the clone was interrupted, it continues at the next round" : "not cloned yet"}`;
-  const moved = roundSummary(s);
-  return `${dir} · up to date ${when(s.last_sync)} · last round: ${moved || "nothing had changed"}`;
+  if (s.last_error) return `problem: ${s.last_error}`;
+  if (!s.last_sync) return s.interrupted ? "interrupted · continues at the next round" : "not cloned yet";
+  return `up to date ${clock(s.last_sync)} · ${roundSummary(s) || "nothing had changed"}`;
 }
+
+const DIRECTION_TILES = [
+  { value: "two-way", label: "Pull & push", hint: "your edits go to origin", Icon: ArrowUpDownIcon },
+  { value: "pull", label: "Pull only", hint: "origin's edits arrive here", Icon: ArrowDownIcon },
+];
 
 export function MirrorDialog({ busy, error, onSubmit, onClose, candidates = [] }) {
   const [url, setUrl] = React.useState("");
@@ -60,10 +63,6 @@ export function MirrorDialog({ busy, error, onSubmit, onClose, candidates = [] }
   return (
     <SubDialog title="Clone a remote workspace" onClose={onClose} draft={url || token}>
       <div className="settingsForm">
-      <p className="settingDesc">
-        Clones a workspace from another Gamma server (its origin) into a workspace here, so it opens without a
-        connection. Your edits are pushed to origin when it is reachable; origin's edits are pulled here.
-      </p>
       <Field label="Origin server" hint="the other Gamma, e.g. https://nas.local:8000">
         <input className="aiKeyInput" value={url} autoFocus placeholder="https://" onChange={(e) => setUrl(e.target.value)} />
       </Field>
@@ -86,7 +85,7 @@ export function MirrorDialog({ busy, error, onSubmit, onClose, candidates = [] }
         </Field>
       )}
       <Field label="Direction">
-        <Segmented value={mode} onChange={setMode} options={[["two-way", "Pull & push"], ["pull", "Pull only"]]} />
+        <IconChoices label="Direction" value={mode} onChange={setMode} options={DIRECTION_TILES} />
       </Field>
       {error ? <div className="settingsPaneHint aiKeysError">{error}</div> : null}
       <div className="reportModalBtns">
@@ -98,34 +97,6 @@ export function MirrorDialog({ busy, error, onSubmit, onClose, candidates = [] }
       </div>
       </div>
     </SubDialog>
-  );
-}
-
-function ConflictRow({ c, busy, onResolve, onOpen }) {
-  const textual = c.kind === "merged" || c.kind === "diverged";
-  return (
-    <div className="mirrorConflict">
-      <div className="mirrorConflictHead">
-        <AlertCircleIcon size={14} />
-        <span className="aiProvName">{c.page_title || c.page_id}</span>
-        <span className="settingDesc">{when(c.at)}</span>
-        <button className="uiBtn sm" onClick={() => onOpen(c)} title="Open the page on this block and decide there">Open</button>
-      </div>
-      <p className="settingDesc">{KIND_TEXT[c.kind] || c.kind}</p>
-      {textual ? (
-        <div className="mirrorConflictTexts">
-          <MergeText conflict={c} />
-          <MergeLegend />
-        </div>
-      ) : null}
-      <div className="aiProvActions">
-        {textual ? <>
-          <button className="uiBtn sm" disabled={busy} onClick={() => onResolve(c, "mine")} title="Put this clone's text back">Use ours</button>
-          <button className="uiBtn sm" disabled={busy} onClick={() => onResolve(c, "theirs")} title="Take origin's text">Use theirs</button>
-        </> : null}
-        <button className="uiBtn sm" disabled={busy} onClick={() => onResolve(c, "keep")} title="Mark resolved as it is"><CheckIcon size={13} /> {textual ? "Keep merged" : "OK"}</button>
-      </div>
-    </div>
   );
 }
 
@@ -158,7 +129,7 @@ export function MirrorConflicts({ mirror, onClose, setStatus, closeSettings }) {
   return (
     <Section title={`Conflicts · ${mirror.name}`} action={<button className="uiBtn sm" onClick={onClose}>Back</button>}>
       {items === null ? <Empty icon={HardDriveIcon}>Loading…</Empty>
-        : items.length ? items.map((c) => <ConflictRow key={c.id} c={c} busy={busy} onResolve={resolve} onOpen={open} />)
+        : items.length ? <div className="mirrorCards">{items.map((c) => <ConflictCard key={c.id} conflict={c} busy={busy} showPage onResolve={resolve} onOpen={open} />)}</div>
         : <Empty icon={CheckIcon}>No conflicts — every change merged cleanly.</Empty>}
     </Section>
   );
@@ -214,11 +185,24 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
       if (!gone) window.dispatchEvent(new CustomEvent("gamma:mirror"));
     }
   }
+  const json = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  function nameOf(m) {
+    return m.name || byWs[m.workspace_id]?.name || "this clone";
+  }
+  function force(m, direction) {
+    confirm({
+      title: direction === "pull" ? "Force pull" : "Force push",
+      message: direction === "pull"
+        ? `Make “${nameOf(m)}” identical to ${m.remote_name} on ${hostOf(m.remote_url)}? Only differing pages are written; where texts differ, yours are kept as conflicts.`
+        : `Make ${m.remote_name} on ${hostOf(m.remote_url)} identical to “${nameOf(m)}”? Only differing pages are written; where texts differ, origin's are kept as conflicts.`,
+      confirmLabel: direction === "pull" ? "Force pull" : "Force push", danger: true,
+      onConfirm: () => call(m, "/force", json({ direction }), `${direction === "pull" ? "Force pull" : "Force push"} running in the background.`),
+    });
+  }
   function forget(m) {
-    const name = m.name || byWs[m.workspace_id]?.name || "this clone";
     confirm({
       title: "Remove origin",
-      message: `“${name}” stays as an ordinary workspace of yours; it never pulls from or pushes to ${m.remote_name} again.`,
+      message: `“${nameOf(m)}” stays as an ordinary workspace of yours; it never pulls from or pushes to ${m.remote_name} again.`,
       confirmLabel: "Remove origin", danger: true,
       onConfirm: async () => {
         if (m.workspace_id === currentId) window.dispatchEvent(new CustomEvent("gamma:mirror-gone"));
@@ -233,27 +217,37 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
 
   function row(m) {
     const current = m.workspace_id === currentId;
-    const w = byWs[m.workspace_id];
     const s = m.status || {};
     const detached = m.detached || m.mode === "off";
-    const pullOnly = s.mode === "pull" || m.mode === "pull";
-    let host = m.remote_url;
-    try { host = new URL(m.remote_url).host; } catch {}
+    const pullOnly = isPullOnly(m);
+    const st = mirrorState(m);
+    const more = detached ? [
+      { icon: LinkIcon, label: "Reattach", title: "Follow origin again; what both sides did meanwhile merges",
+        onClick: () => call(m, "/relink", json({}), "Reattached — syncing in the background.") },
+    ] : [
+      { icon: CloudDownloadIcon, label: "Force pull", title: "Make this clone identical to origin", onClick: () => force(m, "pull") },
+      { icon: UploadIcon, label: "Force push", title: pullOnly ? "A pull-only clone cannot force push" : "Make origin identical to this clone",
+        disabled: pullOnly, onClick: () => force(m, "push") },
+      { icon: UnlinkIcon, label: "Detach", title: "Stop pulling and pushing for now; origin is kept, so reattaching merges what both sides did meanwhile",
+        onClick: () => call(m, "/detach", { method: "POST" }, "Detached — reattach whenever you like.") },
+    ];
+    more.push({ icon: TrashIcon, label: "Remove origin", danger: true, title: "Remove origin for good; the workspace stays as an ordinary one", onClick: () => forget(m) });
     return (
       <div key={m.workspace_id} className="aiProvRow">
-        <span className={`aiProvAvatar ${current ? "active" : ""}`}>
-          {current ? <CheckIcon size={15} /> : detached ? <XIcon size={15} /> : <HardDriveIcon size={15} />}
+        <span className={`aiProvAvatar mirrorAvatar ${st.tone} ${current ? "active" : ""}`} title={st.title}>
+          <st.Icon size={15} />
         </span>
         <span className="aiProvMeta">
           <span className="aiProvName">
-            {m.name || w?.name}
+            {nameOf(m)}
             {current ? <span className="uiTag">open</span> : null}
+            {pullOnly ? <span className="uiTag" title="Origin's changes arrive here; yours stay here">pull only</span> : null}
             {detached ? <span className="uiTag">detached</span> : null}
-            {!detached && s.last_error ? <span className="uiTag">problem</span> : null}
-            {m.conflicts_open ? <span className="uiTag">{m.conflicts_open} conflict{m.conflicts_open === 1 ? "" : "s"}</span> : null}
+            {!detached && s.last_error ? <span className="uiTag warn">problem</span> : null}
+            {m.conflicts_open ? <span className="uiTag warn">{m.conflicts_open} conflict{m.conflicts_open === 1 ? "" : "s"}</span> : null}
           </span>
           <span className="aiProvDesc" title={m.remote_url}>
-            clone of {m.remote_name} · origin {host}
+            clone of {m.remote_name} · origin {hostOf(m.remote_url)}
           </span>
           <span className="aiProvDesc">{mirrorStatusLine(m)}</span>
         </span>
@@ -261,7 +255,7 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
           {!current ? <button className="uiBtn sm" onClick={() => { closeSettings?.(); switchWorkspace(m.workspace_id); }}>Open</button> : null}
           {detached ? (
             <button className="uiBtn sm primary" disabled={busy} title="Follow origin again; what both sides did meanwhile merges"
-              onClick={() => call(m, "/relink", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }, "Reattached — syncing in the background.")}>
+              onClick={() => call(m, "/relink", json({}), "Reattached — syncing in the background.")}>
               <LinkIcon size={13} /> Reattach
             </button>
           ) : (
@@ -270,19 +264,11 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
               <RefreshIcon size={13} /> {pullOnly ? "Pull" : "Pull & push"}
             </button>
           )}
-          <button className={`uiBtn sm ${m.conflicts_open ? "primary" : ""}`} disabled={busy} onClick={() => setConflictsOf({ ...m, name: m.name || w?.name })}
+          <button className={`uiBtn sm ${m.conflicts_open ? "primary" : ""}`} disabled={busy} onClick={() => setConflictsOf({ ...m, name: nameOf(m) })}
             title="Blocks both sides changed: the sync merged them or took one side; they wait here for you to resolve">
-            Conflicts{m.conflicts_open ? ` (${m.conflicts_open})` : ""}
+            <AlertCircleIcon size={13} /> Conflicts{m.conflicts_open ? ` (${m.conflicts_open})` : ""}
           </button>
-          {!detached ? (
-            <button className="uiBtn sm" disabled={busy} onClick={() => call(m, "/detach", { method: "POST" }, "Detached — reattach whenever you like.")}
-              title="Stop pulling and pushing for now; origin is kept, so reattaching merges what both sides did meanwhile">
-              Detach
-            </button>
-          ) : null}
-          <button className="uiBtn sm" disabled={busy} onClick={() => forget(m)} title="Remove origin for good; the workspace stays as an ordinary one">
-            <TrashIcon size={13} />
-          </button>
+          <ActionMenu label="More" icon={MoreIcon} iconOnly disabled={busy} items={more} />
         </span>
       </div>
     );
@@ -298,16 +284,6 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
           </button>
         )}
       >
-        {mirrors?.length ? (
-          <p className="settingDesc mirrorIntro">
-            A clone is a workspace that follows a workspace on another Gamma, its origin: your edits are pushed there
-            when it is reachable, its edits are pulled here — on the cadence set in the clone's sync pill (live, every
-            30 s, every 5 min, or by hand) and a few seconds after an edit here. When both sides changed the same block,
-            the two edits are merged and the block gets a marker in the page where you keep the merge or take one side;
-            the same list waits under <b>Conflicts</b>. <b>Detach</b> pauses syncing and <b>Reattach</b> merges what
-            both sides did meanwhile.
-          </p>
-        ) : null}
         {mirrors === null ? <Empty icon={CloudDownloadIcon}>Loading…</Empty>
           : mirrors.length ? mirrors.map(row)
           : <Empty icon={CloudDownloadIcon}>

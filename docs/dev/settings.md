@@ -64,7 +64,8 @@ AI:
   effort and parallel requests, and the snapshot-clearing switch.
 - **Prompts**: the accordion with one Cancel / Save pair.
 - **Integrations** ([SettingsIntegrations.jsx](../../frontend/src/settings/SettingsIntegrations.jsx)):
-  the workspace's assistant connections, the MCP URL, the Codex setup
+  the workspace's assistant connections, the MCP URL, Claude Code connection,
+  plugin setup and address-change commands, the Codex setup
   command and the manual-token fallback ([mcp.md](mcp.md)) — a token's
   scope is a `Segmented` (read-only for assistants, read and write for an
   offline copy on another Gamma, [mirror.md](mirror.md)).

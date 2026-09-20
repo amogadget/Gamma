@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from package_codex_plugin import build, validate_repo, write_archive
+from package_plugins import MANIFEST_PATHS, build, validate_repo, write_archive
 
 
 def release(output: Path, version: str, repo: str = "tim4431/Gamma") -> list[Path]:
@@ -14,10 +14,11 @@ def release(output: Path, version: str, repo: str = "tim4431/Gamma") -> list[Pat
         raise ValueError("Release version must be X.Y.Z, optionally with a prerelease suffix.")
     validate_repo(repo)
     package = build(output / "gamma-marketplace")
-    manifest_path = package / "plugins/gamma/.codex-plugin/plugin.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["version"] = version
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    for relative in MANIFEST_PATHS:
+        manifest_path = package / "plugins/gamma" / relative
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["version"] = version
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     archive = output / f"gamma-codex-plugin-{version}.zip"
     write_archive(package, archive)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
