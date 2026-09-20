@@ -83,7 +83,9 @@ def test_discovery_and_browser_signin_roundtrip(browser):
     tools = c.post("/mcp", headers={"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"},
                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert tools.status_code == 200, tools.text
-    assert len(tools.json()["result"]["tools"]) == 6
+    assert {tool["name"] for tool in tools.json()["result"]["tools"]} == {
+        "list_pages", "read_page", "read_block", "search_library", "read_gamma_link",
+    }
     listing = c.get("/api/integrations/tokens").json()
     connection = next(t for t in listing["tokens"] if t["name"] == "Codex test (OAuth)")
     c.delete("/api/integrations/tokens/" + connection["id"])
