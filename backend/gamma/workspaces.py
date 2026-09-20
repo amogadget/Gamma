@@ -142,7 +142,7 @@ def list_for_user(username: str) -> list[dict]:
             f"SELECT {_COLS}, "
             "(SELECT role FROM workspace_members m WHERE m.workspace_id = w.id AND m.username = ?), "
             "(SELECT COUNT(*) FROM workspace_members x WHERE x.workspace_id = w.id), "
-            "(SELECT remote_name FROM mirrors mi WHERE mi.workspace_id = w.id) "
+            "(SELECT remote_name FROM mirrors mi WHERE mi.workspace_id = w.id AND mi.mode != 'off') "
             "FROM workspaces w WHERE w.access = 'public' "
             "OR EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.username = ?)",
             (username, username)).fetchall()

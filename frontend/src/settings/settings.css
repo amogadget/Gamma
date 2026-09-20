@@ -635,9 +635,8 @@
 .mirrorConflict { display: grid; gap: 6px; padding: 10px 0; }
 .mirrorConflict:not(:last-of-type) { border-bottom: 1px solid var(--border-subtle); }
 .mirrorConflictHead { display: flex; align-items: center; gap: 8px; }
-.mirrorConflictTexts { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
-.mirrorConflictTexts pre { margin: 4px 0 0; padding: 6px 8px; max-height: 120px; overflow: auto; white-space: pre-wrap;
-  font-size: 12px; background: var(--bg-hover); border-radius: 6px; }
+.mirrorConflictTexts { display: flex; flex-direction: column; gap: 4px; }
+.mirrorConflictHead .uiBtn { margin-left: auto; }
 
 @media (max-width: 820px) {
   .settingsSidebar { flex-basis: 180px; }

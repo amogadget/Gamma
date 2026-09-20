@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
+import { MergeChip } from "../collaboration/MergeResolver";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -694,6 +695,8 @@ function BlockRow({
   aiScan,
   onAddToChat,
   peers,
+  merges,
+  onResolveMerge,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
@@ -1173,6 +1176,7 @@ function BlockRow({
       }}
     >
       {rowPeers?.length ? <PeerChips peers={rowPeers} /> : null}
+      {merges?.get(block.id) ? <MergeChip conflict={merges.get(block.id)} onResolve={onResolveMerge} /> : null}
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""}${aiMark ? ` ai-${aiMark.kind} aiMark${aiMark.n % 2}` : ""}${scanIdx != null ? ` ai-scan aiMark${aiScan.n % 2}` : ""}${peerEditing ? ` peerOn peer-${peerEditing.color}` : ""}`}
         style={scanIdx != null ? { animationDelay: `${Math.min(scanIdx * 45, 1600)}ms` } : undefined}

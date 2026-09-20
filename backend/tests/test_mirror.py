@@ -233,6 +233,23 @@ def test_files_travel_by_hash():
     assert remote.texts(page["id"])["imgblk"] == f"![pic]({img['url']})"
 
 
+def test_a_file_missing_from_the_copy_is_fetched_again():
+    """A round cut short after a page landed but before its PDF did (or a
+    file lost on disk) leaves a page that cannot open; the next round
+    fetches the file, whether or not the page changed since."""
+    remote, local, _ = _pair()
+    up = remote.client.post("/api/uploads", files={"file": ("paper.pdf", io.BytesIO(PDF), "application/pdf")}).json()
+    remote.client.post(f"/api/blocks/by-doc/{up['doc_id']}", json={"default_title": "paper.pdf"}).json()
+    _sync(local)
+    path = ws_uploads_dir(local.ws) / f"{up['doc_id']}.pdf"
+    assert path.is_file()
+    path.unlink()
+    assert sync_engine.missing_uploads(local.ws) == {f"{up['doc_id']}.pdf"}
+    status = _sync(local)  # nothing changed on either side, the file still comes back
+    assert status["files_pulled"] == 1 and path.read_bytes() == PDF
+    assert sync_engine.missing_uploads(local.ws) == set()
+
+
 def test_pull_only_with_a_read_token():
     remote, local, mirror = _pair(scope="read")
     assert mirror["mode"] == "pull"
@@ -323,6 +340,122 @@ def test_an_unexpected_error_in_one_page_does_not_stick_the_round(monkeypatch):
     _sync(local)  # retried next time from the mirror's retry list (the feed's cursor has moved past it)
     assert sync_engine.get_mirror(local.ws)["status"]["retry"] == {}
     assert bad["id"] in local.pages()
+
+
+def test_detach_keeps_the_link_and_relink_merges_three_ways():
+    remote, local, _ = _pair()
+    page = remote.page("Detached")
+    remote.insert(page["id"], "dt1", "one two three")
+    remote.insert(page["id"], "dt2", "untouched")
+    _sync(local)
+    assert local.client.post(f"/api/mirrors/{local.ws}/detach").json()["detached"] is True
+    # detached: an ordinary workspace again (no pill), no round runs
+    assert not next(w for w in local.client.get("/api/workspaces/mine").json()["workspaces"] if w["id"] == local.ws)["mirror_of"]
+    assert local.client.get(f"/api/mirrors/{local.ws}").json()["mode"] == "off"
+    remote.ops(page["id"], [{"op": "set", "id": "dt1", "content": "ONE two three"}])
+    local.ops(page["id"], [{"op": "set", "id": "dt1", "content": "one two THREE"}])
+    st = local.client.post(f"/api/mirrors/{local.ws}/sync?wait=1").json()["status"]
+    assert remote.texts(page["id"])["dt1"] == "ONE two three" and local.texts(page["id"])["dt1"] == "one two THREE"
+    # relink with the stored token: what both sides did meanwhile merges from the saved base
+    r = local.client.post(f"/api/mirrors/{local.ws}/relink", json={})
+    assert r.status_code == 200 and r.json()["mode"] == "two-way", r.text
+    _sync(local)
+    assert local.texts(page["id"])["dt1"] == "ONE two THREE" == remote.texts(page["id"])["dt1"]
+    assert local.client.get(f"/api/mirrors/{local.ws}").json()["conflicts_open"] == 1  # the same-block merge, to look at
+    assert next(w for w in local.client.get("/api/workspaces/mine").json()["workspaces"] if w["id"] == local.ws)["mirror_of"]
+
+
+def test_link_an_existing_workspace_adopts_one_side_and_keeps_the_other_text():
+    remote = Side("mr_link_remote")
+    local = Side("mr_link_local")
+    page = remote.page("Shared id")
+    remote.insert(page["id"], "lk1", "the original's text")
+    remote.page("Only there")
+    # the local workspace already holds the same page id with a different text, and a page of its own
+    local.client.post("/api/pages", json={"id": page["id"], "title": "Shared id"}).raise_for_status()
+    local.insert(page["id"], "lk1", "the copy's text")
+    mine = local.page("Only here")
+    token = create_token(remote.name, remote.ws, "link", 90, scope="write")["token"]
+    r = local.client.post("/api/mirrors", json={"remote_url": "http://testserver", "token": token,
+                                                "workspace_id": local.ws, "adopt": "theirs"})
+    assert r.status_code == 201, r.text
+    assert r.json()["workspace_id"] == local.ws
+    _sync(local)
+    assert local.texts(page["id"])["lk1"] == "the original's text"
+    c = local.client.get(f"/api/mirrors/{local.ws}/conflicts").json()["conflicts"]
+    assert [(x["kind"], x["mine"], x["theirs"]) for x in c] == [("diverged", "the copy's text", "the original's text")]
+    assert "Only there" in {b["content"] for b in local.pages().values()}
+    assert mine["id"] in remote.pages()  # a page only the copy had goes over (no force: nothing is pruned)
+    # the kept text can still be chosen
+    local.client.post(f"/api/mirrors/{local.ws}/conflicts/{c[0]['id']}", json={"choice": "mine"}).raise_for_status()
+    _sync(local)
+    assert remote.texts(page["id"])["lk1"] == "the copy's text"
+
+
+def test_force_pull_and_push_make_one_side_identical(monkeypatch):
+    remote, local, _ = _pair()
+    page = remote.page("Forced")
+    remote.insert(page["id"], "fc1", "original")
+    _sync(local)
+    # rounds asked for in the background run inline here
+    monkeypatch.setattr(sync_engine, "sync_in_background", lambda ws: sync_engine.sync_workspace(ws))
+    local.ops(page["id"], [{"op": "set", "id": "fc1", "content": "copy's edit"}])
+    extra = local.page("Only in the copy")
+    r = local.client.post(f"/api/mirrors/{local.ws}/force", json={"direction": "pull"})
+    assert r.status_code == 200, r.text
+    assert local.texts(page["id"])["fc1"] == "original"
+    assert extra["id"] not in local.pages() and extra["id"] not in remote.pages()
+    c = local.client.get(f"/api/mirrors/{local.ws}/conflicts").json()["conflicts"]
+    assert [(x["kind"], x["mine"]) for x in c] == [("diverged", "copy's edit")]
+    st = local.client.get(f"/api/mirrors/{local.ws}").json()["status"]
+    assert "adopt" not in st and "prune" not in st
+    # and the other way
+    remote.ops(page["id"], [{"op": "set", "id": "fc1", "content": "original again"}])
+    theirs = remote.page("Only on the original")
+    local.ops(page["id"], [{"op": "set", "id": "fc1", "content": "the copy wins"}])
+    r = local.client.post(f"/api/mirrors/{local.ws}/force", json={"direction": "push"})
+    assert r.status_code == 200, r.text
+    assert remote.texts(page["id"])["fc1"] == "the copy wins"
+    assert theirs["id"] not in remote.pages() and theirs["id"] not in local.pages()
+
+
+def test_cadence_and_sync_on_change():
+    remote, local, _ = _pair()
+    info = local.client.get(f"/api/mirrors/{local.ws}").json()
+    assert (info["poll_s"], info["on_change"]) == (30, True)
+    r = local.client.patch(f"/api/mirrors/{local.ws}", json={"poll_s": 5, "on_change": False})
+    assert (r.json()["poll_s"], r.json()["on_change"]) == (5, False)
+    assert local.client.patch(f"/api/mirrors/{local.ws}", json={"mode": "off"}).status_code == 422
+    # the loop's clock: a mirror is due by its own cadence, a requested round after its quiet time
+    now = 1000.0
+    sync_engine._last_run[local.ws] = now - 4
+    assert sync_engine.due_now(local.ws, "two-way", 5, now) is False
+    assert sync_engine.due_now(local.ws, "two-way", 5, now + 1) is True
+    assert sync_engine.due_now(local.ws, "two-way", 0, now + 100) is False
+    assert sync_engine.due_now(local.ws, "off", 5, now + 100) is False
+    # a local edit asks for a round only when the copy wants it and the write is not the engine's own
+    sync_engine._pending.clear()
+    sync_engine._refresh_wants()
+    assert sync_engine._wants_change[local.ws] is False
+    page = remote.page("Edited here")
+    _sync(local)
+    local.ops(page["id"], [{"op": "insert", "id": "oc1", "parent": page["id"], "position": "a0", "content": "x"}])
+    assert local.ws not in sync_engine._pending
+    local.client.patch(f"/api/mirrors/{local.ws}", json={"on_change": True})
+    sync_engine._refresh_wants()
+    local.ops(page["id"], [{"op": "set", "id": "oc1", "content": "y"}])
+    assert local.ws in sync_engine._pending
+    sync_engine._pending.clear()
+    _sync(local)  # the engine's own writes on the remote side land under client "sync"
+    assert remote.ws not in sync_engine._pending
+    sync_engine._last_run.pop(local.ws, None)
+
+
+def test_file_transfers_report_progress():
+    seen = []
+    remote = sync_engine.Remote("http://testserver", "", "gamma_x", lambda m, p, b, h: (200, b"abc"))
+    assert remote.get_bytes("/api/uploads/x.pdf", progress=lambda d, t: seen.append((d, t))) == b"abc"
+    assert seen == [(3, 3)]
 
 
 def test_stop_mirroring_keeps_the_workspace():

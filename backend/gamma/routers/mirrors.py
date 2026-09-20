@@ -16,6 +16,24 @@ class MirrorCreate(BaseModel):
     token: str = Field(min_length=1, max_length=200)
     name: str = ""
     mode: str = Field(default="two-way", pattern="^(two-way|pull)$")
+    workspace_id: str = ""      # link an existing workspace of mine instead of making a new one
+    adopt: str = Field(default="theirs", pattern="^(theirs|mine)$")
+
+
+class MirrorPatch(BaseModel):
+    poll_s: int | None = Field(default=None, ge=0, le=86400)
+    on_change: bool | None = None
+    mode: str | None = Field(default=None, pattern="^(two-way|pull)$")
+
+
+class Relink(BaseModel):
+    token: str = ""
+    remote_url: str = ""
+    adopt: str = Field(default="theirs", pattern="^(theirs|mine)$")
+
+
+class Force(BaseModel):
+    direction: str = Field(pattern="^(pull|push)$")
 
 
 class Resolution(BaseModel):
@@ -38,7 +56,7 @@ def _info(mirror: dict) -> dict:
     info = workspaces.get(mirror["workspace_id"])
     return {**mirror, "name": info["name"] if info else "",
             "conflicts_open": sync_engine.open_conflicts(mirror["workspace_id"]),
-            "interval_s": config.sync_interval_s()}
+            "interval_s": config.sync_interval_s(), "detached": mirror["mode"] == "off"}
 
 
 @router.get("")
@@ -57,7 +75,7 @@ def create_mirror(payload: MirrorCreate, request: Request):
     user = _me(request)
     try:
         mirror = sync_engine.create_mirror(user, payload.remote_url, payload.token, name=payload.name,
-                                           mode=payload.mode)
+                                           mode=payload.mode, workspace_id=payload.workspace_id, adopt=payload.adopt)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except sync_engine.RemoteError as e:
@@ -68,6 +86,51 @@ def create_mirror(payload: MirrorCreate, request: Request):
 
 @router.get("/{ws}")
 def get_mirror(ws: str, request: Request):
+    return _info(_mine(request, ws))
+
+
+@router.patch("/{ws}")
+def update_mirror(ws: str, payload: MirrorPatch, request: Request):
+    """The cadence: ``poll_s`` (0 = only by hand), ``on_change``, ``mode``."""
+    _mine(request, ws)
+    try:
+        return _info(sync_engine.set_cadence(ws, poll_s=payload.poll_s, on_change=payload.on_change, mode=payload.mode))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{ws}/detach")
+def detach(ws: str, request: Request):
+    """Detach: the copy stops following; the link is kept for a re-link."""
+    _mine(request, ws)
+    return _info(sync_engine.detach_mirror(ws))
+
+
+@router.post("/{ws}/relink")
+def relink(ws: str, payload: Relink, request: Request):
+    """Link a detached copy again (the stored token, or a new one); a round
+    runs in the background."""
+    _mine(request, ws)
+    try:
+        mirror = sync_engine.relink_mirror(ws, token=payload.token, remote_url=payload.remote_url, adopt=payload.adopt)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except sync_engine.RemoteError as e:
+        raise HTTPException(status_code=502, detail=f"the remote answered {e}")
+    sync_engine.sync_in_background(ws)
+    return _info(mirror)
+
+
+@router.post("/{ws}/force")
+def force(ws: str, payload: Force, request: Request):
+    """``pull``: replace this copy with the original; ``push``: replace the
+    original with this copy. Runs in the background; texts that differed
+    wait as ``diverged`` conflicts."""
+    _mine(request, ws)
+    try:
+        sync_engine.force_sync(ws, payload.direction)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return _info(_mine(request, ws))
 
 
@@ -87,7 +150,7 @@ def run_sync(ws: str, request: Request, wait: int = 0):
 
 @router.delete("/{ws}")
 def delete_mirror(ws: str, request: Request):
-    """Stop mirroring. The workspace stays, as an ordinary local one."""
+    """Forget the link. The workspace stays, as an ordinary local one."""
     _mine(request, ws)
     sync_engine.remove_mirror(ws)
     return {"ok": True}
@@ -102,9 +165,11 @@ def sync_log(ws: str, request: Request, limit: int = 50):
 
 
 @router.get("/{ws}/conflicts")
-def list_conflicts(ws: str, request: Request, resolved: int = 0):
+def list_conflicts(ws: str, request: Request, resolved: int = 0, page: str = ""):
+    """``{conflicts: [{id, page_id, page_title, block_id, kind, mine, theirs,
+    result, at}]}`` — one page's with ``?page=``."""
     _mine(request, ws)
-    return {"conflicts": sync_engine.list_conflicts(ws, resolved=bool(resolved))}
+    return {"conflicts": sync_engine.list_conflicts(ws, resolved=bool(resolved), page_id=page)}
 
 
 @router.post("/{ws}/conflicts/{conflict_id}")

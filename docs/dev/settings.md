@@ -83,7 +83,10 @@ Manage:
   own with Keep / Use mine / Use theirs —, Stop) and "Mirror a remote
   workspace" (a `SubDialog`: server address, write token, name, direction)
   — [mirror.md](mirror.md). The same state sits in the header as the sync
-  pill (`collaboration/MirrorPopover.jsx`) while a copy is open.
+  pill (`collaboration/MirrorPopover.jsx`) while a copy is open; the copy's
+  own settings (cadence, direction, force, detach / link again, forget)
+  live in that pill's gear view, stored on the server per mirror
+  (`mirrors.poll_s`, `on_change`, `mode`).
 - **Backups**: server-kept snapshots per workspace.
 - **Library maintenance**: workspace storage, search-index rebuilding and
   the per-paper metadata / text / index health table.

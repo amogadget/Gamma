@@ -84,6 +84,14 @@ returns the batches after a seq (410 when the log no longer reaches back: the
 client reloads the tree); `GET /blocks/{id}/subtree` on a page carries the
 `seq` its tree reflects.
 
+## Commit listeners
+
+`ops.commit_listeners` is a list of `fn(ws, client)` called after every
+committed write — a batch (`after_commit`), a page deletion, a cross-page
+move's `record_ops`, a `note_reload`. An offline copy's engine registers
+one at import (`sync_engine._on_commit`) for its sync-on-change; a listener
+that raises is logged and never breaks the write.
+
 ## The change feed (`gamma/routers/sync.py`)
 
 `GET /api/sync/changes?since=&limit=` is the workspace-wide view the

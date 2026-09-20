@@ -3587,6 +3587,59 @@ function LibraryApp() {
     }
   }, [blocks, readOnly]);
 
+  // Merges an offline copy's sync decided on this page's blocks
+  // (docs/dev/mirror.md): a chip on each such row (MergeResolver). Read on
+  // page open and after any sync event; a decision is posted and the block's
+  // new text arrives over the page socket like any edit.
+  const [merges, setMerges] = useState(null);
+  const mirrorWs = workspace?.mirror_of ? workspace.id : "";
+  const loadMerges = useCallback(async () => {
+    if (!mirrorWs || !focusedBlockId || !authUser?.user) { setMerges(null); return; }
+    try {
+      const d = await apiJson(`${API}/mirrors/${encodeURIComponent(mirrorWs)}/conflicts?page=${encodeURIComponent(focusedBlockId)}`);
+      const map = new Map();
+      for (const c of d.conflicts || []) if (!map.has(c.block_id)) map.set(c.block_id, c);
+      setMerges(map.size ? map : null);
+    } catch { setMerges(null); }
+  }, [mirrorWs, focusedBlockId, authUser?.user]);
+  useEffect(() => {
+    loadMerges();
+    if (!mirrorWs || !focusedBlockId) return undefined;
+    const t = setInterval(loadMerges, 15000); // rounds run on their own; the pill also signals them
+    return () => clearInterval(t);
+  }, [loadMerges, mirrorWs, focusedBlockId]);
+  useEffect(() => {
+    window.addEventListener("gamma:mirror", loadMerges);
+    window.addEventListener("gamma:mirror-changed", loadMerges);
+    return () => {
+      window.removeEventListener("gamma:mirror", loadMerges);
+      window.removeEventListener("gamma:mirror-changed", loadMerges);
+    };
+  }, [loadMerges]);
+  async function resolveMerge(conflict, choice) {
+    await apiJson(`${API}/mirrors/${encodeURIComponent(mirrorWs)}/conflicts/${conflict.id}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }),
+    });
+    window.dispatchEvent(new CustomEvent("gamma:mirror"));
+  }
+  // Jump to a block on this page or another — the sync popover's lists and
+  // Settings' merges (the "gamma:jump" event) land on the block itself.
+  const jumpToRef = useRef(null);
+  jumpToRef.current = (pageId, blockId) => {
+    setOpenPopover(null);
+    if (blockId) pendingBlockScrollRef.current = blockId;
+    if (pageId && pageId !== focusedBlockId) { openPage(pageId); return; }
+    if (blockId) { suppressAutosaveRef.current = true; setBlocks((prev) => expandToBlock(prev, blockId)); }
+  };
+  useEffect(() => {
+    const h = (e) => jumpToRef.current?.(e.detail?.page, e.detail?.block);
+    // the link was forgotten: this is an ordinary workspace again (no pill, no merge chips)
+    const gone = () => setWorkspace((prev) => (prev && prev.mirror_of ? { ...prev, mirror_of: "" } : prev));
+    window.addEventListener("gamma:jump", h);
+    window.addEventListener("gamma:mirror-gone", gone);
+    return () => { window.removeEventListener("gamma:jump", h); window.removeEventListener("gamma:mirror-gone", gone); };
+  }, []);
+
   useEffect(() => {
     if (!pendingBlockScrollRef.current) return;
     const id = pendingBlockScrollRef.current;
@@ -7580,6 +7633,8 @@ function LibraryApp() {
                     setBlocks((prev) => setBlockEditMode(prev, id, editMode));
                   },
                   peers: collab.peers,
+                  merges,
+                  onResolveMerge: resolveMerge,
                   enterNewNote,
                   // `above` inserts before `id` instead (the "+" handle with
                   // Alt held).
@@ -8161,7 +8216,7 @@ function LibraryApp() {
           mirrorOf={workspace.mirror_of}
           open={openPopover === "mirror"}
           onToggle={() => setOpenPopover(openPopover === "mirror" ? null : "mirror")}
-          openPage={(id) => { setOpenPopover(null); openPage(id); }}
+          jumpTo={(pageId, blockId) => jumpToRef.current?.(pageId, blockId)}
           onOpenSettings={() => { setSettingsOpen("workspaces"); setOpenPopover(null); }}
         />
       ) : null}

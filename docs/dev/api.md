@@ -319,11 +319,15 @@ A manual token (`gamma_…`, not an OAuth one) is also accepted on every `/api/*
 |---|---|---|
 | GET | `/mirrors` | the caller's offline copies with their sync status |
 | POST | `/mirrors` | `{remote_url, token, name?, mode?: two-way \| pull}` → the mirror: a new personal workspace that follows the remote workspace the token belongs to (validated against the remote's `/sync/whoami` first; a read token or a viewer's role gives `pull`); the first fill runs in the background |
-| GET | `/mirrors/{ws}` | one mirror, with `conflicts_open` (unresolved merges) and `interval_s` (the background loop's period, 0 = off); `status.progress` `{done, total, page, first}` while a round runs |
+| GET | `/mirrors/{ws}` | one mirror, with `conflicts_open` (unresolved merges), `poll_s` / `on_change` (its cadence), `detached`, `interval_s` (0 = the loop is off); `status.progress` `{done, total, page, first, file?}` while a round runs |
+| PATCH | `/mirrors/{ws}` | `{poll_s?, on_change?, mode?}` |
+| POST | `/mirrors/{ws}/detach` | detach, the link kept |
+| POST | `/mirrors/{ws}/relink` | `{token?, remote_url?, adopt?}` — link again |
+| POST | `/mirrors/{ws}/force` | `{direction: pull \| push}` — replace one side with the other |
 | POST | `/mirrors/{ws}/sync[?wait=1]` | a sync round now (`wait=1` answers with the round's status) |
 | DELETE | `/mirrors/{ws}` | stop mirroring; the workspace stays |
 | GET | `/mirrors/{ws}/log?limit=` | what the last rounds did, page by page, newest first: `{changes: [{id, at, page_id, title, action, exists}]}` |
-| GET | `/mirrors/{ws}/conflicts[?resolved=1]` | the merges the engine decided on its own |
+| GET | `/mirrors/{ws}/conflicts[?resolved=1][&page=]` | the merges the engine decided on its own (kinds `merged`, `diverged`, `kept_local_edit`, `restored_remote_edit`, `page_restored`, `page_restored_from_remote`) |
 | POST | `/mirrors/{ws}/conflicts/{id}` | `{choice: keep \| mine \| theirs}` |
 
 Session only, the mirror's owner, never a guest.

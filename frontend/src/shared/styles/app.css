@@ -2329,17 +2329,56 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 @keyframes mirrorSpin { to { transform: rotate(360deg); } }
 @media (max-width: 640px) { .mirrorPill .mirrorPillText { display: none; } .topbar .iconBtn.mirrorPill { padding: 0; width: 32px; } }
 .mirrorPopover { width: 340px; max-width: calc(100vw - 24px); }
-.mirrorPopHead { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; }
-.mirrorPopState { display: flex; align-items: flex-start; gap: 7px; padding: 6px 4px 8px; font-size: 13px; color: var(--text-primary); }
-.mirrorPopState > svg { flex-shrink: 0; margin-top: 2px; }
-.mirrorPopState.ok > svg { color: var(--accent-dark); }
-.mirrorPopState.warn > svg { color: var(--warning, #c47a10); }
-.mirrorPopState.busy > svg { animation: mirrorSpin 1.2s linear infinite; }
-.mirrorPopStateText { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.mirrorPopStateText .popoverHint { padding: 0; }
-.mirrorPopBar { height: 4px; border-radius: 2px; background: var(--bg-hover); overflow: hidden; margin: 2px 0; }
-.mirrorPopBar span { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.mirrorPopHead { display: flex; align-items: center; gap: 8px; padding: 2px 4px 8px; }
+.mirrorPopHead .popoverTitle { padding: 0; }
+.mirrorPopIcon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent-bg-light); color: var(--accent); flex-shrink: 0; }
+.mirrorPopTitle { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.mirrorPopTitle .popoverHint { padding: 0; }
+.mirrorEllipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; }
+/* The state block: one icon, one short line, bars while a round runs. */
+.mirrorState { display: flex; align-items: flex-start; gap: 7px; padding: 4px 4px 8px; font-size: 13px; color: var(--text-primary); min-width: 0; }
+.mirrorState > svg { flex-shrink: 0; margin-top: 2px; }
+.mirrorState.ok > svg { color: var(--accent-dark); }
+.mirrorState.warn > svg { color: var(--warning, #c47a10); }
+.mirrorState.busy > svg { animation: mirrorSpin 1.2s linear infinite; }
+.mirrorState > .popoverHint { padding: 0; margin-left: auto; max-width: 45%; }
+.mirrorStateBody { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.mirrorStateLine { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.mirrorStateLine .popoverHint { padding: 0; flex: 1; }
+.mirrorBar { height: 5px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; }
+.mirrorBar.thin { height: 3px; flex-basis: 100%; }
+.mirrorBar span { display: block; height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.mirrorFile { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11px; color: var(--text-muted); min-width: 0; }
+.mirrorFile > svg { flex-shrink: 0; }
+.mirrorFile .mirrorEllipsis { flex: 1; min-width: 0; }
+.mirrorFileBytes { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .mirrorPopActions { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 4px 8px; }
+/* The settings view: icon + control rows, a confirm strip, the action chips. */
+.mirrorSetRow { display: flex; align-items: center; gap: 8px; padding: 3px 4px; color: var(--text-muted); }
+.mirrorSetRow > svg { flex-shrink: 0; }
+.mirrorSetRow .setRow { flex: 1; padding: 0; }
+.mirrorSetActions { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 4px; }
+.mirrorConfirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 4px; font-size: 12px; color: var(--text-secondary); }
+.mirrorConfirm > svg { color: var(--warning, #c47a10); flex-shrink: 0; }
+.mirrorConfirmBtns { display: inline-flex; gap: 6px; margin-left: auto; }
+.mirrorMore { font-size: 12px; color: var(--text-muted); }
+/* The merge chip on a block row and its popover (MergeResolver.jsx). */
+.mergeChipWrap { position: absolute; right: 4px; top: 2px; z-index: 4; }
+.mergeChip { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--warning, #c47a10); background: var(--bg-elevated); color: var(--warning, #c47a10); cursor: pointer; padding: 0; }
+.mergeChip:hover, .mergeChip.on { background: var(--warning, #c47a10); color: #fff; }
+.mergePopover { position: absolute; right: 0; top: 22px; width: 380px; max-width: calc(100vw - 24px); z-index: 30; cursor: default; text-align: left; font-weight: normal; }
+.mergeHead { display: flex; flex-direction: column; gap: 2px; padding: 2px 4px 6px; }
+.mergeHead .popoverHint { padding: 0; }
+.mergeText { font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; padding: 6px 8px; border-radius: 6px; background: var(--bg-block); border: 1px solid var(--border-subtle); color: var(--text-primary); max-height: 220px; overflow: auto; }
+.mergeText mark, .mergeLegend mark { border-radius: 3px; padding: 0 1px; color: inherit; }
+mark.merge-mine { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+mark.merge-theirs { background: color-mix(in srgb, var(--warning, #c47a10) 30%, transparent); }
+mark.merge-both { background: var(--bg-hover); text-decoration: underline dotted; }
+.mergeLegend { display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); padding: 4px 4px 2px; }
+.mergeOther { padding: 4px 4px 0; }
+.mergeOther .popoverHint { padding: 0; }
+.mergeTextMuted { font-size: 12px; color: var(--text-muted); white-space: pre-wrap; word-break: break-word; padding: 4px 8px; border-radius: 6px; border: 1px dashed var(--border-subtle); max-height: 120px; overflow: auto; }
+.mergeActions { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 4px 2px; }
 .mirrorPopLog { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
 .mirrorPopItem { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; }
 .mirrorPopItem:disabled { opacity: 0.6; cursor: default; }

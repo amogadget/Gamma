@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class SchemaOutdated(RuntimeError):
@@ -113,7 +113,9 @@ USERS_SCHEMA = [
         remote_cursor TEXT NOT NULL DEFAULT '',
         local_cursor TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        poll_s INTEGER NOT NULL DEFAULT 30,
+        on_change INTEGER NOT NULL DEFAULT 1
     )""",
     """CREATE TABLE IF NOT EXISTS publisher_sessions (
         username TEXT NOT NULL,

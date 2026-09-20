@@ -64,13 +64,42 @@ export async function mirrorScenarios(env) {
       await until(() => pill.textContent().then((t) => /up to date/.test(t)), { what: "the pill reports the sync" });
       await pill.click();
       const pop = page.getByRole("dialog", { name: "Sync status", exact: true });
-      await pop.getByText("Recent changes", { exact: true }).waitFor();
+      await pop.getByText("Recent", { exact: true }).waitFor();
       await pop.getByText("Mirrored paper", { exact: true }).waitFor();
       await pop.getByRole("button", { name: "Sync now", exact: true }).click();
       await until(() => pop.textContent().then((t) => /Up to date/.test(t) && !/Syncing/.test(t)), { timeout: 20000, what: "the popover settles after Sync now" });
-      assert((await pop.textContent()).includes("Checks again every"), "the popover says how often it checks");
+      // the sync settings live in the popover: cadence, detach, link again
+      await pop.getByRole("button", { name: "Sync settings", exact: true }).click();
+      await pop.getByText("Sync settings", { exact: true }).waitFor();
+      await pop.getByRole("button", { name: "Manual", exact: true }).click();
+      await until(() => user.api(`/api/mirrors/${copy.workspace_id}`).then((m) => m.poll_s === 0), { what: "the cadence is saved" });
+      await pop.getByRole("button", { name: "Detach", exact: true }).click();
+      await until(() => pill.textContent().then((t) => /detached/.test(t)), { what: "the pill reads detached" });
+      assertEq((await user.api(`/api/mirrors/${copy.workspace_id}`)).mode, "off");
+      await pop.getByRole("button", { name: "Link again", exact: true }).click();
+      await until(() => pill.textContent().then((t) => /up to date/.test(t)), { timeout: 20000, what: "linked again and synced" });
+      await pop.getByRole("button", { name: "Back", exact: true }).click();
       await pop.getByText("Mirrored paper", { exact: true }).click();
       await page.getByText("a note to copy", { exact: true }).waitFor();
+      assertNoProblems(page);
+      // a same-block edit on both sides: the merge chip on the row resolves it in place
+      await user.api(`/api/pages/${paper.id}/ops`, { method: "POST", body: { client: "e2e", ops: [
+        { op: "set", id: "mirrorblk1", content: "a note to copy (original)" }] } });
+      const r2 = await fetch(`${server.base}/api/pages/${paper.id}/ops`, { method: "POST",
+        headers: user.headers({ "X-Gamma-Workspace": copy.workspace_id, "Content-Type": "application/json" }),
+        body: JSON.stringify({ client: "e2e", ops: [{ op: "set", id: "mirrorblk1", content: "(copy) a note to copy" }] }) });
+      assertEq(r2.status, 200, "the copy's edit");
+      await user.api(`/api/mirrors/${copy.workspace_id}/sync?wait=1`, { method: "POST" });
+      // the round ran outside the page (as the loop's would): the chip shows up on the pill's next glance
+      await until(() => page.locator(".mergeChip").count().then((n) => n === 1), { timeout: 40000, what: "the merged block carries a chip" });
+      await page.locator(".mergeChip").click();
+      const merge = page.getByRole("dialog", { name: "Merge", exact: true });
+      await merge.getByText("Merged from both sides", { exact: true }).waitFor();
+      assert((await merge.locator("mark.merge-mine").count()) >= 1 && (await merge.locator("mark.merge-theirs").count()) >= 1, "both sides coloured");
+      await merge.getByRole("button", { name: "Use theirs", exact: true }).click();
+      await until(() => page.locator(".mergeChip").count().then((n) => n === 0), { what: "the chip goes once decided" });
+      await page.getByRole("paragraph").filter({ hasText: "a note to copy (original)" }).first().waitFor();
+      assertEq((await user.api(`/api/mirrors/${copy.workspace_id}`)).conflicts_open, 0);
       assertNoProblems(page);
 
       // Stop keeps the workspace, drops the mirror.
@@ -78,8 +107,8 @@ export async function mirrorScenarios(env) {
       await page.getByRole("button", { name: "Settings…", exact: true }).click();
       await page.getByRole("dialog", { name: "Settings", exact: true }).waitFor();
       await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Workspaces", exact: true }).click();
-      await page.locator(".aiProvRow", { hasText: "copy of" }).getByRole("button", { name: "Stop", exact: true }).click();
-      await page.getByRole("button", { name: "Stop mirroring", exact: true }).click();
+      await page.locator(".aiProvRow", { hasText: "copy of" }).locator(".aiProvActions .uiBtn").last().click();
+      await page.getByRole("button", { name: "Forget the link", exact: true }).click();
       await page.getByText("No offline copies yet.", { exact: true }).waitFor();
       assertEq((await user.api("/api/mirrors")).mirrors.length, 0);
       assert((await user.api("/api/workspaces/mine")).workspaces.some((w) => w.id === copy.workspace_id), "the workspace stays");

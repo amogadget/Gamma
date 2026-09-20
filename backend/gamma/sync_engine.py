@@ -31,6 +31,7 @@ is how the local change feed's re-listing of them costs nothing (they diff
 to no-op) and how the page's live viewers see them arrive.
 """
 
+import io
 import json
 import mimetypes
 import re
@@ -40,7 +41,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import config, pdf_meta, workspaces
+from . import config, ops, pdf_meta, workspaces
 from .blocks_store import create_page, fetch_subtree
 from .db import connect_pages_db, connect_users_db, page_now, ws_uploads_dir
 from .logbuf import log
@@ -53,7 +54,11 @@ from .sync_tree import (ancestors, diff, snapshot_from_rows, snapshot_from_tree,
 SYNC_LOG_KEEP = 500        # rows of sync_log kept per mirror
 CLIENT = "sync"            # the op-log client of every local write the engine makes
 ACTOR = "mirror"           # ...and its actor (the remote's per-op authors are not carried over)
-MODES = ("two-way", "pull")
+MODES = ("two-way", "pull", "off")   # off = detached: the link (token, cursors, bases) is kept, no round runs
+ADOPT = ("theirs", "mine")           # whose version a never-reconciled page takes (a linked workspace, a force)
+DEBOUNCE_S = 3                       # a local edit → a round once things have been quiet this long
+TICK_S = 1                           # the loop's clock
+STREAM_CHUNK = 256 * 1024
 default_fetch = None       # the tests point this at an in-process TestClient; None = urllib
 UPLOAD_NAME_RE = re.compile(r"^[0-9a-f]{8,64}\.[a-z0-9]{1,8}$")
 _locks: dict[str, threading.Lock] = {}
@@ -118,28 +123,89 @@ class Remote:
         status, _ = self.request("HEAD", path, ok=(200, 404))
         return status == 200
 
-    def get_bytes(self, path) -> bytes:
-        _, data = self.request("GET", path)
-        return data
+    def _headers(self, content_type=None):
+        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
+        if self.ws:
+            headers["X-Gamma-Workspace"] = self.ws
+        if content_type:
+            headers["Content-Type"] = content_type
+        return headers
 
-    def post_file(self, path, name: str, data: bytes):
+    def _streaming(self) -> bool:
+        return self.fetch == self._urllib_fetch
+
+    def get_bytes(self, path, progress=None) -> bytes:
+        """A file's bytes; ``progress(done, total)`` as they arrive (total 0
+        when the remote sends no length). Only the real transport streams —
+        the tests' in-process one reports once, at the end."""
+        if not self._streaming():
+            _, data = self.request("GET", path)
+            if progress:
+                progress(len(data), len(data))
+            return data
+        req = urllib.request.Request(self.url + path, headers=self._headers())
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                total = int(resp.headers.get("Content-Length") or 0)
+                chunks, done = [], 0
+                while True:
+                    chunk = resp.read(STREAM_CHUNK)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    done += len(chunk)
+                    if progress:
+                        progress(done, total)
+                return b"".join(chunks)
+        except urllib.error.HTTPError as e:
+            raise RemoteError(e.code, (e.read() or b"")[:200].decode("utf-8", "replace")) from e
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise RemoteError(0, f"cannot reach {self.url}: {e}") from e
+
+    def post_file(self, path, name: str, data: bytes, progress=None):
         boundary = "gammaMirror" + str(int(time.time() * 1000))
         ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
         body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
                 f"Content-Type: {ctype}\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
-        _, out = self.request("POST", path, body=body, content_type=f"multipart/form-data; boundary={boundary}")
+        content_type = f"multipart/form-data; boundary={boundary}"
+        if not self._streaming():
+            _, out = self.request("POST", path, body=body, content_type=content_type)
+            if progress:
+                progress(len(data), len(data))
+            return json.loads(out) if out else None
+        total = len(body)
+
+        class Reader(io.BytesIO):
+            def read(self, n=-1):
+                chunk = super().read(n)
+                if progress:
+                    progress(min(self.tell(), len(data)), len(data))
+                return chunk
+
+        headers = self._headers(content_type)
+        headers["Content-Length"] = str(total)
+        req = urllib.request.Request(self.url + path, data=Reader(body), method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                out = resp.read()
+        except urllib.error.HTTPError as e:
+            raise RemoteError(e.code, (e.read() or b"")[:200].decode("utf-8", "replace")) from e
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise RemoteError(0, f"cannot reach {self.url}: {e}") from e
         return json.loads(out) if out else None
 
 
 # --- the registry -----------------------------------------------------------------
 
-_COLS = "workspace_id, remote_url, remote_ws, remote_name, token, owner, mode, remote_cursor, local_cursor, status, created_at"
+_COLS = ("workspace_id, remote_url, remote_ws, remote_name, token, owner, mode, remote_cursor, local_cursor, "
+         "status, created_at, poll_s, on_change")
 
 
 def _row_info(row, *, with_token=False) -> dict:
     info = {"workspace_id": row[0], "remote_url": row[1], "remote_ws": row[2], "remote_name": row[3],
             "owner": row[5], "mode": row[6], "remote_cursor": row[7], "local_cursor": row[8],
-            "status": json.loads(row[9] or "{}"), "created_at": row[10]}
+            "status": json.loads(row[9] or "{}"), "created_at": row[10],
+            "poll_s": int(row[11] if row[11] is not None else 30), "on_change": bool(row[12] if row[12] is not None else 1)}
     if with_token:
         info["token"] = cipher().decrypt(row[4].encode("ascii")).decode("utf-8")
     return info
@@ -172,16 +238,14 @@ def whoami(remote: Remote) -> dict:
     return remote.get("/api/sync/whoami")
 
 
-def create_mirror(owner: str, remote_url: str, token: str, *, name: str = "", mode: str = "two-way",
-                  fetch=None) -> dict:
-    """Make a local workspace of ``owner``'s that mirrors the remote
-    workspace the token belongs to. Talks to the remote first (``whoami``),
-    so a bad URL or token fails before anything is created. Returns the
-    mirror's info (run ``sync_workspace`` for the first fill)."""
+def _check_remote(remote_url: str, token: str, mode: str, fetch) -> tuple[str, dict, str]:
+    """Validate the address and the token against the remote's ``whoami``:
+    ``(remote_url, me, mode)`` — the mode dropped to ``pull`` when the token
+    or the role may not write."""
     remote_url = (remote_url or "").strip().rstrip("/")
     if not re.match(r"^https?://[^/\s]+(/[^\s]*)?$", remote_url):
         raise ValueError("the server address must be an http(s) URL")
-    if mode not in MODES:
+    if mode not in ("two-way", "pull"):
         raise ValueError("mode must be two-way or pull")
     token = (token or "").strip()
     if not token.startswith("gamma_"):
@@ -194,27 +258,144 @@ def create_mirror(owner: str, remote_url: str, token: str, *, name: str = "", mo
         raise
     if not me or not me.get("workspace"):
         raise ValueError("the remote did not recognise the token")
-    remote_ws, remote_name = me["workspace"]["id"], me["workspace"].get("name") or "Workspace"
     if mode == "two-way" and (me.get("scope") != "write" or me.get("role") == "viewer"):
         mode = "pull"
+    return remote_url, me, mode
+
+
+def create_mirror(owner: str, remote_url: str, token: str, *, name: str = "", mode: str = "two-way",
+                  fetch=None, workspace_id: str = "", adopt: str = "theirs") -> dict:
+    """Make a local workspace of ``owner``'s that mirrors the remote
+    workspace the token belongs to — or link ``workspace_id``, an existing
+    personal workspace of the owner's (an imported backup, a copy detached
+    and forgotten): its pages that exist on both sides have no common base,
+    so the first round adopts ``adopt``'s version of each and records what
+    differed as ``diverged`` conflicts. Talks to the remote first
+    (``whoami``), so a bad URL or token fails before anything is created.
+    Returns the mirror's info (run ``sync_workspace`` for the first fill)."""
+    if adopt not in ADOPT:
+        raise ValueError("adopt must be theirs or mine")
+    remote_url, me, mode = _check_remote(remote_url, token, mode, fetch)
+    token = token.strip()
+    remote_ws, remote_name = me["workspace"]["id"], me["workspace"].get("name") or "Workspace"
     with connect_users_db() as conn:
-        if conn.execute("SELECT 1 FROM mirrors WHERE owner = ? AND remote_url = ? AND remote_ws = ?",
+        if conn.execute("SELECT 1 FROM mirrors WHERE owner = ? AND remote_url = ? AND remote_ws = ? AND mode != 'off'",
                         (owner, remote_url, remote_ws)).fetchone():
             raise ValueError("you already mirror that workspace")
-    info = workspaces.create(name or f"{remote_name} (offline copy)", owner)
+    status = {"remote_user": me.get("user"), "remote_role": me.get("role")}
+    if workspace_id:
+        info = workspaces.get(workspace_id)
+        if not info or info["kind"] != "personal" or workspaces.role_of(workspace_id, owner) != "owner":
+            raise ValueError("that is not a workspace of yours")
+        if get_mirror(workspace_id):
+            raise ValueError("that workspace already mirrors something — detach or forget it first")
+        status["adopt"] = adopt
+        with connect_pages_db(workspace_id) as conn:
+            conn.execute("DELETE FROM sync_pages")
+            conn.commit()
+    else:
+        info = workspaces.create(name or f"{remote_name} (offline copy)", owner)
     with connect_users_db() as conn:
         conn.execute(
             "INSERT INTO mirrors (workspace_id, remote_url, remote_ws, remote_name, token, owner, mode, "
             "remote_cursor, local_cursor, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)",
             (info["id"], remote_url, remote_ws, remote_name, cipher().encrypt(token.encode("utf-8")).decode("ascii"),
-             owner, mode, json.dumps({"remote_user": me.get("user"), "remote_role": me.get("role")}), page_now()))
+             owner, mode, json.dumps(status), page_now()))
         conn.commit()
     return get_mirror(info["id"])
 
 
+def set_cadence(ws: str, *, poll_s: int | None = None, on_change: bool | None = None,
+                mode: str | None = None) -> dict:
+    """How a copy keeps in step: ``poll_s`` (a round every so many seconds,
+    0 = only Sync now), ``on_change`` (a round ``DEBOUNCE_S`` after a local
+    edit), ``mode`` (two-way / pull)."""
+    fields = {}
+    if poll_s is not None:
+        fields["poll_s"] = max(0, min(int(poll_s), 86400))
+    if on_change is not None:
+        fields["on_change"] = 1 if on_change else 0
+    if mode is not None:
+        if mode not in ("two-way", "pull"):
+            raise ValueError("mode must be two-way or pull")
+        fields["mode"] = mode
+    if fields:
+        _save(ws, **fields)
+    return get_mirror(ws)
+
+
+def detach_mirror(ws: str) -> dict:
+    """Detach: no round runs, the workspace is an ordinary one again, but
+    the link — token, cursors, every page's base — is kept, so a later
+    ``relink_mirror`` continues with a proper three-way merge of what both
+    sides did meanwhile."""
+    mirror = get_mirror(ws)
+    if not mirror:
+        raise ValueError("not a mirror")
+    status = {**mirror["status"], "running": False, "detached_at": page_now(), "detached_mode": mirror["mode"]}
+    status.pop("progress", None)
+    _save(ws, mode="off", status=status)
+    return get_mirror(ws)
+
+
+def relink_mirror(ws: str, *, token: str = "", remote_url: str = "", adopt: str = "theirs", fetch=None) -> dict:
+    """Link a detached copy again. Without a token the stored one is
+    checked against the remote; a new token (or address) that points at the
+    same remote workspace keeps the saved bases — anything else starts over
+    with the ``adopt`` policy. Returns the mirror; the caller runs a round."""
+    mirror = get_mirror(ws, with_token=True)
+    if not mirror:
+        raise ValueError("not a mirror")
+    if adopt not in ADOPT:
+        raise ValueError("adopt must be theirs or mine")
+    wanted = mirror["status"].get("detached_mode") or "two-way"
+    if wanted not in ("two-way", "pull"):
+        wanted = "two-way"
+    remote_url, me, mode = _check_remote(remote_url or mirror["remote_url"], token or mirror["token"], wanted, fetch)
+    token = (token or mirror["token"]).strip()
+    remote_ws, remote_name = me["workspace"]["id"], me["workspace"].get("name") or "Workspace"
+    status = {k: v for k, v in mirror["status"].items() if k not in ("detached_at", "detached_mode", "last_error")}
+    status.update(remote_user=me.get("user"), remote_role=me.get("role"))
+    fields = {"mode": mode, "remote_url": remote_url, "remote_ws": remote_ws, "remote_name": remote_name,
+              "token": cipher().encrypt(token.encode("utf-8")).decode("ascii")}
+    if remote_url != mirror["remote_url"] or remote_ws != mirror["remote_ws"]:
+        # a different original: the saved bases mean nothing, its pages are adopted
+        with connect_pages_db(ws) as conn:
+            conn.execute("DELETE FROM sync_pages")
+            conn.commit()
+        fields.update(remote_cursor="", local_cursor="")
+        status["adopt"] = adopt
+    _save(ws, status=status, **fields)
+    return get_mirror(ws)
+
+
+def force_sync(ws: str, direction: str) -> None:
+    """Make one side identical to the other, whatever happened: ``pull``
+    replaces this copy with the original (its own pages and edits go, the
+    texts they had are kept in ``diverged`` conflicts), ``push`` replaces the
+    original with this copy. Every page is reconciled from scratch under the
+    adopt policy and pages the losing side alone has are deleted there. The
+    round runs in the background."""
+    if direction not in ("pull", "push"):
+        raise ValueError("direction must be pull or push")
+    mirror = get_mirror(ws)
+    if not mirror:
+        raise ValueError("not a mirror")
+    if mirror["mode"] == "off":
+        raise ValueError("the copy is detached — link it again first")
+    if direction == "push" and mirror["mode"] != "two-way":
+        raise ValueError("a read-only copy cannot replace the original")
+    with connect_pages_db(ws) as conn:
+        conn.execute("DELETE FROM sync_pages")
+        conn.commit()
+    status = {**mirror["status"], "adopt": "theirs" if direction == "pull" else "mine", "prune": True}
+    _save(ws, remote_cursor="", local_cursor="", status=status)
+    sync_in_background(ws)
+
+
 def remove_mirror(ws: str) -> None:
-    """Stop mirroring: the workspace stays as an ordinary local one; its
-    sync state is dropped."""
+    """Forget the link: the workspace stays as an ordinary local one; its
+    sync state is dropped (a detached copy keeps it — see ``detach_mirror``)."""
     with connect_users_db() as conn:
         conn.execute("DELETE FROM mirrors WHERE workspace_id = ?", (ws,))
         conn.commit()
@@ -264,12 +445,15 @@ def open_conflicts(ws: str) -> int:
         return conn.execute("SELECT COUNT(*) FROM sync_conflicts WHERE resolved = 0").fetchone()[0]
 
 
-def list_conflicts(ws: str, *, resolved: bool = False) -> list[dict]:
+def list_conflicts(ws: str, *, resolved: bool = False, page_id: str = "") -> list[dict]:
+    """The decisions to look at (or the looked-at ones), newest first, one
+    page's only when ``page_id`` is given."""
     with connect_pages_db(ws) as conn:
         rows = conn.execute(
             "SELECT c.id, c.page_id, c.block_id, c.kind, c.mine, c.theirs, c.result, c.at, c.resolved, "
             "(SELECT content FROM unified_blocks WHERE id = c.page_id) FROM sync_conflicts c "
-            "WHERE c.resolved = ? ORDER BY c.id DESC LIMIT 500", (1 if resolved else 0,)).fetchall()
+            "WHERE c.resolved = ? AND (? = '' OR c.page_id = ?) ORDER BY c.id DESC LIMIT 500",
+            (1 if resolved else 0, page_id, page_id)).fetchall()
     return [dict(zip(("id", "page_id", "block_id", "kind", "mine", "theirs", "result", "at", "resolved",
                       "page_title"), r)) for r in rows]
 
@@ -288,7 +472,7 @@ def resolve_conflict(ws: str, conflict_id: int, choice: str) -> dict | None:
         conn.execute("UPDATE sync_conflicts SET resolved = 1 WHERE id = ?", (conflict_id,))
         conn.commit()
         exists = conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
-    if choice != "keep" and kind == "merged" and exists:
+    if choice != "keep" and kind in ("merged", "diverged") and exists:
         commit_ops(ws, page_id, [{"op": "set", "id": block_id, "content": mine if choice == "mine" else theirs}],
                    actor=ACTOR)
     return {"id": conflict_id, "resolved": True}
@@ -302,8 +486,10 @@ def _pull_files(ws: str, remote: Remote, names: set[str], report: dict) -> None:
     for name in sorted(names):
         if not UPLOAD_NAME_RE.match(name) or (uploads / name).exists():
             continue
+        prog = report.get("progress")
         try:
-            data = remote.get_bytes(f"/api/uploads/{name}")
+            data = remote.get_bytes(f"/api/uploads/{name}",
+                                    progress=(lambda d, t: prog(name, d, t, "down")) if prog else None)
         except RemoteError as e:
             if e.status == 404:
                 continue  # the remote lost it too; the reference stays dangling on both
@@ -314,6 +500,21 @@ def _pull_files(ws: str, remote: Remote, names: set[str], report: dict) -> None:
             pdf_meta.schedule(ws, name[:-4])
 
 
+def missing_uploads(ws: str) -> set[str]:
+    """The upload names the workspace's blocks reference (content, props, a
+    page's ``doc_id``) that are not in its uploads folder."""
+    with connect_pages_db(ws) as conn:
+        rows = conn.execute("SELECT content, properties FROM unified_blocks").fetchall()
+    blocks = []
+    for content, props in rows:
+        try:
+            blocks.append({"content": content or "", "props": json.loads(props or "{}")})
+        except ValueError:
+            blocks.append({"content": content or "", "props": {}})
+    uploads = ws_uploads_dir(ws)
+    return {n for n in upload_refs(blocks) if UPLOAD_NAME_RE.match(n) and not (uploads / n).exists()}
+
+
 def _push_files(ws: str, remote: Remote, names: set[str], report: dict) -> None:
     uploads = ws_uploads_dir(ws)
     for name in sorted(names):
@@ -321,7 +522,9 @@ def _push_files(ws: str, remote: Remote, names: set[str], report: dict) -> None:
         if not UPLOAD_NAME_RE.match(name) or not path.is_file() or remote.head_ok(f"/api/uploads/{name}"):
             continue
         data = path.read_bytes()
-        out = remote.post_file("/api/uploads" if name.endswith(".pdf") else "/api/upload-file", name, data)
+        prog = report.get("progress")
+        out = remote.post_file("/api/uploads" if name.endswith(".pdf") else "/api/upload-file", name, data,
+                               progress=(lambda d, t: prog(name, d, t, "up")) if prog else None)
         got = (out or {}).get("source_url") or (out or {}).get("url") or ""
         if not got.endswith("/" + name):
             log.warning(f"[mirror] {ws}: uploaded {name} but the remote stored it as {got!r}")
@@ -441,6 +644,13 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
         local = _local_snapshot(conn, page_id)
     base = state["base"] if state else {}
     push_allowed = mode == "two-way"
+    adopt, prune = report.get("adopt") or "theirs", bool(report.get("prune"))
+    if prune:
+        # a force: the losing side's tombstones say nothing — its pages go, the winner's come
+        if adopt == "theirs":
+            local_gone = False
+        else:
+            remote_gone = False
 
     # --- page-level: one side deleted it
     if remote_gone and not local_gone:
@@ -503,6 +713,13 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
     else:
         remote_tree, seq = base, state["remote_seq"]
     if remote_tree is None:
+        if state is None and local is not None and prune and adopt == "theirs":
+            # a force pull: a page the original does not have goes
+            with connect_pages_db(ws) as conn:
+                delete_page(ws, conn, page_id, actor=ACTOR)
+            _note(ws, page_id, "deleted here", local[page_id]["content"])
+            report["pages_deleted"] += 1
+            return
         if state is None and local is not None and push_allowed:
             # new here, unknown there: it goes over whole
             _create_remote_page(remote, page_id, local)
@@ -514,6 +731,12 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             _note(ws, page_id, "created there", local[page_id]["content"])
             report["pages_pushed"] += 1
         # else: the feed said it changed, but it is gone now (deleted after the feed): next round's tombstone
+        return
+    if local is None and prune and adopt == "mine" and push_allowed:
+        # a force push: a page this copy does not have goes from the original
+        remote.delete(f"/api/blocks/{page_id}")
+        _note(ws, page_id, "deleted there", remote_tree[page_id]["content"])
+        report["pages_pushed"] += 1
         return
     if local is None:
         # new here: create it and lay the remote tree in
@@ -527,11 +750,20 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
         report["pages_pulled"] += 1
         return
 
+    if state is None:
+        # both exist and were never reconciled (a linked workspace, a force, a
+        # round cut short between a page's creation and its state): there is
+        # no base to merge from, so one side's version is taken whole
+        _adopt_page(ws, remote, page_id, local, remote_tree, seq, adopt if push_allowed else "theirs", report)
+        return
+
     # 1. what the remote changed (from base), applied here with the local merge rules
     with connect_pages_db(ws) as conn:
         remote_ops = _reconcile_remote_ops(conn, page_id, base, local, remote_tree) if remote_changed else []
-    if remote_ops:
-        _pull_files(ws, remote, upload_refs(remote_ops), report)
+    if remote_changed:
+        # the whole tree's files, not only the changed blocks': a round cut short
+        # after the page landed but before its PDF did is repaired here
+        _pull_files(ws, remote, upload_refs(remote_tree.values()), report)
         sent = {op["id"]: op for op in remote_ops if op["op"] == "set" and "content" in op}
         applied = _apply_local(ws, page_id, remote_ops)
         with connect_pages_db(ws) as conn:
@@ -565,6 +797,44 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
         # edit (pull mode never pushes it, but a later merge keeps it)
         with connect_pages_db(ws) as conn:
             _save_state(conn, page_id, seq, remote_tree)
+
+
+def _adopt_page(ws: str, remote: Remote, page_id: str, local: dict, remote_tree: dict, seq: int,
+                policy: str, report: dict) -> None:
+    """A page both sides have but that was never reconciled: ``policy``'s
+    version (``theirs`` = the original's, ``mine`` = this copy's) becomes the
+    page on both sides; every block whose text differed is a ``diverged``
+    conflict carrying both texts, so nothing is lost and Use mine / Use
+    theirs still work afterwards."""
+    if local == remote_tree:
+        with connect_pages_db(ws) as conn:
+            _save_state(conn, page_id, seq, remote_tree)
+        return
+    differed = sorted(bid for bid in set(local) & set(remote_tree) if local[bid]["content"] != remote_tree[bid]["content"])
+    if policy == "mine":
+        push_ops = diff(remote_tree, local, page_id, with_base=False)
+        _push_files(ws, remote, upload_refs(push_ops), report)
+        _push(remote, page_id, push_ops)
+        remote_after, seq = _remote_tree(remote, page_id)
+        with connect_pages_db(ws) as conn:
+            _save_state(conn, page_id, seq, remote_after or local)
+            for bid in differed:
+                _conflict(conn, page_id, bid, "diverged", mine=local[bid]["content"],
+                          theirs=remote_tree[bid]["content"], result=local[bid]["content"])
+        _note(ws, page_id, "replaced there", local[page_id]["content"])
+        report["pages_pushed"] += 1
+        return
+    ops_ = diff(local, remote_tree, page_id, with_base=False)
+    _pull_files(ws, remote, upload_refs(remote_tree.values()), report)
+    if ops_:
+        _apply_local(ws, page_id, ops_)
+    with connect_pages_db(ws) as conn:
+        _save_state(conn, page_id, seq, remote_tree)
+        for bid in differed:
+            _conflict(conn, page_id, bid, "diverged", mine=local[bid]["content"],
+                      theirs=remote_tree[bid]["content"], result=remote_tree[bid]["content"])
+    _note(ws, page_id, "replaced here", remote_tree[page_id]["content"])
+    report["pages_pulled"] += 1
 
 
 def _create_remote_page(remote: Remote, page_id: str, local: dict) -> None:
@@ -625,13 +895,29 @@ def sync_workspace(ws: str, *, fetch=None) -> dict:
 
 
 def _round(ws: str, mirror: dict, fetch) -> dict:
+    if mirror["mode"] == "off":
+        return mirror["status"]  # detached: nothing runs until it is linked again
     remote = Remote(mirror["remote_url"], mirror["remote_ws"], mirror["token"], fetch)
     first = not mirror["status"].get("last_sync")  # the first fill (or one that never completed)
     status = {**mirror["status"], "running": True, "started_at": page_now(), "progress": None}
     status.pop("interrupted", None)
     _save(ws, status=status)
     report = {"pages_pulled": 0, "pages_pushed": 0, "pages_deleted": 0, "files_pulled": 0,
-              "files_pushed": 0, "errors": []}
+              "files_pushed": 0, "errors": [], "adopt": mirror["status"].get("adopt"),
+              "prune": bool(mirror["status"].get("prune"))}
+    last_file_save = [0.0]
+
+    def file_progress(name, done, total, direction):
+        # the popover's file line ("↓ paper.pdf 3.2 / 14 MB"): saved at most a few times a second
+        now = time.monotonic()
+        if done < total and now - last_file_save[0] < 0.3:
+            return
+        last_file_save[0] = now
+        status["progress"] = {**(status.get("progress") or {}),
+                              "file": {"name": name, "done": done, "total": total, "dir": direction}}
+        _save(ws, status=status)
+
+    report["progress"] = file_progress
     mode = mirror["mode"]
     try:
         me = whoami(remote)
@@ -666,11 +952,19 @@ def _round(ws: str, mirror: dict, fetch) -> dict:
                 failed[page_id] = flags
                 report["errors"].append(f"{page_id}: {e}")
                 log.warning(f"[mirror] {ws}: page {page_id}: {e}")
+        # files the copy's pages reference but its uploads folder lacks (an
+        # interrupted round, a file lost on disk): fetched again every round
+        _pull_files(ws, remote, missing_uploads(ws), report)
         # cursors move only when the round could talk to the remote at all
         _save(ws, remote_cursor=remote_cursor, local_cursor=local_cursor)
+        report = {k: v for k, v in report.items() if k not in ("adopt", "prune", "progress")}
         status = {**status, **report, "running": False, "last_sync": page_now(), "mode": mode,
                   "remote_role": role, "remote_user": me.get("user") if me else None,
                   "last_error": report["errors"][0] if report["errors"] else "", "retry": failed}
+        if not failed:
+            # a link's or a force's policy is spent once every page went through
+            status.pop("adopt", None)
+            status.pop("prune", None)
     except Exception as e:  # noqa: BLE001 — whatever happens, the running flag comes down
         status = {**status, "running": False, "last_error": str(e), "last_attempt": page_now()}
         log.warning(f"[mirror] {ws}: {e}")
@@ -714,33 +1008,77 @@ def reset_interrupted() -> None:
 
 
 FIRST_PASS_S = 5  # the loop's first round after startup (a copy interrupted mid-fill continues at once)
+_pending: dict[str, float] = {}   # ws -> earliest monotonic time a requested round may run
+_last_run: dict[str, float] = {}  # ws -> monotonic time of the last round the loop started
+_wants_change: dict[str, bool] = {}  # ws -> a round after a local edit (mode on, on_change set)
+
+
+def request_sync(ws: str, delay: float = DEBOUNCE_S) -> None:
+    """A round for ``ws`` once things have been quiet for ``delay`` seconds
+    (the loop picks it up; every further request within the delay pushes it
+    back — a typing burst is one round)."""
+    _pending[ws] = time.monotonic() + delay
+
+
+def _on_commit(ws: str, client: str) -> None:
+    """``ops.commit_listeners``: a local write in a copy set to sync on
+    change asks for a round; the engine's own writes (client ``sync``) do not."""
+    if client != CLIENT and _wants_change.get(ws):
+        request_sync(ws)
+
+
+ops.commit_listeners.append(_on_commit)
+
+
+def _refresh_wants() -> list[tuple]:
+    with connect_users_db() as conn:
+        rows = conn.execute("SELECT workspace_id, mode, poll_s, on_change FROM mirrors").fetchall()
+    _wants_change.clear()
+    for ws, mode, _, on_change in rows:
+        _wants_change[ws] = mode != "off" and bool(on_change)
+    return rows
+
+
+def due_now(ws: str, mode: str, poll_s: int, now: float) -> bool:
+    """Whether the loop runs ``ws`` this tick: a requested round whose
+    quiet time is over, or the mirror's own cadence come round (``poll_s``
+    0 = never by itself)."""
+    if mode == "off":
+        return False
+    if ws in _pending and _pending[ws] <= now:
+        return True
+    return poll_s > 0 and now - _last_run.get(ws, float("-inf")) >= poll_s
 
 
 def start_loop() -> None:
-    """Every ``config.sync_interval_s()`` seconds, one round per mirror,
-    the first one ``FIRST_PASS_S`` after startup. Started once at app
-    startup; off when the interval is 0 (the interrupted flags are still
-    reset)."""
+    """The engine's clock: every ``TICK_S`` seconds, each mirror that is due
+    — its own ``poll_s`` come round, or a local edit ``DEBOUNCE_S`` ago
+    (``request_sync``) — gets a round; the first pass ``FIRST_PASS_S`` after
+    startup. Started once at app startup; ``GAMMA_SYNC_INTERVAL=0`` turns the
+    loop off (the tests; the interrupted flags are still reset)."""
     reset_interrupted()
-    interval = config.sync_interval_s()
-    if interval <= 0:
+    if config.sync_interval_s() <= 0:
         return
 
     def run():
-        wait = min(FIRST_PASS_S, interval)
+        time.sleep(FIRST_PASS_S)
         while True:
-            time.sleep(wait)
-            wait = interval
             try:
-                with connect_users_db() as conn:
-                    ids = [r[0] for r in conn.execute("SELECT workspace_id FROM mirrors").fetchall()]
+                rows = _refresh_wants()
             except Exception as e:  # noqa: BLE001 — the loop must survive anything
                 log.warning(f"[mirror] loop: {e}")
+                time.sleep(TICK_S)
                 continue
-            for ws in ids:
+            now = time.monotonic()
+            for ws, mode, poll_s, _ in rows:
+                if not due_now(ws, mode, int(poll_s or 0), now):
+                    continue
+                _pending.pop(ws, None)
+                _last_run[ws] = now
                 try:
                     sync_workspace(ws)
                 except Exception as e:  # noqa: BLE001
                     log.warning(f"[mirror] {ws}: {e}")
+            time.sleep(TICK_S)
 
     threading.Thread(target=run, name="mirror-loop", daemon=True).start()

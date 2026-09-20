@@ -387,6 +387,19 @@ def _v10_mirrors(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v11_mirror_cadence(conn: sqlite3.Connection) -> None:
+    """``mirrors`` gains its cadence: ``poll_s`` (how often a round checks
+    the original, 0 = only by hand) and ``on_change`` (a round a few seconds
+    after a local edit). A mirror's ``mode`` may now also be ``off`` — detached,
+    the link kept for a later re-link."""
+    cols = _columns(conn, "mirrors")
+    if "poll_s" not in cols:
+        conn.execute("ALTER TABLE mirrors ADD COLUMN poll_s INTEGER NOT NULL DEFAULT 30")
+    if "on_change" not in cols:
+        conn.execute("ALTER TABLE mirrors ADD COLUMN on_change INTEGER NOT NULL DEFAULT 1")
+    conn.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
@@ -398,4 +411,5 @@ STEPS = [
     (8, "ai_usage", _v8_ai_usage),
     (9, "upload_path_titles", _v9_upload_path_titles),
     (10, "mirrors", _v10_mirrors),
+    (11, "mirror_cadence", _v11_mirror_cadence),
 ]
