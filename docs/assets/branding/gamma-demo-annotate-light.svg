@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="620" viewBox="0 0 1400 620" role="img" aria-labelledby="title desc">
+  <title id="title">Highlight a line, note it, draw on the page</title>
+  <desc id="desc">One line of a paper is selected and turns yellow; it appears as a block in the notes and a comment is typed under it. Then a circle is drawn around the figure and becomes an ink block.</desc>
+  <defs>
+<g id="gammaMark"><svg width="48" height="48" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-favicon-32">
+        <rect id="gamma-background" width="32" height="32" rx="7" fill="#1e1e1c"/>
+        <!-- both branches of standing wave -->
+        <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+        <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+      </svg></g><g id="gammaLogo">
+  <g transform="scale(2)"><svg width="48" height="48" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-favicon-32">
+        <rect id="gamma-background" width="32" height="32" rx="7" fill="#1e1e1c"/>
+        <!-- both branches of standing wave -->
+        <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+        <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+      </svg></g>
+  <text x="122" y="83" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="100" font-weight="700" letter-spacing="-2.7" fill="#1a1a18">Gamma<tspan font-weight="400" fill="#e8a020" dx="23">PDF</tspan></text>
+</g>
+    <filter id="shadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000000" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+  <rect width="1400" height="620" fill="#f6f4ef"/>
+  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.2" transform="scale(0.8750 0.6200)">
+    <path d="M-60 880 C220 1100 560 1000 820 940 S1300 900 1660 1010"/>
+  </g>
+  <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+    <rect x="100" y="100" width="500" height="440" rx="12" fill="#ffffff" filter="url(#shadow)"/>
+<rect x="150" y="154" width="275" height="14" rx="4" fill="#8d8a82"/>
+<rect x="150" y="180" width="200" height="9" rx="4" fill="#8d8a82"/>
+<rect x="150" y="230" width="400" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="150" y="254" width="400" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="150" y="278" width="344" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="150" y="302" width="400" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="150" y="326" width="376" height="9" rx="4.5" fill="#cfccc4"/>
+    <rect x="200" y="360" width="360" height="130" rx="8" fill="none" stroke="#d6d3cb" stroke-width="2"/>
+    <path d="M230 470 C300 400 380 392 520 398" stroke="#b9b6ae" stroke-width="3" fill="none"/>
+    <rect x="740" y="100" width="560" height="440" rx="14" fill="#ffffff" stroke="#e3e0d8" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="776" y="156" font-size="24" font-weight="600" fill="#1a1a18">Notes</text>
+    <path d="M776 180 H1264" stroke="#e3e0d8" stroke-width="1.5"/>
+    <rect x="150" y="279" width="0" height="24" rx="4" fill="#9bcdff" opacity="0.6"><animate attributeName="width" values="0;0;420;420;0;0" keyTimes="0.0000;0.0556;0.1778;0.2222;0.2233;1.0000" dur="9s" repeatCount="indefinite"/></rect><rect x="150" y="279" width="420" height="24" rx="4" fill="#ffe28f" opacity="0"><animate attributeName="opacity" values="0;0;0.85;0.85;0" keyTimes="0.0000;0.2222;0.2389;0.9667;1.0000" dur="9s" repeatCount="indefinite"/></rect><g><circle r="9" fill="#e8a020" opacity="0.9"/><circle r="4" fill="#ffffff"/><animateTransform attributeName="transform" type="translate" values="150 291;150 291;570 291;570 291;570 291;150 291" keyTimes="0.0000;0.0556;0.1778;0.2444;0.9989;1.0000" dur="9s" repeatCount="indefinite"/></g><g><path d="M572 291 C660 291 660 250 740 250" fill="none" stroke="#e8a020" stroke-width="2.5" stroke-dasharray="2 9" stroke-linecap="round"/><circle cx="770" cy="250" r="5" fill="#e8a020"/><rect x="790" y="218" width="470" height="64" rx="10" fill="#f2f0ea"/><rect x="790" y="218" width="6" height="64" rx="3" fill="#ffe28f"/><text x="812" y="246" font-family="Georgia, serif" font-size="20" font-style="italic" fill="#6b6a65">“decoherence is dominated by</text><text x="812" y="272" font-family="Georgia, serif" font-size="20" font-style="italic" fill="#6b6a65">intermediate-state scattering”</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2444;0.2611;1.0000" dur="9s" repeatCount="indefinite"/></g><g><circle cx="800" cy="316" r="5" fill="#8d8a82"/><text x="822" y="323" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="22" fill="#1a1a18" textLength="106.9" lengthAdjust="spacing" xml:space="preserve"><tspan opacity="0">K<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.3250;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">e<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.3443;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">y<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.3612;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0"> <animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.3742;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">c<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.3951;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">l<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.4070;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">a<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.4273;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">i<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.4380;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">m<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.4495;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan><tspan opacity="0">.<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.4667;0.9667;1" dur="9s" repeatCount="indefinite"/></tspan></text><g opacity="0"><rect x="822" y="303" width="2.5" height="28" fill="#e8a020"><animate attributeName="x" calcMode="discrete" values="822.0;822.0;836.5;848.4;860.3;866.4;878.3;884.9;896.8;903.4;922.3;928.9;822.0;822.0" keyTimes="0.0000;0.3111;0.3250;0.3443;0.3612;0.3742;0.3951;0.4070;0.4273;0.4380;0.4495;0.4667;0.9667;1" dur="9s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.5;0.55;1" dur="1.1s" repeatCount="indefinite"/></rect><animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.2833;0.5556;1" dur="9s" repeatCount="indefinite"/></g><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2889;0.3056;1.0000" dur="9s" repeatCount="indefinite"/></g><path d="M232 404 C300 372 470 368 500 412 C528 458 320 488 232 462 C196 450 200 420 232 404" fill="none" stroke="#e8a020" stroke-width="4" stroke-linecap="round" stroke-dasharray="900" stroke-dashoffset="900"><animate attributeName="stroke-dashoffset" values="900;900;0;0;900" keyTimes="0.0000;0.5778;0.7556;0.9667;1.0000" dur="9s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0.0000;0.5667;0.5778;0.9667;1.0000" dur="9s" repeatCount="indefinite"/></path><g><circle cx="800" cy="386" r="5" fill="#8d8a82"/><rect x="822" y="364" width="180" height="46" rx="10" fill="#f2f0ea"/><path d="M842 394 C854 372 874 372 884 384 C892 394 872 402 862 396" fill="none" stroke="#e8a020" stroke-width="3" stroke-linecap="round"/><text x="902" y="393" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="19" fill="#6b6a65">ink · p. 3</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.7778;0.7944;1.0000" dur="9s" repeatCount="indefinite"/></g>
+  </g>
+</svg>

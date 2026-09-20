@@ -28,6 +28,8 @@ const MEDIA = {
   'connections-dark.svg': 'docs/assets/branding/gamma-connections-dark.svg',
   'workspaces-light.svg': 'docs/assets/branding/gamma-workspaces-light.svg',
   'workspaces-dark.svg': 'docs/assets/branding/gamma-workspaces-dark.svg',
+  'anywhere-light.svg': 'docs/assets/branding/gamma-anywhere-light.svg',
+  'anywhere-dark.svg': 'docs/assets/branding/gamma-anywhere-dark.svg',
   'demo-annotate-and-ink.webp': 'docs/assets/demos/demo-annotate-and-ink.webp',
   'demo-notes.webp': 'docs/assets/demos/demo-notes.webp',
   'demo-native-agentic.webp': 'docs/assets/demos/demo-native-agentic.webp',

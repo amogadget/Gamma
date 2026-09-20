@@ -155,11 +155,11 @@ export function IntegrationSettings({ workspaceId }) {
             hint={isClaude ? "Start Claude Code, run /mcp, select gamma, and authenticate. Sign in to Gamma in your browser and approve a workspace."
               : "Follow your assistant's sign-in prompt. Approve read-only access in Gamma. No token to create or paste."} />
           {isClaude ? <>
-            <Step n={3} title="Use the Gamma plugin"
-              hint="In Claude Code, open /plugin to see installed plugins. Start a new session and run /gamma:gamma, then paste a Gamma page or share link with your question.">
-              <p className="settingDesc">The plugin provides the Gamma workflow. The MCP connection above gives it access to your library.</p>
+            <Step n={3} title="Ask about your papers"
+              hint="Start a new session and paste a Gamma page or share link with your question, or mention a paper by name. With the Gamma plugin installed, /gamma:gamma starts the workflow.">
+              <p className="settingDesc">The MCP connection above is all Claude Code needs to read your library. The plugin (optional) adds the /gamma:gamma workflow and the Gamma identity.</p>
               <details>
-                <summary>Install the plugin if it is missing</summary>
+                <summary>Install the plugin (once)</summary>
                 <p>Download the Claude Code plugin ZIP from <a href="https://github.com/tim4431/Gamma/releases/latest" target="_blank" rel="noreferrer">Gamma's latest release</a> and extract it into a permanent folder.
                   Open a terminal in the folder containing <code>gamma-marketplace</code> and run:</p>
                 <CopyField label="Claude Code plugin install commands" value={claudePluginInstallCommands} action="Copy plugin install commands" rows={3} />

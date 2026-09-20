@@ -40,14 +40,14 @@ connection setup follows the [Claude Code MCP guide](https://code.claude.com/doc
 
 ## Codex
 
-For the combined installer, open **Settings → AI → External assistants → Codex
+For the combined installer, open **Settings → AI → Integrations → Codex
 CLI**, select your operating system, and copy the setup command. It downloads
 the plugin from Gamma's latest release, installs it, and connects this server.
 Requires an installed Codex CLI and a release containing the setup scripts.
 Approve a workspace in your browser, then start a new chat. Gamma's desktop app
 is not required. To connect manually or install a development package:
 
-1. Update/start Gamma and open **Settings → AI → External assistants** in the
+1. Update/start Gamma and open **Settings → AI → Integrations** in the
    workspace you want Codex to read.
 2. Copy the server URL into your assistant's MCP settings and sign in with Gamma.
    For Codex CLI, copy the setup commands shown in Gamma, or:

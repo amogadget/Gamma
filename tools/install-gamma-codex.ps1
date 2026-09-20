@@ -8,7 +8,7 @@ $gammaUri = [Uri]$ServerUrl
 if (-not $gammaUri.IsAbsoluteUri -or $gammaUri.UserInfo -or $gammaUri.Query -or $gammaUri.Fragment -or
     $gammaUri.AbsolutePath -ne '/mcp' -or
     ($gammaUri.Scheme -ne 'https' -and -not ($gammaUri.Scheme -eq 'http' -and $gammaUri.IsLoopback))) {
-    throw 'Use the Gamma MCP URL from External assistants (HTTPS, or HTTP localhost).'
+    throw 'Use the Gamma MCP URL from Integrations (HTTPS, or HTTP localhost).'
 }
 
 # Release packaging pins both the version and the archive digest into this file.

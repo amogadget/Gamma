@@ -15,18 +15,21 @@
     "frontend/src/shared/illustrations/brands/obsidian.svg": "ceee016a3e7afcfa931e19b3dfa9eb26685fc8a9b4f177ff921e358d628abb33",
     "frontend/src/shared/illustrations/brands/openai.svg": "2b4a04ddc2395b20d168694d3850ce2050a702c4a0cdeb4d8b31b9a970481a8c",
     "frontend/src/shared/illustrations/brands/zotero.png": "30c76a7a6441884df75567287db08ee40be6b763af7309f452a434800e069cd4",
-    "tools/branding/branding.py": "a9c56a490b3fd29c37707a07e1bf1407e3d41e2e8f0fe75d2af57be237464c4d",
-    "tools/branding/build-connections.py": "4d258952c43f20230211fcdffed8c7bfafd121479e8c7af102c9ebb31f51a3e9",
+    "tools/branding/branding.py": "d6f93c728ca1f578eecec9504704e2d0b4cef05c57332dae5db63ef5794db175",
+    "tools/branding/build-anywhere.py": "7aa3a8621d3ead8540dda38f51de70ec767f5b764712299ee38e1b7d36529db1",
+    "tools/branding/build-connections.py": "4c2eb8e29073bc1c224001abfb5e9083ccc6b0967d0bb3ba74b0ebe92a9ad1ff",
+    "tools/branding/build-demos.py": "11ee38fd99d2c30bafbde6991f1d29d20deddce15b7583e825dc4e9ef8c24c91",
     "tools/branding/build-library.py": "0d44cd6106c399eca96cf0a60a1b871ebb9302d9369d2e86ec73189ca6238bbb",
-    "tools/branding/build-workspaces.py": "2edf1b5344f995e1976dcb313dc77e11fb12e3a2cf01d27f6b549070c5801f98",
-    "tools/branding/build.mjs": "7fdbe04220328fd708dc47300e9bb7b5d5011db392b2e5b16b03c24d5d099ccf",
+    "tools/branding/build-workspaces.py": "89e36c71e07c1306612f38606066b07e29eb0a14f27b87058c8c2d9f86445c0b",
+    "tools/branding/build.mjs": "52cae29fa9a8658d6c83059fd22f01b6ae59bd21e860f7c0e4afd2506928be78",
     "tools/branding/check.test.mjs": "ceeaf77e8f668d8bb5f9ef9efcd3b3adb68b6974e35c433443cd1ec23e175d9c",
     "tools/branding/logo.mjs": "43bf2a2afdcdc7723a48e65c60bb6f8ba1debb9a108565fd962952bda22195f4",
     "tools/branding/mark.mjs": "058db1f84fb4faa93e179f6b565eeb015b0598efe8dbd861c9e946317ef961e3",
-    "tools/branding/render.mjs": "1a28eaead43ccd8ecf96e07b0b1b39b0c10b73c0ece25eba4476b5a93c5f2b92",
+    "tools/branding/render.mjs": "70fc1b5ec2d2a282722ce5c82a482e6f063fa51a0e710506752c9d026696db06",
     "tools/branding/runtime.mjs": "7c1ba52f4b42922a9384e860132311affe5887370430399423311d8bca975836",
     "tools/branding/store-layouts.mjs": "fe18376358075cd3ace68a155865c4b38ac20664b926c2491796169fbc4f3a23",
-    "tools/branding/svg-source.mjs": "5b4843f96d03859e4f79b7f1ad8489b9e0e89507ab4636fe25e9ce55aa9fc020"
+    "tools/branding/svg-source.mjs": "5b4843f96d03859e4f79b7f1ad8489b9e0e89507ab4636fe25e9ce55aa9fc020",
+    "tools/branding/test_branding.py": "6379bf01b46fa28a3af9f70ae08926775a019e2430a84f932403bcd530d344dd"
   },
   "outputs": {
     "frontend/public/media/icons/favicon.svg": {
@@ -74,6 +77,24 @@
       ],
       "sha256": "7551405bf85fd44c561c3788c969373a33f6383033929471e7464f0127279df3"
     },
+    "docs/assets/branding/gamma-anywhere-light.svg": {
+      "source": "tools/branding/build-anywhere.py",
+      "variant": "light",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "d93c36f21c3b69acdfdece8467b3bcf84542f11e63315bae338f12f851d3b299"
+    },
+    "docs/assets/branding/gamma-anywhere-dark.svg": {
+      "source": "tools/branding/build-anywhere.py",
+      "variant": "dark",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "80d379caef839d136b4596a1b79fa6edd079e19c9101b9480b7ffb24f309031f"
+    },
     "docs/assets/branding/gamma-connections-light.svg": {
       "source": "tools/branding/build-connections.py",
       "variant": "light",
@@ -81,7 +102,7 @@
         1920,
         1080
       ],
-      "sha256": "31475ba3829d54872b4a5a673a82a0979d367ed84a8c91ae33f0eeccf5ac6d6a"
+      "sha256": "3a73fb6800a879b2e43e00dafda87969373de223f1e8e63a942dfefcad958931"
     },
     "docs/assets/branding/gamma-connections-dark.svg": {
       "source": "tools/branding/build-connections.py",
@@ -90,25 +111,34 @@
         1920,
         1080
       ],
-      "sha256": "023638cf2b6bf2474cd9e85d7d2c515a0d19bc04165ffffeddb89217e73f5af9"
+      "sha256": "f76983bf77c0ba842215e235ebeb407a83ed89fdfe80609500c3317735df97d2"
     },
-    "docs/assets/branding/gamma-workspaces-light.svg": {
-      "source": "tools/branding/build-workspaces.py",
+    "docs/assets/branding/gamma-demo-annotate-light.svg": {
+      "source": "tools/branding/build-demos.py",
       "variant": "light",
       "size": [
-        1920,
-        1080
+        1400,
+        620
       ],
-      "sha256": "7effe473989db72e130b039cbd77b69158000f57577875955b8df5ec7c08c89f"
+      "sha256": "94214526cffc03e3d25c27a59ee2e1b3f2135ef8b778718dbb9c617f3b5cf748"
     },
-    "docs/assets/branding/gamma-workspaces-dark.svg": {
-      "source": "tools/branding/build-workspaces.py",
-      "variant": "dark",
+    "docs/assets/branding/gamma-demo-notes-light.svg": {
+      "source": "tools/branding/build-demos.py",
+      "variant": "light",
       "size": [
-        1920,
-        1080
+        1600,
+        1000
       ],
-      "sha256": "aadf421ec1a3a7d068f4495a6009d30083852a938e383516f3f8edbbd39a64a0"
+      "sha256": "364566be8195c6131f96408bdf86744d37c71a6502e49989bb6b6c03d30359a5"
+    },
+    "docs/assets/branding/gamma-demo-search-light.svg": {
+      "source": "tools/branding/build-demos.py",
+      "variant": "light",
+      "size": [
+        1600,
+        1000
+      ],
+      "sha256": "16a89b2fb47f34582dbcf68c7c70ef6e138be15f1542caaccb97192b6dfa4a38"
     },
     "docs/assets/branding/gamma-library-light.svg": {
       "source": "tools/branding/build-library.py",
@@ -127,6 +157,24 @@
         1080
       ],
       "sha256": "f4b2c6750a7f1b50abf46ea5395a51ebb3a6a9bfd73e861171980b92163821f6"
+    },
+    "docs/assets/branding/gamma-workspaces-light.svg": {
+      "source": "tools/branding/build-workspaces.py",
+      "variant": "light",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "9d8afcb6116d0fca895d2a99f7a021caa20d78604bf9cb4cf3d545bb898296b0"
+    },
+    "docs/assets/branding/gamma-workspaces-dark.svg": {
+      "source": "tools/branding/build-workspaces.py",
+      "variant": "dark",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "9ca9ac794a432eb37c01b609591c40856a876c8be67a2d772ae954020c70f34a"
     },
     "frontend/public/media/icons/apple-touch-icon.png": {
       "source": "marks/favicon.svg",

@@ -10,6 +10,8 @@ Gamma is a self-hosted, Logseq-inspired PDF annotation server: highlight PDFs in
 
 ## Docs
 
+The README is written for users: plain section headings (no emoji or icons), "Read from any place" first, every picture linked to its section of [docs/user_guide.md](docs/user_guide.md), and a "→ Guide:" line per section; the website's copy mirrors it. Typed text in any illustration goes through `branding.typewriter()` (`tools/branding/branding.py`).
+
 Topic docs live in `docs/dev/` — **read the relevant one before working in that area**, and keep them in sync with code changes. Design research (how others solve a problem, what was learned before a redesign, why a shape was chosen) lives in [docs/research/](docs/research/README.md) — findings only, never a duplicate of a `docs/dev/` doc; add a note there when a task involved a real survey.
 
 - [docs/dev/repository.md](docs/dev/repository.md) — current source and asset locations, packaging inputs versus build outputs, and static asset cache rules.

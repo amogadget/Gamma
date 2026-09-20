@@ -50,7 +50,9 @@ and their templates have been removed.
 
 `outputs.json` maps direct copies and SVG templates to existing consumer paths.
 Store sizes/layouts live in `tools/branding/store-layouts.mjs`; README scenes
-remain in the three Python illustration generators. `generated.json` records
+are the `tools/branding/build-*.py` generators (connections, workspaces,
+library, anywhere, and the light-only demo scenes), each writing its light and
+dark SVG to `docs/assets/branding/`. `generated.json` records
 every generated destination, recipe, dimensions and SHA-256, plus hashes of
 the sources and rendering toolchain. Do not edit this ledger manually.
 

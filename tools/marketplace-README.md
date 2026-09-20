@@ -4,7 +4,7 @@ Search and read your Gamma pages, notes, highlights and PDF text from either ass
 
 ## Connect your library
 
-Open Gamma in your browser and go to **Settings → AI → External assistants**.
+Open Gamma in your browser and go to **Settings → AI → Integrations**.
 Copy the MCP server URL into your assistant's MCP settings, or copy the Codex
 CLI setup commands. Sign in with Gamma and approve the workspace you want to
 share, then start a new chat. No manual token or environment variable is needed.

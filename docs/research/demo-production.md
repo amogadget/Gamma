@@ -47,3 +47,32 @@ preview in frame without adding motion to every text pixel.
 The delivery rules, the recipe per slot and the published inventory live in
 [tools/readme-media/README.md](../../tools/readme-media/README.md) and
 [the asset directory](../assets/demos/README.md).
+
+## Abstract SVG scenes next to the recordings (2026-09)
+
+Tried: the same three interactions (annotate + ink, notes with live math,
+library search) as animated SVG illustrations in the branding style
+(`tools/branding/build-demos.py`), to see whether "showing the idea" can
+stand in for a recording.
+
+What works: a scene is ~10 KB against 1–5 MiB per WebP, renders crisp at
+any size, needs no server, no demo workspace and no re-recording when the
+UI's pixels change — only when the interaction itself changes. SMIL keeps
+it a plain `<img>` (GitHub strips scripts and ignores CSS animation inside
+an embedded SVG; SMIL plays). Typing is one `<tspan>` per character switched
+on in turn (`branding.typewriter()`, a wipe looked like a curtain, not a
+keyboard); drawing is `stroke-dashoffset`; a cursor is an `animateTransform`.
+
+What it cannot do: prove the feature exists. A recording shows the real
+toolbar, the real latency, the real result; the abstraction shows a claim.
+It also cannot show density — a real notes panel is busier than the scene.
+Rules from the attempt: every `keyTimes` must end at 1 (a list ending early
+silently disables that animation); glyph widths are unknowable (the viewer's
+system font draws the text), so the caret hops along estimated advances and
+`textLength` squeezes the line to the same estimate; and the less a scene
+shows, the better it reads — the annotate scene ended up as one highlighted
+line, one note and one stroke.
+
+Decision: keep the recordings in the README, where a visitor decides
+whether the product is real, and use the abstract scenes, light only, in
+the user guide, where the reader already has the app and wants the idea.

@@ -113,7 +113,7 @@ export default function McpConsent({ requestId }) {
         <p className="loginConflictHint">Content the assistant reads is shared with its provider.</p>
       </div>
       <p className="loginConflictHint">Access lasts 90 days. Disconnect anytime in
-        Settings → AI → External assistants.</p>
+        Settings → AI → Integrations.</p>
       <details className="mcpConnectionDetails"><summary>Connection details</summary>
         <p className="loginConflictHint">The assistant provided its name. Only approve if you started this connection.</p>
         <p className="loginConflictHint mcpCallback">Returns to: {details.redirect_uri}</p>
