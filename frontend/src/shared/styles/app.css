@@ -2415,8 +2415,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mergeVersion { display: flex; flex-direction: column; gap: 4px; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px; background: var(--bg-block); }
 .mergeVersion.current { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .mergeVersionHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.mergeVersionHead .uiBtn { margin-left: auto; flex-shrink: 0; }
-.mergeVersionHead .uiTag { margin-left: 0; flex-shrink: 0; }
+.mergeVersionHead .uiTag { margin-left: auto; }
 .mergeSide { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; color: var(--text-primary); flex-shrink: 0; }
 .mergeSide.mine { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .mergeSide.theirs { background: color-mix(in srgb, var(--warning, #c47a10) 24%, transparent); }
@@ -2429,7 +2428,11 @@ mark.merge-theirs { background: color-mix(in srgb, var(--warning, #c47a10) 30%, 
 mark.merge-both { background: var(--bg-hover); text-decoration: underline dotted; }
 mark.merge-add { background: color-mix(in srgb, var(--ok) 25%, transparent); }
 mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent); text-decoration: line-through; color: var(--text-muted); }
-.mergeActions { display: flex; gap: 6px; justify-content: flex-end; padding: 4px 4px 2px; }
+.mergeActions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; padding: 4px 4px 2px; }
+.mergeActionsHint { padding: 0; flex: 1; text-align: right; min-width: 0; }
+.mergeVersion { cursor: pointer; }
+.mergeVersion.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mergePick { margin: 0 2px 0 0; accent-color: var(--accent); flex-shrink: 0; cursor: pointer; }
 /* Lists of cards (the pill's conflicts view, Settings' conflicts). */
 .mirrorCards { display: flex; flex-direction: column; gap: 10px; }
 .mirrorCards .mergeCard { padding: 8px; border-radius: 10px; border: 1px solid var(--border-subtle); }

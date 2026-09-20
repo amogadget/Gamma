@@ -82,11 +82,36 @@ diff to nothing on the next round.
 | deleted here, edited there | re-created here from the remote (`page_restored_from_remote`) |
 
 Inside a page the same rule holds at block level, **an edit beats a
-delete**: a subtree the remote deleted stays when something in it was
+delete** (a move counts as an edit): a subtree the remote deleted stays when something in it was
 edited here (the push re-inserts it there), and a subtree deleted here
 comes back whole when the remote edited inside it. Same-block text edits
 merge by span through `gamma/textmerge.py` on whichever server applies the
 op; two edits to the same characters resolve by the remote's order.
+
+Three more rules keep the two trees identical in the odd cases
+(`tests/test_mirror_edges.py` pins each):
+
+- **Positions.** The server re-keys a block that lands on a taken key, so
+  when the remote's answer moves two siblings past each other, applying
+  those moves here in order would re-key one of them and leave this side's
+  keys off the remote's — and every later round would push the difference
+  again. `_parked` (in `_apply_local`) moves the block that holds a
+  target key to a fresh key at the end first, so every move lands where it
+  says and one round settles it.
+- **Cross-page moves.** A block id lives in one page. When the remote's ops
+  insert a block that lives in another page here (moved there on the
+  remote, or edited here after the remote moved it), `_relocated` deletes
+  it from that page first and inserts it with the text it has *here*, which
+  the push then sends on; the page it left is reconciled at its own turn
+  (both sides deleted it there). The other way round — this copy still
+  holds the block in a page the remote moved it out of — the remote refuses
+  the push (`403 … outside this page`) and the page is deferred
+  (`PageDeferred`: kept on the retry list, not an error) while the
+  receiving page's round moves it over; the next round finds nothing left
+  to push.
+- **The same edit made on both sides** (or a retried batch) is one edit: an
+  op whose content already is the block's text merges nothing (`ops.py`,
+  `textmerge.merge`), where patching the change in again used to double it.
 
 Every decision the engine takes on its own is a row of `sync_conflicts`
 (`merged`, `kept_local_edit`, `restored_remote_edit`, `page_restored`,
@@ -94,12 +119,18 @@ Every decision the engine takes on its own is a row of `sync_conflicts`
 also `base`, the text before either side edited it, so the resolver can
 show what each side changed. Sync never blocks on one: the person looks at
 the list and, for a merge, can put back "mine" or "theirs" — an ordinary
-edit that the next round pushes.
+edit that the next round pushes, written from the text the conflict
+recorded as its `base`, so words typed into the block since the merge are
+kept over the chosen version rather than lost.
 
-Pull-only mirrors (a read token, or a viewer's) apply the remote's changes
-and never push; local edits stay local and survive later remote changes to
-other spans of the same block, since the saved base is always the remote's
-tree.
+Pull-only mirrors (a read token, or a viewer's, or the *Receive only*
+direction) apply the remote's changes and never push; local edits stay
+local and survive later remote changes to other spans of the same block,
+since the saved base is always the remote's tree. Such a round still moves
+the local cursor past the edits it left here, so switching the direction
+back to two-way resets the local cursor (`set_cadence`): the next round
+looks at every page changed here since the beginning — one tree compare
+each — and pushes what differs.
 
 ## Rounds and cadence
 
@@ -115,7 +146,9 @@ is one round). The same listener marks the copy **dirty** (`_dirty`, in
 memory): `has_local_changes(ws)` is true from a local write until a round
 that started after it finishes without error, and the API reports it as
 `pending_local` (two-way copies only) — the pill's "local edits not
-pushed yet" state. The first pass runs
+synced yet" state (with *Sync after an edit* on, the pill spins from the
+edit until a poll confirms the round is done, since a one-page round is
+shorter than the poll interval). The first pass runs
 `FIRST_PASS_S` (5 s) after startup, so a copy whose first fill was cut short
 by a restart continues at once; "Sync now" (`POST /api/mirrors/{ws}/sync`,
 `?wait=1` for the answer) runs one on demand. Rounds of one mirror never
@@ -154,8 +187,9 @@ the row's `stats` JSON; `list_log` hands `changes` out as its own key.
 ## What the person sees
 
 The UI speaks git: the mirror is a **clone**, the workspace it follows is
-its **origin** (the **remote**), a round **pulls** then **pushes** (the
-button says **Sync**), a block both sides changed is a **conflict**
+its **origin** (the **remote**), a round **pulls** then **pushes** but the
+UI only ever says **Sync** (the direction is *Two-way* or *Receive only*),
+a block both sides changed is a **conflict**
 resolved between **local** and **remote**, a force is **force pull** /
 **force push**, pausing is **detach** / **reattach**, and dropping the link
 is **remove origin**. (The code and the API keep *mirror*, *remote*,
@@ -165,8 +199,9 @@ is **remove origin**. (The code and the API keep *mirror*, *remote*,
   open, in the desktop app and in a browser alike, is an icon whose state
   is drawn on it, like the background-tasks button: the refresh glyph
   spinning while a round runs; a count badge when conflicts wait; a dot —
-  accent for local edits not pushed yet, green when up to date, red on a
-  problem; an unlink glyph when detached; a cloud while the first fill
+  accent for local edits not synced yet (the icon spins instead when
+  *Sync after an edit* is on, until the round is confirmed done), green
+  when up to date, red on a problem; an unlink glyph when detached; a cloud while the first fill
   has not run. No words on it: the state's sentence (and the last sync
   time) is the tooltip, and `data-state` (`busy`, `conflicts`, `error`,
   `pending`, `ok`, `detached`, `new`) is what the browser test reads. The
@@ -174,8 +209,8 @@ is **remove origin**. (The code and the API keep *mirror*, *remote*,
   session raises `gamma:local-edit` when it queues ops, the pill shows the
   dot at once and polls every 2 s until a poll after a short grace reports
   `pending_local` false. Click: a popover of icons and numbers — the
-  clone's name with *remote · host*, a **Sync** icon button (*Pull* on a
-  pull-only clone) and the gear in the head; the state line (the last
+  clone's name with *remote · host*, a **Sync** icon button and the gear
+  in the head; the state line (the last
   round's `+3 −1 ~2`, the progress bars while a round runs, a *Resolve*
   button when conflicts wait → the conflict cards, each resolved in place
   or opened on its block); and the **Log** — a direction arrow per row and
@@ -184,11 +219,11 @@ is **remove origin**. (The code and the API keep *mirror*, *remote*,
   removed ones struck red with `−`, a changed block as a word diff of old
   → new with `~`, moves and property changes named), and the arrow at the
   row's end opens the page. The gear turns the popover into the clone's
-  **sync settings**, built from the settings kit's rows: *Check the
-  remote* (Live / 30 s / 5 min / Manual, a `Segmented`), the *Push after an
-  edit* toggle, *Direction* (*Pull & push* / *Pull only*), then *Force
-  pull* / *Force push* (confirmed inline; a pull-only clone cannot force
-  push), *Detach* / *Reattach*, and a danger *Remove origin*.
+  **sync settings**, built from the settings kit's rows: *Automatic sync*
+  (Live / 30 s / 5 min / Manual, a `Segmented`), the *Sync after an edit*
+  toggle, *Direction* (*Two-way* / *Receive only*), then *Force pull* /
+  *Force push* (confirmed inline; a receive-only clone cannot force push),
+  *Detach* / *Reattach*, and a danger *Remove origin*.
   `mirrorState(info, {busy, pending})` is the one reading of the status —
   state, icon, tone, line, tooltip, badge or dot — that the pill, the
   popover and the Settings row share. Polls the mirror every 20 s, every
@@ -208,9 +243,11 @@ is **remove origin**. (The code and the API keep *mirror*, *remote*,
   added word coloured by the side that wrote it (dotted when both did).
   Without a base (a *diverged* block, or a row from before it was kept)
   the two texts are shown against each other and the merged text by
-  attribution. The version that is in the block now is tagged *in the
-  block* and carries **Keep**; the others carry **Use** — one click, no
-  separate button row. The non-textual kinds (*Kept local*, *Restored
+  attribution. Every version carries a radio (clicking the panel picks it
+  too); the one in the block now is tagged *in the block* and preselected,
+  and one **Apply** confirms — on the preselected version it marks the
+  conflict resolved as it is, on another it writes that text. The
+  non-textual kinds (*Kept local*, *Restored
   remote*, the page restores) show the one text involved and an *OK*.
   **The chip**: a block the sync merged or had to decide on carries a
   small chip at its row's right end; its popover is the card, and App owns
@@ -226,16 +263,16 @@ is **remove origin**. (The code and the API keep *mirror*, *remote*,
   clone whose avatar is its state (the same reading as the pill: a spinning
   refresh while a round runs, a check when up to date, a warning on a
   problem, an unlink glyph when detached), the name with its tags (*open*,
-  *pull only*, *detached*, *problem*, *N conflicts*), *clone of X · origin
+  *receive only*, *detached*, *problem*, *N conflicts*), *clone of X · origin
   host* and one short status line (progress and the file in flight while a
   round runs; *up to date 14:37 · 2 pages pulled* after; *local edits not
   pushed yet* with an *unpushed edits* tag while `pending_local`). Actions:
-  Open, *Sync* (*Pull* on a pull-only clone, *Reattach* when detached),
+  Open, *Sync* (*Reattach* when detached),
   *Conflicts* (the same cards,
   each resolved there or opened on its block) and a "more" `ActionMenu` —
   *Force pull*, *Force push* (off on a pull-only clone), *Detach*, and a
   danger *Remove origin* — the forces and the removal confirmed by the
-  shared confirm box. No intro paragraph: the empty state's one sentence
+  shared confirm box. (Force push is off on a receive-only clone.) No intro paragraph: the empty state's one sentence
   says what a clone is. *Clone a remote workspace* asks for the origin
   server's address, a write token made there, *Into* (a new workspace, or
   one of yours — an imported backup, a clone whose origin was removed —
@@ -333,7 +370,14 @@ fill, edits both ways, different-block and same-span merges with the
 conflict rows and their resolution, edit-versus-delete both ways, pages
 created and deleted on either side, files by hash, pull-only, stopping.
 `test_sync_tree.py` pins the diff; `test_token_api.py` the bearer rules;
-`test_sync_feed.py` the feed. The progress reports, the interrupted-flag
+`test_sync_feed.py` the feed. `test_mirror_edges.py` is the odd cases:
+typing while a round is in flight, two clones of one remote editing the
+same blocks, a move against a delete, a child added inside a subtree
+deleted here, a subtree deleted on both sides, the same position taken on
+both sides, the title renamed on both sides, props against text, the same
+edit on both sides, a round cut short after its push, resolving a conflict
+after more typing, a block moved to another page while edited here, edits
+made while the remote is unreachable — each ending with both sides equal. The progress reports, the interrupted-flag
 reset, the retry of a page that failed, detach + re-link, linking an
 existing workspace, the force in both directions, the cadence and the
 sync-on-change trigger are in `test_mirror.py` too; the browser scenario

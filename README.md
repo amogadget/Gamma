@@ -72,7 +72,7 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-connections-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-connections-light.svg">
-  <img alt="Gamma connects three groups: ChatGPT and Claude plugins on the left, Gamma Connector below, and Obsidian, Notion, and Zotero notes and knowledge-base apps on the right" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
+  <img alt="Gamma connects three groups: read-only access for ChatGPT and Claude plugins on the left, capture from Gamma Connector below, and a bidirectional connection to the Obsidian, Notion, and Zotero group on the right" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
 </picture>
 
 The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.
@@ -173,6 +173,11 @@ See the [frontend source map](./frontend/src/README.md) for file locations and
 naming conventions.
 
 **Tests**
+
+For local changes, run tests for the affected modules and their direct consumers;
+see the [test selection policy](docs/dev/debugging.md#local-changes-test-the-affected-modules)
+for targeted backend, frontend, and browser commands. The commands below run
+full suites, which also run in PR CI.
 
 ```bash
 cd backend

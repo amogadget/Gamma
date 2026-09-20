@@ -36,6 +36,51 @@ docker run -p 9001:9001 -v gamma-data:/data ghcr.io/tim4431/gamma
 
 ## Tests
 
+### Local changes: test the affected modules
+
+Default to the smallest set of tests that covers the changed behavior and its
+direct consumers. Do not run the full backend suite, all frontend tests, or
+the full browser suite after every edit. Once relevant checks pass, repeat
+them only after further relevant changes or when a failure needs investigation.
+
+- Backend changes: select the relevant `tests/test_*.py` files. Prefer whole
+  files because tests within a file can depend on earlier tests. For a few
+  files, omit `-n auto` to avoid starting a worker per CPU.
+- Frontend pure-module changes: invoke `node --test` with the relevant test
+  files directly. `npm test` always includes the full module suite.
+- UI behavior changes: run the relevant browser flow with `--only`, building
+  once after the final frontend edit so the suite sees current code. Select
+  a complete flow by its step-name prefix, rather than an isolated dependent
+  step. Check that the intended steps actually ran. A pure-module change
+  does not automatically require a build or browser run.
+- Shared contracts and helpers: include tests for affected consumers. For
+  example, changes to shared normalization cases need both Python and Node
+  coverage; auth, workspace access, migrations, and block storage may require
+  several related suites. Broaden further when the impact cannot be bounded.
+- Documentation-only changes: check the diff and referenced commands/paths;
+  application tests and builds are unnecessary.
+
+Examples (paths are relative to the indicated directory):
+
+```bash
+# From backend/: OAuth behavior and its MCP integration
+python -m pytest tests/test_mcp_oauth.py tests/test_mcp.py -q
+
+# From frontend/: settings module behavior
+node --test tests/settings.test.mjs
+
+# From frontend/: settings UI behavior (build once before the browser run)
+npm run build
+npm run e2e -- --only settings
+```
+
+Report which checks ran and any relevant coverage gaps. Full suites remain
+the PR CI safety net in `.github/workflows/check.yml`; run them locally for
+broad changes, an explicit request, or unresolved regression concerns.
+Selection is manual: there is no automatic changed-file dependency analysis.
+
+### Full backend suite
+
 ```bash
 cd backend
 pip install -r requirements-dev.txt   # pytest, pytest-xdist, httpx

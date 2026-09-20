@@ -49,8 +49,8 @@ export function mirrorStatusLine(m) {
 }
 
 const DIRECTION_TILES = [
-  { value: "two-way", label: "Pull & push", hint: "your edits go to origin", Icon: ArrowUpDownIcon },
-  { value: "pull", label: "Pull only", hint: "origin's edits arrive here", Icon: ArrowDownIcon },
+  { value: "two-way", label: "Two-way", hint: "your edits go to the remote too", Icon: ArrowUpDownIcon },
+  { value: "pull", label: "Receive only", hint: "the remote's edits arrive here", Icon: ArrowDownIcon },
 ];
 
 export function MirrorDialog({ busy, error, onSubmit, onClose, candidates = [] }) {
@@ -227,7 +227,7 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
         onClick: () => call(m, "/relink", json({}), "Reattached — syncing in the background.") },
     ] : [
       { icon: CloudDownloadIcon, label: "Force pull", title: "Make this clone identical to origin", onClick: () => force(m, "pull") },
-      { icon: UploadIcon, label: "Force push", title: pullOnly ? "A pull-only clone cannot force push" : "Make origin identical to this clone",
+      { icon: UploadIcon, label: "Force push", title: pullOnly ? "A receive-only clone cannot force push" : "Make the remote identical to this clone",
         disabled: pullOnly, onClick: () => force(m, "push") },
       { icon: UnlinkIcon, label: "Detach", title: "Stop pulling and pushing for now; origin is kept, so reattaching merges what both sides did meanwhile",
         onClick: () => call(m, "/detach", { method: "POST" }, "Detached — reattach whenever you like.") },
@@ -242,7 +242,7 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
           <span className="aiProvName">
             {nameOf(m)}
             {current ? <span className="uiTag">open</span> : null}
-            {pullOnly ? <span className="uiTag" title="Origin's changes arrive here; yours stay here">pull only</span> : null}
+            {pullOnly ? <span className="uiTag" title="The remote's changes arrive here; yours stay here until you switch to two-way">receive only</span> : null}
             {detached ? <span className="uiTag">detached</span> : null}
             {!detached && s.last_error ? <span className="uiTag warn">problem</span> : null}
             {!detached && !s.last_error && m.pending_local ? <span className="uiTag pending" title="Local edits the next round pushes">unpushed edits</span> : null}
@@ -262,8 +262,8 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
             </button>
           ) : (
             <button className="uiBtn sm" disabled={busy || s.running} onClick={() => syncNow(m)}
-              title={pullOnly ? "Pull the remote's changes now" : "Pull the remote's changes, then push yours"}>
-              <RefreshIcon size={13} /> {pullOnly ? "Pull" : "Sync"}
+              title={pullOnly ? "Receive the remote's changes now" : "Sync now"}>
+              <RefreshIcon size={13} /> Sync
             </button>
           )}
           <button className={`uiBtn sm ${m.conflicts_open ? "primary" : ""}`} disabled={busy} onClick={() => setConflictsOf({ ...m, name: nameOf(m) })}

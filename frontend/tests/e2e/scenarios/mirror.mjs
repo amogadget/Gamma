@@ -108,9 +108,10 @@ export async function mirrorScenarios(env) {
       assertEq(await merge.locator(".mergeVersion").count(), 3, "local, remote and the merged text");
       assertEq((await merge.locator(".mergeVersion.mine mark.merge-mine").first().textContent()).trim(), "(copy)", "local added '(copy)' at the front");
       assertEq((await merge.locator(".mergeVersion.theirs mark.merge-theirs").first().textContent()).trim(), "(original)", "remote added '(original)' at the end");
-      await merge.getByRole("button", { name: "Keep merged", exact: true }).waitFor();
+      assert(await merge.getByRole("radio", { name: "Merged", exact: true }).isChecked(), "the merged text, being in the block, is preselected");
       assertEq(await merge.locator(".mergeNav").count(), 0, "one conflict: nothing to step through");
-      await merge.getByRole("button", { name: "Use remote", exact: true }).click();
+      await merge.getByRole("radio", { name: "Remote", exact: true }).check();
+      await merge.getByRole("button", { name: "Apply", exact: true }).click();
       await until(() => page.locator(".mergeChip").count().then((n) => n === 0), { what: "the chip goes once resolved" });
       await page.getByRole("paragraph").filter({ hasText: "a note to copy (original)" }).first().waitFor();
       assertEq((await user.api(`/api/mirrors/${copy.workspace_id}`)).conflicts_open, 0);

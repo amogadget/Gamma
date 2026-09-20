@@ -149,8 +149,14 @@ export function mirrorState(info, { busy = false, pending = false } = {}) {
       title: s.interrupted ? "The clone was interrupted; it continues in a moment." : "The clone starts in a moment." };
   }
   if (info?.pending_local || pending) {
-    return { state: "pending", tone: "pending", Icon: RefreshIcon, dot: true, text: "Local edits not pushed yet",
-      title: info?.on_change ? "Pushed in a moment (a round follows every edit)." : "Press Sync to push them, or wait for the next round." };
+    // with sync-after-edit on, a round follows within a second: the icon
+    // spins from the edit until the round is confirmed done, so a round too
+    // short for a poll to catch still reads as "syncing"
+    if (info?.on_change) {
+      return { state: "busy", tone: "busy", Icon: RefreshIcon, text: "Syncing your edits…", title: "A round follows every edit; your changes are on their way." };
+    }
+    return { state: "pending", tone: "pending", Icon: RefreshIcon, dot: true, text: "Local edits not synced yet",
+      title: "Press Sync to send them, or wait for the next automatic round." };
   }
   const moved = roundSummary(s);
   return { state: "ok", tone: "ok", Icon: RefreshIcon, dot: true, text: `Up to date · ${clock(s.last_sync)}`, stats: roundBlocks(s),
@@ -159,14 +165,14 @@ export function mirrorState(info, { busy = false, pending = false } = {}) {
 
 // The choices the sync settings offer, shared with Settings' clone dialog.
 export const CADENCE = [
-  [5, "Live", ActivityIcon, "Check the remote every 5 seconds"],
-  [30, "30 s", null, "Check the remote every 30 seconds"],
-  [300, "5 min", null, "Check the remote every five minutes"],
-  [0, "Manual", HandIcon, "Only when you sync"],
+  [5, "Live", ActivityIcon, "Sync every 5 seconds"],
+  [30, "30 s", null, "Sync every 30 seconds"],
+  [300, "5 min", null, "Sync every five minutes"],
+  [0, "Manual", HandIcon, "Only when you press Sync"],
 ];
 export const DIRECTION = [
-  ["two-way", "Pull & push", ArrowUpDownIcon, "Your changes go to the remote, the remote's arrive here"],
-  ["pull", "Pull only", ArrowDownIcon, "The remote's changes arrive here; yours stay here"],
+  ["two-way", "Two-way", ArrowUpDownIcon, "Your changes go to the remote and the remote's arrive here"],
+  ["pull", "Receive only", ArrowDownIcon, "The remote's changes arrive here; yours stay here until you switch back to two-way"],
 ];
 
 // The progress bars of a running round: the pages, then the file in flight.
@@ -258,14 +264,14 @@ function SettingsView({ info, wsId, onBack, reload, onOpenSettings }) {
         <button className="iconBtn sm" onClick={onBack} title="Back" aria-label="Back"><ArrowLeftIcon size={14} /></button>
         <span className="popoverTitle">Sync settings</span>
       </div>
-      <Row icon={ClockIcon} label="Check the remote" hint="a pull, then a push"
-        title="How often the remote is checked for changes. Live: every 5 s. Manual: only when you sync.">
+      <Row icon={ClockIcon} label="Automatic sync" hint="how often the remote is checked"
+        title="A sync round every so often. Live: every 5 s. Manual: only when you press Sync.">
         <Segmented value={info?.poll_s ?? 30} onChange={(v) => call("", "PATCH", { poll_s: v })} options={CADENCE} />
       </Row>
       <Toggle icon={PenIcon} checked={Boolean(info?.on_change)} disabled={busy} onChange={(v) => call("", "PATCH", { on_change: v })}
-        label="Push after an edit" hint="a round about a second after you change something" />
+        label="Sync after an edit" hint="a round about a second after you change something" />
       <Row icon={ArrowUpDownIcon} label="Direction"
-        title="Pull & push: your changes go to the remote. Pull only: the remote's changes arrive, yours stay here.">
+        title="Two-way: your changes go to the remote. Receive only: the remote's changes arrive, yours stay here until you switch back.">
         <Segmented value={pull ? "pull" : "two-way"} onChange={(v) => call("", "PATCH", { mode: v })} options={DIRECTION} />
       </Row>
       <div className="popoverDivider" />
@@ -278,7 +284,7 @@ function SettingsView({ info, wsId, onBack, reload, onOpenSettings }) {
             <button className="uiBtn sm" disabled={busy} onClick={() => setConfirm("pull")} title="Make this clone identical to the remote (only differing pages are written)">
               <CloudDownloadIcon size={13} /> Force pull
             </button>
-            <button className="uiBtn sm" disabled={busy || pull} onClick={() => setConfirm("push")} title={pull ? "A pull-only clone cannot force push" : "Make the remote identical to this clone (only differing pages are written)"}>
+            <button className="uiBtn sm" disabled={busy || pull} onClick={() => setConfirm("push")} title={pull ? "A receive-only clone cannot force push" : "Make the remote identical to this clone (only differing pages are written)"}>
               <UploadIcon size={13} /> Force push
             </button>
             <button className="uiBtn sm" disabled={busy} onClick={() => call("/detach", "POST")} title="Stop pulling and pushing for now; reattach later and both sides merge">
@@ -458,7 +464,6 @@ export function MirrorPopover({ wsId, mirrorOf, open, onToggle, jumpTo, onOpenSe
   const s = info?.status || {};
   const host = hostOf(info?.remote_url);
   const pull = isPullOnly(info);
-  const syncWord = pull ? "Pull" : "Sync";
 
   return (
     <span data-popover="mirror" className="popoverAnchor">
@@ -480,7 +485,7 @@ export function MirrorPopover({ wsId, mirrorOf, open, onToggle, jumpTo, onOpenSe
             : (
               <>
                 <div className="mirrorPopHead">
-                  <span className="mirrorPopIcon" title={pull ? "Pull only: the remote's changes arrive here, yours stay here" : "Pull & push: your changes go to the remote, the remote's arrive here"}>
+                  <span className="mirrorPopIcon" title={pull ? "Receive only: the remote's changes arrive here, yours stay here" : "Two-way: your changes go to the remote, the remote's arrive here"}>
                     {pull ? <ArrowDownIcon size={15} /> : <ArrowUpDownIcon size={15} />}
                   </span>
                   <span className="mirrorPopTitle">
@@ -488,8 +493,8 @@ export function MirrorPopover({ wsId, mirrorOf, open, onToggle, jumpTo, onOpenSe
                     <span className="popoverHint mirrorEllipsis" title={info?.remote_url}>remote · {host}{s.remote_user ? ` · ${s.remote_user}` : ""}</span>
                   </span>
                   <span className="mirrorPopBtns">
-                    <button className={`iconBtn sm ${running ? "mirrorSpin" : ""}`} disabled={running || info?.detached} onClick={syncNow} aria-label={syncWord}
-                      title={running ? "A round is running" : info?.detached ? "Detached — reattach in the sync settings" : pull ? "Pull the remote's changes now" : "Pull the remote's changes, then push yours"}>
+                    <button className={`iconBtn sm ${running ? "mirrorSpin" : ""}`} disabled={running || info?.detached} onClick={syncNow} aria-label="Sync"
+                      title={running ? "A round is running" : info?.detached ? "Detached — reattach in the sync settings" : pull ? "Receive the remote's changes now" : "Sync now"}>
                       <RefreshIcon size={14} />
                     </button>
                     <button className="iconBtn sm" onClick={() => setView("settings")} title="Sync settings" aria-label="Sync settings"><SettingsIcon size={14} /></button>

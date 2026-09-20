@@ -42,7 +42,9 @@ import urllib.parse
 import urllib.request
 
 from . import config, ops, pdf_meta, workspaces
-from .blocks_store import create_page, fetch_subtree
+from fractional_indexing import generate_key_between
+
+from .blocks_store import create_page, fetch_subtree, page_root_id
 from .db import connect_pages_db, connect_users_db, page_now, ws_uploads_dir
 from .logbuf import log
 from .ops import MAX_OPS, OpError, commit_ops, delete_page
@@ -69,6 +71,13 @@ class RemoteError(Exception):
     def __init__(self, status: int, detail: str = ""):
         super().__init__(f"{status}: {detail}" if detail else str(status))
         self.status, self.detail = status, detail
+
+
+class PageDeferred(Exception):
+    """A page the round leaves for the next one without calling it an
+    error: its push was refused because a block it holds lives in another
+    page on the remote (a cross-page move there), which the other page's
+    round of this same pass settles."""
 
 
 class Remote:
@@ -319,6 +328,12 @@ def set_cadence(ws: str, *, poll_s: int | None = None, on_change: bool | None = 
         if mode not in ("two-way", "pull"):
             raise ValueError("mode must be two-way or pull")
         fields["mode"] = mode
+        # a receive-only round moves the local cursor past edits it did not
+        # push: back in two-way, the next round looks at every page changed
+        # here since the beginning (one tree compare each) and pushes them
+        current = get_mirror(ws)
+        if current and current["mode"] == "pull" and mode == "two-way":
+            fields["local_cursor"] = ""
     if fields:
         _save(ws, **fields)
     return get_mirror(ws)
@@ -428,7 +443,9 @@ def _stats(ops: list[dict], before: dict | None = None) -> dict:
     removed = set()
     for op in ops:
         if op["op"] == "delete":
-            removed |= subtree_ids(before, op["id"]) if before and op["id"] in before else {op["id"]}
+            if before is not None and op["id"] not in before:
+                continue  # already gone here (deleted on both sides): nothing removed
+            removed |= subtree_ids(before, op["id"]) if before else {op["id"]}
     mod = {op["id"] for op in ops if op["op"] in ("set", "move")} - add - removed
     return {"add": len(add), "del": len(removed), "mod": len(mod)}
 
@@ -464,56 +481,9 @@ def _changes(ops: list[dict], before: dict | None = None) -> list[dict]:
         if op["op"] == "insert":
             out.append({"k": "add", "id": bid, "text": _clip(op.get("content", ""))})
         elif op["op"] == "delete":
-            ids = subtree_ids(before, bid) if bid in before else {bid}
-            for d in sorted(ids, key=lambda i: (i != bid, i)):
-                if len(out) >= CHANGES_CAP:
-                    break
-                out.append({"k": "del", "id": d, "text": _clip((before.get(d) or {}).get("content", ""))})
-        elif op["op"] == "set" and bid not in inserted:
-            old = (before.get(bid) or {}).get("content", "")
-            if "content" in op:
-                if op["content"] != old:
-                    out.append({"k": "mod", "id": bid, "old": _clip(old), "text": _clip(op["content"])})
-            else:
-                out.append({"k": "props", "id": bid, "text": _clip(old)})
-        elif op["op"] == "move" and bid not in inserted:
-            out.append({"k": "move", "id": bid, "text": _clip((before.get(bid) or {}).get("content", ""))})
-    return out
-
-
-def _whole_changes(tree: dict, key: str, root: str) -> list[dict]:
-    """The changes of a page that came or went whole: every block under
-    the root as one ``add`` / ``del``."""
-    return [{"k": key, "id": bid, "text": _clip(b.get("content", ""))}
-            for bid, b in tree.items() if bid != root][:CHANGES_CAP]
-
-
-CHANGES_CAP = 40   # block changes kept per log row
-TEXT_CAP = 240     # characters of a block's text kept per change
-
-
-def _clip(text) -> str:
-    text = text or ""
-    return text if len(text) <= TEXT_CAP else text[:TEXT_CAP] + "…"
-
-
-def _changes(ops: list[dict], before: dict | None = None) -> list[dict]:
-    """What a batch of ops did, block by block, for the log's diff view:
-    ``{k: add | del | mod | props | move, id, text, old?}`` — the new text
-    (``old`` the text before, for ``mod``), the removed text for ``del``
-    (one entry per block of a deleted subtree), the block's text for a
-    property or place change. Capped at ``CHANGES_CAP`` entries."""
-    before = before or {}
-    inserted = {op["id"] for op in ops if op["op"] == "insert"}
-    out: list[dict] = []
-    for op in ops:
-        if len(out) >= CHANGES_CAP:
-            break
-        bid = op["id"]
-        if op["op"] == "insert":
-            out.append({"k": "add", "id": bid, "text": _clip(op.get("content", ""))})
-        elif op["op"] == "delete":
-            ids = subtree_ids(before, bid) if bid in before else {bid}
+            if bid not in before:
+                continue  # already gone here: nothing to show
+            ids = subtree_ids(before, bid)
             for d in sorted(ids, key=lambda i: (i != bid, i)):
                 if len(out) >= CHANGES_CAP:
                     break
@@ -608,17 +578,21 @@ def resolve_conflict(ws: str, conflict_id: int, choice: str) -> dict | None:
     if choice not in ("keep", "mine", "theirs"):
         raise ValueError("choice must be keep, mine or theirs")
     with connect_pages_db(ws) as conn:
-        row = conn.execute("SELECT page_id, block_id, kind, mine, theirs FROM sync_conflicts WHERE id = ?",
+        row = conn.execute("SELECT page_id, block_id, kind, mine, theirs, result FROM sync_conflicts WHERE id = ?",
                            (conflict_id,)).fetchone()
         if not row:
             return None
-        page_id, block_id, kind, mine, theirs = row
+        page_id, block_id, kind, mine, theirs, result = row
         conn.execute("UPDATE sync_conflicts SET resolved = 1 WHERE id = ?", (conflict_id,))
         conn.commit()
         exists = conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
     if choice != "keep" and kind in ("merged", "diverged") and exists:
-        commit_ops(ws, page_id, [{"op": "set", "id": block_id, "content": mine if choice == "mine" else theirs}],
-                   actor=ACTOR)
+        # written as an edit from the text the conflict recorded: whatever was
+        # typed into the block since is merged over the chosen version, not lost
+        op = {"op": "set", "id": block_id, "content": mine if choice == "mine" else theirs}
+        if result:
+            op["base"] = result
+        commit_ops(ws, page_id, [op], actor=ACTOR)
     return {"id": conflict_id, "resolved": True}
 
 
@@ -711,9 +685,54 @@ def _remote_tree(remote: Remote, page_id: str) -> tuple[dict | None, int]:
     return snapshot_from_tree(out["block"]), int(out.get("seq") or 0)
 
 
+def _relocated(ws: str, page_id: str, ops: list[dict]) -> list[dict]:
+    """Inserts of blocks that live in another page here: the remote moved
+    them to this page (or this copy edited them after the remote moved
+    them). The block leaves its page here first — the remote's place wins —
+    and keeps the text it has here, which the push then sends on."""
+    out = []
+    for op in ops:
+        if op["op"] == "insert":
+            with connect_pages_db(ws) as conn:
+                home = page_root_id(conn, op["id"])
+                row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (op["id"],)).fetchone() \
+                    if home and home != page_id else None
+            if home and home != page_id:
+                commit_ops(ws, home, [{"op": "delete", "id": op["id"]}], actor=ACTOR, client=CLIENT)
+                if row and (row[0] or "") != op.get("content", ""):
+                    op = {**op, "content": row[0] or ""}
+        out.append(op)
+    return out
+
+
+def _parked(ws: str, page_id: str, ops: list[dict]) -> list[dict]:
+    """Moves whose target key a sibling holds that the same batch moves
+    away: the server re-keys a colliding block on arrival, which would leave
+    this side's keys drifting from the remote's every round. The holder parks
+    on a fresh key at the end first, so every move lands where it says."""
+    moves = [op for op in ops if op["op"] == "move"]
+    if not moves:
+        return ops
+    with connect_pages_db(ws) as conn:
+        snap = _local_snapshot(conn, page_id) or {}
+    at = {(b["parent"], b["position"]): bid for bid, b in snap.items() if bid != page_id}
+    moving = {op["id"] for op in moves}
+    taken = {b["position"] for bid, b in snap.items() if bid != page_id} | {op["position"] for op in moves}
+    last = max(taken) if taken else None
+    parked = []
+    for op in moves:
+        holder = at.get((op["parent"], op["position"]))
+        if holder and holder != op["id"] and holder in moving:
+            last = generate_key_between(last, None)
+            parked.append({"op": "move", "id": holder, "parent": snap[holder]["parent"], "position": last})
+    return parked + ops
+
+
 def _apply_local(ws: str, page_id: str, ops: list[dict]) -> list[dict]:
     """Apply ops to the local page in MAX_OPS chunks; the applied (echoed)
-    ops back."""
+    ops back. Blocks arriving from another page here move over
+    (``_relocated``), colliding moves park first (``_parked``)."""
+    ops = _parked(ws, page_id, _relocated(ws, page_id, ops))
     applied = []
     for i in range(0, len(ops), MAX_OPS):
         applied.extend(commit_ops(ws, page_id, ops[i:i + MAX_OPS], actor=ACTOR, client=CLIENT)["ops"])
@@ -772,8 +791,9 @@ def _reconcile_remote_ops(conn, page_id: str, base: dict, local: dict, remote: d
             _conflict(conn, page_id, bid, "kept_local_edit", mine=local.get(bid, {}).get("content", ""),
                       result="kept a subtree edited here that the other side deleted")
             continue
-        if op["op"] in ("set", "move") and bid not in local:
-            continue  # gone here, not restored: the other side's change to it is dropped
+        if op["op"] in ("set", "move", "delete") and bid not in local:
+            continue  # gone here, not restored: the other side's change to it is dropped (a delete of
+            # a block already gone — deleted on both sides, or moved to another page here — is done)
         if op["op"] in ("insert", "move") and op["parent"] not in local and op["parent"] not in restored \
                 and not any(o["op"] == "insert" and o["id"] == op["parent"] for o in out):
             op = {**op, "parent": page_id}  # its parent is gone here: land at the page's top level
@@ -934,7 +954,15 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
     push_ops = diff(remote_tree, local_now, page_id) if push_allowed else []
     if push_ops:
         _push_files(ws, remote, upload_refs(push_ops), report)
-        _push(remote, page_id, push_ops)
+        try:
+            _push(remote, page_id, push_ops)
+        except RemoteError as e:
+            if e.status == 403 and "outside this page" in (e.detail or ""):
+                # a block of ours now lives in another page there (moved
+                # there meanwhile): that page's round moves it here too, and
+                # this page is looked at again next round
+                raise PageDeferred(f"{page_id}: a block moved to another page on the remote; retried next round")
+            raise
         remote_after, seq = _remote_tree(remote, page_id)
         if remote_after is None:
             return
@@ -1107,6 +1135,9 @@ def _round(ws: str, mirror: dict, fetch) -> dict:
             try:
                 _sync_page(ws, remote, page_id, remote_seq_hint=flags["seq"], remote_gone=flags["remote_gone"],
                            local_gone=flags["local_gone"], mode=mode, report=report)
+            except PageDeferred as e:
+                failed[page_id] = flags  # next round, quietly
+                log.info(f"[mirror] {ws}: {e}")
             except Exception as e:  # noqa: BLE001 — one page must not sink the round; it is retried next time
                 failed[page_id] = flags
                 report["errors"].append(f"{page_id}: {e}")
@@ -1124,8 +1155,6 @@ def _round(ws: str, mirror: dict, fetch) -> dict:
             # a link's or a force's policy is spent once every page went through
             status.pop("adopt", None)
             status.pop("prune", None)
-        if not report["errors"] and _dirty.get(ws, float("inf")) <= started:
-            _dirty.pop(ws, None)  # everything written before the round started went out with it
         if not report["errors"] and _dirty.get(ws, float("inf")) <= started:
             _dirty.pop(ws, None)  # everything written before the round started went out with it
     except Exception as e:  # noqa: BLE001 — whatever happens, the running flag comes down

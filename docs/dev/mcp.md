@@ -144,7 +144,9 @@ are needed. Merely opening the settings page does not trust an address.
 
 Serve Gamma at an origin root, such as `https://gamma.example.com`, and preserve
 the external Host header at the reverse proxy. The saved HTTPS address works
-even when the proxy connects to Gamma over HTTP. Changing the address requires
+even when the proxy connects to Gamma over HTTP. Browser consent checks the
+Origin against this validated public address, including its scheme and port,
+rather than the proxy's backend connection URL. Changing the address requires
 assistants to reconnect; the previous hostname is removed from the allowlist
 unless separately allowed. Clearing the field restores request-based discovery.
 
@@ -356,6 +358,8 @@ Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/ex
 validation, workspace isolation, permissions, expiration, and revocation.
 `test_mcp_oauth.py` covers discovery, approval, PKCE, resource/client/redirect
 binding, expiration, replay prevention, revocation, and streamed body limits.
+It also covers HTTPS proxy consent with saved and environment-configured public
+URLs, including approval, cancellation, and rejection of foreign origins.
 `test_integration_lifecycle.py` covers manual and OAuth tokens across account
 rename, password changes through the admin API and CLI, workspace deletion,
 and account deletion through the admin API and `manage.py delete-user`.

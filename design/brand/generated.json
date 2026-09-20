@@ -16,7 +16,7 @@
     "frontend/src/shared/illustrations/brands/openai.svg": "2b4a04ddc2395b20d168694d3850ce2050a702c4a0cdeb4d8b31b9a970481a8c",
     "frontend/src/shared/illustrations/brands/zotero.png": "30c76a7a6441884df75567287db08ee40be6b763af7309f452a434800e069cd4",
     "tools/branding/branding.py": "a9c56a490b3fd29c37707a07e1bf1407e3d41e2e8f0fe75d2af57be237464c4d",
-    "tools/branding/build-connections.py": "62165614442a62a44ce1aa9b83c3b583b549f4cc9bb614d8228707005b6deaee",
+    "tools/branding/build-connections.py": "4d258952c43f20230211fcdffed8c7bfafd121479e8c7af102c9ebb31f51a3e9",
     "tools/branding/build-library.py": "0d44cd6106c399eca96cf0a60a1b871ebb9302d9369d2e86ec73189ca6238bbb",
     "tools/branding/build-workspaces.py": "2edf1b5344f995e1976dcb313dc77e11fb12e3a2cf01d27f6b549070c5801f98",
     "tools/branding/build.mjs": "7fdbe04220328fd708dc47300e9bb7b5d5011db392b2e5b16b03c24d5d099ccf",
@@ -81,7 +81,7 @@
         1920,
         1080
       ],
-      "sha256": "4dc85aed6712be8a1e07955770f6c563e46aa2d4ed6f3ae8d78c52fe88b7d7b9"
+      "sha256": "31475ba3829d54872b4a5a673a82a0979d367ed84a8c91ae33f0eeccf5ac6d6a"
     },
     "docs/assets/branding/gamma-connections-dark.svg": {
       "source": "tools/branding/build-connections.py",
@@ -90,7 +90,7 @@
         1920,
         1080
       ],
-      "sha256": "4f55adc255d5a2d6d7779dc717b0c6dbf6808c6d19c283753adf4bfd5ec5ec47"
+      "sha256": "023638cf2b6bf2474cd9e85d7d2c515a0d19bc04165ffffeddb89217e73f5af9"
     },
     "docs/assets/branding/gamma-workspaces-light.svg": {
       "source": "tools/branding/build-workspaces.py",

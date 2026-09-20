@@ -58,15 +58,17 @@ uvicorn app:app --host 127.0.0.1 --port 9001 --reload
 npm run dev      # :5173, proxies /api → 127.0.0.1:9001
 npm run build
 
-# Tests — from backend/ (pip install -r requirements-dev.txt once)
-python -m pytest tests -q -n auto --dist loadfile   # in-process TestClient, throwaway data dir per worker
+# Targeted tests — from backend/ (pip install -r requirements-dev.txt once)
+python -m pytest tests/test_mcp_oauth.py -q  # select files relevant to the change
 
 # Frontend tests — from frontend/
-npm test                                # node --test over the pure modules
-npm run build && npm run e2e            # Playwright browser suite against an isolated backend (~30 s)
+node --test tests/settings.test.mjs      # select relevant pure-module tests
+npm run build && npm run e2e -- --only settings  # for changes to this UI flow
 ```
 
-Frontend has no linter. UI changes are verified by the browser suite (`frontend/tests/e2e/`, one step per flow, asserts no failed API call / console error) — add a step for new flows; see [docs/dev/debugging.md](docs/dev/debugging.md). Docker image bundles both (multi-stage build, FastAPI serves `dist/`).
+Test affected modules and their direct consumers by default; do not run full suites after every edit. Prefer whole backend test files (some tests within a file share state), and omit `-n auto` for small selections. UI behavior changes need the relevant browser flow; build once after the final frontend edit before running it. Documentation-only changes need no application tests. Broaden coverage for shared contracts, auth, storage, migrations, or uncertain impact. Full suites remain in PR CI; run them locally for broad changes, explicit requests, or unresolved regression concerns. Report the checks run and relevant gaps. See [the test selection policy](docs/dev/debugging.md#local-changes-test-the-affected-modules).
+
+Frontend has no linter. UI changes are verified by relevant flows in the browser suite (`frontend/tests/e2e/`, asserts no failed API call / console error) — add coverage for new flows; see [docs/dev/debugging.md](docs/dev/debugging.md). Docker image bundles both (multi-stage build, FastAPI serves `dist/`).
 
 ## Architecture
 

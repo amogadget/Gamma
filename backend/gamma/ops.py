@@ -201,7 +201,10 @@ class _Batch:
             raise OpError(413, "content too long")
         base = op.get("base")
         if (content is not None and base is not None and len(base) <= MAX_CONTENT
-                and base != (row[0] or "") and base != content):
+                and base != (row[0] or "") and base != content and content != (row[0] or "")):
+            # (a client whose edit is already the text — the same change made
+            # twice, a retried batch — has nothing to merge: patching it in
+            # again would double it)
             # Someone else changed the block since this client read it:
             # apply the client's edit as a patch on the current text.
             merged, _clean = textmerge.merge(base, content, row[0] or "")
