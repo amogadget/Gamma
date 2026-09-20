@@ -1,3 +1,5 @@
+import { mermaidMath } from "./mermaidMarkdown.js";
+
 let library;
 let queue = Promise.resolve();
 let nextId = 0;
@@ -27,7 +29,7 @@ export function renderMermaid(source, theme, cancelled = () => false) {
     host.setAttribute("aria-hidden", "true");
     document.body.appendChild(host);
     try {
-      const { svg } = await mermaid.render(`gamma-mermaid-${++nextId}`, source, host);
+      const { svg } = await mermaid.render(`gamma-mermaid-${++nextId}`, mermaidMath(source), host);
       if (cancelled()) return null;
       // Strict mode disables callbacks, but Mermaid still emits URL anchors.
       // Keep previews and downloads inert, including diagrams from AI replies.

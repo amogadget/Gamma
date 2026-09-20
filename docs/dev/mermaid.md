@@ -21,11 +21,15 @@ figure hugs the drawing even without a stored size (it reads Mermaid's own
 `max-width` cap), so the grip always sits at the diagram's edge. Read-only
 views and chat replies show no grip.
 
-Math in flowchart and sequence labels uses Mermaid's `$$...$$` delimiters, not
-the single-dollar syntax of surrounding Markdown. For example,
-`A["$$a_1$$"] -->|"$$J$$"| B["$$a_2$$"]`. HTML label layout is enabled so Mermaid
-can embed KaTeX's MathML in SVG `foreignObject` elements. Labels remain sanitized
-by strict security mode. Source copying preserves the original delimiters.
+Math in flowchart and sequence labels: Mermaid itself typesets only its
+`$$...$$` delimiters, so `mermaidMath` in `shared/lib/mermaidMarkdown.js`
+upgrades the note editor's `$...$` spans to that form just before
+`mermaid.render` (a same-line pair whose content hugs both dollars and is not
+followed by a digit — prices and `\$` stay text). Both
+`A["$a_1$"] -->|"$J$"| B["$$a_2$$"]` forms therefore render. HTML label layout
+is enabled so Mermaid can embed KaTeX's MathML in SVG `foreignObject` elements.
+Labels remain sanitized by strict security mode. The stored source and its
+copies keep the delimiters as written.
 
 `shared/ui/MermaidDiagram.jsx` is shared by `editor/BlockTree.jsx` and
 `shared/ui/Widgets.jsx` (chat, note tooltips, and other chat-Markdown consumers).

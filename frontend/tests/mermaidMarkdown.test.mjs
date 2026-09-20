@@ -3,7 +3,7 @@ import { test } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
-import { mermaidFence, mermaidWidth, normalizeChatMarkdown, remarkMermaid, scanMermaidFences, setMermaidWidth } from "../src/shared/lib/mermaidMarkdown.js";
+import { mermaidFence, mermaidMath, mermaidWidth, normalizeChatMarkdown, remarkMermaid, scanMermaidFences, setMermaidWidth } from "../src/shared/lib/mermaidMarkdown.js";
 
 const render = (text) => renderToStaticMarkup(React.createElement(ReactMarkdown, {
   remarkPlugins: [remarkMermaid], children: text,
@@ -71,4 +71,15 @@ test("setMermaidWidth rewrites only the nth diagram's opening line", () => {
   assert.equal(setMermaidWidth(note, 3, 100), null, "a stale index edits nothing");
   // A fence inside another fence's code is not a diagram.
   assert.equal(scanMermaidFences("````md\n```mermaid\nx\n```\n````").length, 0);
+});
+
+test("note-style $…$ labels become the $$…$$ Mermaid typesets", () => {
+  assert.equal(mermaidMath(String.raw`flowchart LR
+  S(($S_z$)) -.-|$\chi$| A(($a_1$))`), String.raw`flowchart LR
+  S(($$S_z$$)) -.-|$$\chi$$| A(($$a_1$$))`);
+  assert.equal(mermaidMath(String.raw`A[$a_2:|\alpha\rangle$]`), String.raw`A[$$a_2:|\alpha\rangle$$]`);
+  // Already Mermaid's form, escaped dollars, prices and spaced dollars stay put.
+  for (const same of ["A[$$x$$] --> B", String.raw`A[costs \$5]`, "A[$5 and $6]", "A[$ x $]", "A[$a\nb$]", "A[$$]"]) {
+    assert.equal(mermaidMath(same), same);
+  }
 });
