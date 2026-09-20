@@ -76,15 +76,17 @@ Manage:
   rename and invite are small editor dialogs), New workspace, Export all.
   The empty Shared section offers admins "New shared workspace" (a jump to
   Server). The account popover's "Workspaces…" opens this pane. Between
-  Personal and Shared, **Offline copies**
+  Personal and Shared, **Clones**
   ([SettingsMirrors.jsx](../../frontend/src/settings/SettingsMirrors.jsx)):
-  the account's mirrors of remote workspaces (each row: status line, Open,
-  Sync now, Merges — an inline list of the decisions the sync took on its
-  own with Keep / Use mine / Use theirs —, Stop) and "Mirror a remote
-  workspace" (a `SubDialog`: server address, write token, name, direction)
-  — [mirror.md](mirror.md). The same state sits in the header as the sync
-  pill (`collaboration/MirrorPopover.jsx`) while a copy is open; the copy's
-  own settings (cadence, direction, force, detach / link again, forget)
+  the account's mirrors of remote workspaces in git's words (each row:
+  status line, Open, Pull & push or Reattach, Conflicts — an inline list of
+  the blocks both sides changed with Keep merged / Use ours / Use theirs —,
+  Detach, Remove origin) and "Clone a remote workspace" (a `SubDialog`:
+  origin server, write token, name, direction) — [mirror.md](mirror.md).
+  The same state sits in the header as the sync pill
+  (`collaboration/MirrorPopover.jsx`) while a clone is open; the clone's
+  own settings (cadence, direction, force pull / push, detach / reattach,
+  remove origin)
   live in that pill's gear view, stored on the server per mirror
   (`mirrors.poll_s`, `on_change`, `mode`).
 - **Backups**: server-kept snapshots per workspace.

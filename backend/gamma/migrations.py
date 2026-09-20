@@ -400,6 +400,24 @@ def _v11_mirror_cadence(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v12_sync_log_stats(conn: sqlite3.Connection) -> None:
+    """Every workspace's ``sync_log`` gains ``stats``: the git-style block
+    counts of what a round did to the page (JSON ``{add, del, mod}``; rows
+    from before carry none and show without counts)."""
+    if not config.WORKSPACES_DIR.is_dir():
+        return
+    for ws_root in sorted(config.WORKSPACES_DIR.iterdir()):
+        pages_db = ws_root / "pages.db"
+        if not ws_root.is_dir() or not pages_db.is_file():
+            continue
+        with closing(sqlite3.connect(str(pages_db))) as pdb:
+            for stmt in PAGES_SCHEMA:
+                pdb.execute(stmt)
+            if "stats" not in _columns(pdb, "sync_log"):
+                pdb.execute("ALTER TABLE sync_log ADD COLUMN stats TEXT NOT NULL DEFAULT ''")
+            pdb.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
@@ -412,4 +430,5 @@ STEPS = [
     (9, "upload_path_titles", _v9_upload_path_titles),
     (10, "mirrors", _v10_mirrors),
     (11, "mirror_cadence", _v11_mirror_cadence),
+    (12, "sync_log_stats", _v12_sync_log_stats),
 ]

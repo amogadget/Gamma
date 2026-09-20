@@ -9,7 +9,7 @@ through barrel files. `main.jsx` remains the Vite entry point.
 | `app/` | `App.jsx` connects the application views, navigation, saves, and docks; `prefs.js` and `sessionState.js` manage browser preferences and session restoration |
 | `auth/` | Login, session/share access screens (`LoginPage.jsx`) and MCP authorization (`McpConsent.jsx`) |
 | `chat/` | AI conversation panel (`ChatDock.jsx`), paper mentions, chat permission settings, and the token-usage formatting (`tokenUsage.js`) shared with Settings |
-| `collaboration/` | `usePageCollab.js`, the pure `collabSession.js` state machine, presence UI, `MirrorPopover.jsx` — the header's sync pill of an offline copy with its settings and review views — and `MergeResolver.jsx`, the merge chip on a block row ([docs/dev/mirror.md](../../docs/dev/mirror.md)) |
+| `collaboration/` | `usePageCollab.js`, the pure `collabSession.js` state machine, presence UI, `MirrorPopover.jsx` — the header's sync pill of a clone with its settings and conflicts views — and `MergeResolver.jsx`, the conflict chip on a block row ([docs/dev/mirror.md](../../docs/dev/mirror.md)) |
 | `editor/` | Outliner (`BlockTree.jsx`), CodeMirror (`BlockCmEditor.jsx`), undo history, Markdown and LaTeX editing, and slash commands |
 | `guide/` | First-run and contextual guides: `anchors.js` (the `data-guide` registry), `events.js` (event bus), `triggers.js` (eligibility and account-scoped progress), `useGuide.js` + `GuideOverlay.jsx` (engine, invitation and spotlight), `tours/` (one data file per tour) — [docs/dev/onboarding.md](../../docs/dev/onboarding.md) |
 | `ink/` | Handwriting codec and geometry, input sampling, draft storage, and `InkLayer.jsx` |

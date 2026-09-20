@@ -338,18 +338,18 @@ function annotateWorkspace(w, state) {
 async function openCopy(wsId) {
   if (!current || current.type !== 'remote') throw new Error('Open a remote server first');
   const m = registry.findMirror(current.url, wsId);
-  if (!m || !registry.get(m.server)) throw new Error('There is no offline copy of this workspace');
+  if (!m || !registry.get(m.server)) throw new Error('This workspace has no clone');
   await openServer(m.server);
   await openGammaWorkspace(m.workspace);
   buildMenu();
   return { workspace: m.workspace, server: m.server };
 }
 
-// Open the original that a copy on the open local server follows.
+// Open the origin that a clone on the open local server follows.
 async function openOriginal(wsId) {
-  if (!current || current.type !== 'local') throw new Error('Open the copy first');
+  if (!current || current.type !== 'local') throw new Error('Open the clone first');
   const m = registry.mirrorOf(current.id, wsId);
-  if (!m) throw new Error('This workspace is not an offline copy');
+  if (!m) throw new Error('This workspace is not a clone');
   const srv = registry.load().servers.find((s) => s.type === 'remote' && registry.originOf(s.url) === m.remoteUrl);
   if (!srv) throw new Error(`${m.remoteUrl} is not one of your servers`);
   await openServer(srv.id);
@@ -397,7 +397,7 @@ async function keepOffline(wsId) {
     if (!r.ok) throw new Error(body.detail || `${path}: HTTP ${r.status}`);
     return body;
   };
-  busy = `Making an offline copy of ${ws.name}…`;
+  busy = `Cloning ${ws.name}…`;
   pushState();
   let token = null;
   const dropToken = () => token && api(remoteOrigin, `/api/integrations/tokens/${token.id}`, { method: 'DELETE' }).catch(() => {});
@@ -425,7 +425,7 @@ async function keepOffline(wsId) {
       mirror = await api(localOrigin, '/api/mirrors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ remote_url: remoteOrigin, token: token.token, name: `${ws.name} (offline copy)` }),
+        body: JSON.stringify({ remote_url: remoteOrigin, token: token.token, name: `${ws.name} (clone)` }),
       });
     } catch (e) {
       // The local server already holds a copy the registry did not know
@@ -722,9 +722,9 @@ function registerIpc() {
       throw e;
     }
   };
-  ipcMain.handle('shell:keep-offline', shellOnly(withDialog('Could not make an offline copy.', keepOffline)));
-  ipcMain.handle('shell:open-copy', shellOnly(withDialog('Could not open the offline copy.', openCopy)));
-  ipcMain.handle('shell:open-original', shellOnly(withDialog('Could not open the original.', openOriginal)));
+  ipcMain.handle('shell:keep-offline', shellOnly(withDialog('Could not clone the workspace.', keepOffline)));
+  ipcMain.handle('shell:open-copy', shellOnly(withDialog('Could not open the clone.', openCopy)));
+  ipcMain.handle('shell:open-original', shellOnly(withDialog('Could not open the origin.', openOriginal)));
   ipcMain.handle('shell:open', shellOnly(async (id) => {
     setBarExpanded(false);
     try {

@@ -326,7 +326,7 @@ A manual token (`gamma_…`, not an OAuth one) is also accepted on every `/api/*
 | POST | `/mirrors/{ws}/force` | `{direction: pull \| push}` — replace one side with the other |
 | POST | `/mirrors/{ws}/sync[?wait=1]` | a sync round now (`wait=1` answers with the round's status) |
 | DELETE | `/mirrors/{ws}` | stop mirroring; the workspace stays |
-| GET | `/mirrors/{ws}/log?limit=` | what the last rounds did, page by page, newest first: `{changes: [{id, at, page_id, title, action, exists}]}` |
+| GET | `/mirrors/{ws}/log?limit=` | what the last rounds did, page by page, newest first: `{changes: [{id, at, page_id, title, action, stats, exists}]}` — `stats` the git-style block counts `{add, del, mod}` (`{}` on rows from before they were kept) |
 | GET | `/mirrors/{ws}/conflicts[?resolved=1][&page=]` | the merges the engine decided on its own (kinds `merged`, `diverged`, `kept_local_edit`, `restored_remote_edit`, `page_restored`, `page_restored_from_remote`) |
 | POST | `/mirrors/{ws}/conflicts/{id}` | `{choice: keep \| mine \| theirs}` |
 

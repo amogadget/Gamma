@@ -1,10 +1,10 @@
-// In-place merge resolution for an offline copy (docs/dev/mirror.md): a
-// block the sync had to decide on carries a small chip on its row; the
+// In-place conflict resolution for a clone (docs/dev/mirror.md): a block
+// the sync merged or had to decide on carries a small chip on its row; the
 // chip's popover shows the block's current text with each side's
-// contribution coloured — what came from you, what from the original — and
-// the three answers: keep it, use yours, use theirs. The list in the sync
-// pill and in Settings → Workspaces jumps here; the decision is an ordinary
-// edit the next round carries over.
+// contribution coloured — ours (this clone's) and theirs (origin's) — and
+// the three answers: keep the merge, use ours, use theirs. The list in the
+// sync pill and in Settings → Workspaces jumps here; the decision is an
+// ordinary edit the next round pushes.
 import React from "react";
 import { AlertCircleIcon, CheckIcon } from "../shared/ui/Icons";
 
@@ -36,8 +36,8 @@ function matched(a, b) {
 }
 
 // The result's tokens, each tagged by where it came from: "same" (in both
-// versions), "mine" (yours only), "theirs" (the original's only), "both"
-// (neither — a merge artefact, rare).
+// versions), "mine" (ours only), "theirs" (origin's only), "both" (neither
+// — a merge artefact, rare).
 export function attribute(result, mine, theirs) {
   const r = tokens(result);
   const inMine = matched(r, tokens(mine));
@@ -48,13 +48,14 @@ export function attribute(result, mine, theirs) {
   }));
 }
 
+// The sync_conflicts kinds, in git's words (ours = this clone, theirs = origin).
 export const MERGE_KIND = {
-  merged: { short: "Merged from both sides", long: "You and the original changed this block; the two edits were merged." },
-  diverged: { short: "Differed when linked", long: "This block differed when the copy was linked to the original; one version was kept, the other is here." },
-  kept_local_edit: { short: "Kept your edit", long: "The original deleted this, but it was edited here, so it stayed and went back over." },
-  restored_remote_edit: { short: "Came back", long: "This was deleted here, but the original edited it, so it came back." },
-  page_restored: { short: "Page restored there", long: "The original deleted this page; it was edited here, so it came back there." },
-  page_restored_from_remote: { short: "Page came back", long: "This page was deleted here but edited on the original, so it came back." },
+  merged: { short: "Auto-merged", long: "Both sides changed this block; the two edits were merged into one text." },
+  diverged: { short: "Diverged", long: "The two versions differed when the clone was attached; one was taken, the other is here." },
+  kept_local_edit: { short: "Kept ours", long: "Origin deleted this, but it was edited here, so it stayed and was pushed back." },
+  restored_remote_edit: { short: "Restored theirs", long: "This was deleted here, but origin edited it, so it was pulled back." },
+  page_restored: { short: "Page restored on origin", long: "Origin deleted this page; it was edited here, so it was pushed back." },
+  page_restored_from_remote: { short: "Page restored from origin", long: "This page was deleted here but edited on origin, so it was pulled back." },
 };
 
 // The coloured text: spans by origin, whitespace kept.
@@ -63,6 +64,16 @@ export function MergeText({ conflict }) {
   return (
     <div className="mergeText">
       {parts.map((p, i) => p.tag === "same" ? <span key={i}>{p.text}</span> : <mark key={i} className={`merge-${p.tag}`}>{p.text}</mark>)}
+    </div>
+  );
+}
+
+// The legend under a coloured text.
+export function MergeLegend() {
+  return (
+    <div className="mergeLegend">
+      <span><mark className="merge-mine">ours</mark></span>
+      <span><mark className="merge-theirs">theirs (origin)</mark></span>
     </div>
   );
 }
@@ -88,8 +99,8 @@ export function MergeChip({ conflict, onResolve }) {
   }
   return (
     <span className="mergeChipWrap" ref={ref} onMouseDown={(e) => e.stopPropagation()}>
-      <button type="button" className={`mergeChip ${open ? "on" : ""}`} title={`${kind.short} — click to decide`}
-        aria-label="Merge to look at" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
+      <button type="button" className={`mergeChip ${open ? "on" : ""}`} title={`${kind.short} — click to resolve`}
+        aria-label="Conflict to resolve" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
         <AlertCircleIcon size={12} />
       </button>
       {open ? (
@@ -101,13 +112,10 @@ export function MergeChip({ conflict, onResolve }) {
           {textual ? (
             <>
               <MergeText conflict={conflict} />
-              <div className="mergeLegend">
-                <span><mark className="merge-mine">yours</mark></span>
-                <span><mark className="merge-theirs">the original's</mark></span>
-              </div>
+              <MergeLegend />
               {conflict.kind === "diverged" ? (
                 <div className="mergeOther">
-                  <span className="popoverHint">{conflict.result === conflict.mine ? "The original's version:" : "Your version:"}</span>
+                  <span className="popoverHint">{conflict.result === conflict.mine ? "Theirs (origin):" : "Ours:"}</span>
                   <div className="mergeTextMuted">{conflict.result === conflict.mine ? conflict.theirs : conflict.mine}</div>
                 </div>
               ) : null}
@@ -115,11 +123,11 @@ export function MergeChip({ conflict, onResolve }) {
           ) : null}
           <div className="mergeActions">
             {textual ? <>
-              <button className="uiBtn sm" disabled={busy} onClick={() => choose("mine")} title="Put your text back">Use mine</button>
-              <button className="uiBtn sm" disabled={busy} onClick={() => choose("theirs")} title="Take the original's text">Use theirs</button>
+              <button className="uiBtn sm" disabled={busy} onClick={() => choose("mine")} title="Put this clone's text back">Use ours</button>
+              <button className="uiBtn sm" disabled={busy} onClick={() => choose("theirs")} title="Take origin's text">Use theirs</button>
             </> : null}
-            <button className="uiBtn sm primary" disabled={busy} onClick={() => choose("keep")} title="Fine as it is">
-              <CheckIcon size={13} /> {textual ? "Keep" : "OK"}
+            <button className="uiBtn sm primary" disabled={busy} onClick={() => choose("keep")} title="Mark resolved as it is">
+              <CheckIcon size={13} /> {textual ? "Keep merged" : "OK"}
             </button>
           </div>
         </div>

@@ -191,13 +191,14 @@ manifest, database snapshots and uploads unless databases-only was selected.
 Exports transfer library content. Passwords, sessions and private AI
 credentials stay with the account.
 
-## Offline copies
+## Clones (mirrors)
 
 A personal workspace can be a **mirror** of a workspace on another Gamma
-server: it holds a copy, edits made in it go back to the original when it
-is reachable, and edits made there arrive. The desktop app makes one from
-the bar menu (*Keep an offline copy…*); any Gamma makes one from Settings →
-Workspaces → Offline copies with the server's address and a write-scope
+server — a *clone* of its *origin* in the UI's git vocabulary: it holds a
+copy, edits made in it are pushed to the origin when it is reachable, and
+edits made there are pulled. The desktop app makes one from the switcher
+(the *clone* chip on a remote workspace's row); any Gamma makes one from
+Settings → Workspaces → Clones with the server's address and a write-scope
 integration token made there. `GET /workspaces/mine` marks such a workspace
 with `mirror_of`. The whole design — the change feed, the three-way merge,
 edit-beats-delete, the conflict list — is [mirror.md](mirror.md).

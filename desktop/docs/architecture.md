@@ -59,11 +59,12 @@ Opening a remote server also records the outcome (success → reachable,
 failure → unreachable). Green = reachable, red = unreachable, dim = not
 probed yet.
 
-### Offline copies
+### Clones
 
 Any workspace of a remote server can be kept as a **mirror** on a local
-server: in the bar menu every such row shows a trailing *keep offline* chip
-on hover (`keepOffline` in `main.js`, `shell:keep-offline`). Everything goes
+server — a *clone* of its *origin*, in the UI's git vocabulary: in the bar
+menu every such row shows a trailing *clone* chip on hover (`keepOffline`
+in `main.js`, `shell:keep-offline`). Everything goes
 through Gamma's public API with the content session's cookies — nothing is
 injected into any page: a write-scope integration token is minted on the
 remote for that workspace (`POST /api/integrations/tokens`), the first
@@ -79,9 +80,9 @@ no sync state and no token — only a **map** of copies in the registry
 by `keepOffline` and replaced from the local server's own `GET /api/mirrors`
 whenever that server is open, so copies made or stopped from Gamma's
 Settings show up too). The map gives the switcher its cross-links (a remote
-row with a copy shows *offline copy* and opens it, `shell:open-copy`; a
-copy's row on the local server reads *offline copy* — `mirror_of` on the
-session's workspace list — and its *original* chip opens the workspace it
+row with a clone shows *open clone* and opens it, `shell:open-copy`; a
+clone's row on the local server reads *clone* — `mirror_of` on the
+session's workspace list — and its *origin* chip opens the workspace it
 follows on the registered remote, `shell:open-original`) and tells the
 shell which local servers to start at launch (`startMirrorHosts`): a copy
 syncs only while its server runs, so those run for as long as the app does,

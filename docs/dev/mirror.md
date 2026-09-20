@@ -123,7 +123,8 @@ next round simply continues, a round is idempotent.
 
 The status the Settings row and the header pill show is the mirror's
 `status` JSON: `last_sync`, `last_error`, `pages_pulled`, `pages_pushed`,
-`pages_deleted`, `files_pulled`, `files_pushed`, `mode`, `remote_role`,
+`pages_deleted`, `files_pulled`, `files_pushed`, `blocks_added` /
+`blocks_removed` / `blocks_changed` (the round's git-style totals), `mode`, `remote_role`,
 `remote_user`, `retry`, `interrupted`, and while a round runs `running`
 with `progress` (`done`, `total`, `page` — the title being worked —,
 `first` for the first fill, `at`, and `file` `{name, done, total, dir}`
@@ -131,55 +132,66 @@ while a file travels, updated a few times a second from the streaming
 transport), saved before every page so "21 of 79 pages" and "↓ paper.pdf
 3.2 / 14 MB" move. What a round did, page by page, is the copy's `sync_log`
 (`pulled`, `pushed`, `created here` / `there`, `deleted here` / `there`,
-`restored here` / `there`; the newest 500 rows, `GET
-/api/mirrors/{ws}/log`).
+`restored here` / `there`, `replaced here` / `there`; the newest 500 rows,
+`GET /api/mirrors/{ws}/log`), each row with its git-style `stats`: `add`
+blocks inserted, `del` blocks removed (a delete counts its subtree), `mod`
+blocks set or moved — computed from the ops the round applied or pushed
+(`_stats`), or the page's size when it came or went whole (`_whole`).
 
 ## What the person sees
 
-- **The header's sync pill** (`MirrorPopover.jsx`), shown while an offline
-  copy is open, in the desktop app and in a browser alike: *up to date
-  14:37*, *copying 21/79* (the first fill) or *syncing 3/5*, *sync
-  problem*, *N to review* (open merges), *not copied yet*, *detached*.
-  Click: a popover of icons and numbers, words as tooltips — the copy's
-  name with the original's host, the state (one icon, one line; while a
-  round runs a bar for the pages and a line for the file in flight with its
-  bytes), *Sync now*, *Review N* (a list of the merges, each one jumping to
-  its block), *Recent* (the log with a direction arrow per row, each row
-  opening its page) and a gear that turns the popover into the copy's
-  **sync settings**: cadence (Live / 30 s / 5 min / Manual), *After an edit
-  here*, direction, *Replace copy* / *Replace original* (a force, confirmed
-  inline), *Detach* / *Link again*, *Forget*. Polls the mirror every 20 s,
-  every 2 s while a round runs (the log too while open); when a poll sees
-  the numbers move it raises `gamma:mirror-changed` so the page's merge
-  chips refresh.
-- **The merge chip** (`MergeResolver.jsx`): a block the sync had to decide
-  on carries a small chip at its row's right end; its popover shows the
-  block's current text with each side's contribution coloured (yours, the
-  original's — a word-level LCS attribution of the result against both
+The UI speaks git: the mirror is a **clone**, the workspace it follows is
+its **origin**, a round **pulls** then **pushes**, a block both sides
+changed is a **conflict** resolved with **ours** / **theirs**, a force is
+**force pull** / **force push**, pausing is **detach** / **reattach**, and
+dropping the link is **remove origin**. (The code and the API keep
+*mirror*, *remote*, *mine*.)
+
+- **The header's sync pill** (`MirrorPopover.jsx`), shown while a clone is
+  open, in the desktop app and in a browser alike: *up to date 14:37*,
+  *cloning 21/79* (the first fill) or *syncing 3/5*, *sync problem*, *N
+  conflicts*, *not cloned yet*, *detached*. Click: a popover of icons and
+  numbers, words as tooltips — the clone's name with *origin · host*, the
+  state (one icon, one line; while a round runs a bar for the pages and a
+  line for the file in flight with its bytes), *Pull & push* (*Pull* on a
+  pull-only clone), *N conflicts* (a list, each one jumping to its block),
+  *Log* (a direction arrow per row, the row's `+3 −1 ~2` block counts in
+  diff colours, each row opening its page; the up-to-date line carries the
+  last round's totals) and a gear
+  that turns the popover into the clone's **sync settings**: cadence (Live
+  / 30 s / 5 min / Manual), *Push after an edit*, direction (*Pull & push*
+  / *Pull only*), *Force pull* / *Force push* (confirmed inline), *Detach*
+  / *Reattach*, *Remove origin*. Polls the mirror every 20 s, every 2 s
+  while a round runs (the log too while open); when a poll sees the numbers
+  move it raises `gamma:mirror-changed` so the page's conflict chips
+  refresh.
+- **The conflict chip** (`MergeResolver.jsx`): a block the sync merged or
+  had to decide on carries a small chip at its row's right end; its popover
+  shows the block's current text with each side's contribution coloured
+  (ours, theirs — a word-level LCS attribution of the result against both
   versions), for a *diverged* block the version that was not kept, and
-  *Use mine* / *Use theirs* / *Keep*. App reads the page's conflicts
+  *Use ours* / *Use theirs* / *Keep merged*. App reads the page's conflicts
   (`GET /api/mirrors/{ws}/conflicts?page=`) on open, every 15 s and on
   `gamma:mirror` / `gamma:mirror-changed`; a decision is an ordinary edit
-  the next round carries over. The lists in the pill and in Settings jump to
-  the block (`gamma:jump`).
-- **Settings → Workspaces → Offline copies** (`SettingsMirrors.jsx`): one
-  row per mirror — direction, the same state line (progress while a round
-  runs), *detached* / *N to review* tags — with Open, Sync now or *Link
-  again*, Merges (the same coloured texts, *Open* jumps to the block),
-  *Detach* and *Forget*; an intro paragraph says what mirroring does.
-  *Mirror a remote workspace* asks for the server address, a write token
-  made there, *Into* (a new workspace, or one of yours — an imported
-  backup, a forgotten copy — with *If a page differs*: keep the original's
-  or this workspace's), a name and the direction.
+  the next round pushes. The lists in the pill and in Settings jump to the
+  block (`gamma:jump`).
+- **Settings → Workspaces → Clones** (`SettingsMirrors.jsx`): one row per
+  clone — direction, the same state line (progress while a round runs),
+  *detached* / *N conflicts* tags — with Open, *Pull & push* or *Reattach*,
+  Conflicts (the same coloured texts, *Open* jumps to the block), *Detach*
+  and the trash (*Remove origin*); an intro paragraph says what a clone
+  does. *Clone a remote workspace* asks for the origin server's address, a
+  write token made there, *Into* (a new workspace, or one of yours — an
+  imported backup, a clone whose origin was removed — with *If a page
+  differs*: take origin's or keep ours), a name and the direction.
 - **The desktop switcher**: on a remote server every workspace row carries
-  a *keep offline* chip on hover; once a copy exists the chip reads
-  *offline copy* and opens it (one copy per workspace — a second *keep
-  offline* opens the existing one); on the local server the copy's row
-  reads *offline copy* and its *original* chip opens the workspace it
-  follows. The shell keeps a map of copies in its registry and starts the
-  local servers that hold them when the app launches, so copies sync in
-  the background whichever server the window shows
-  ([desktop/docs/architecture.md](../../desktop/docs/architecture.md)).
+  a *clone* chip on hover; once a clone exists the chip reads *open clone*
+  and opens it (one clone per workspace — a second *clone* opens the
+  existing one); on the local server the clone's row reads *clone* and its
+  *origin* chip opens the workspace it follows. The shell keeps a map of
+  clones in its registry and starts the local servers that hold them when
+  the app launches, so clones sync in the background whichever server the
+  window shows ([desktop/docs/architecture.md](../../desktop/docs/architecture.md)).
 
 ## Credentials
 
@@ -195,23 +207,23 @@ log under that account with client `sync`.
 
 ## Making one
 
-- **Desktop app**: open the remote server, open the workspace, bar menu →
-  *Keep an offline copy…*. The shell mints the token on the remote with the
-  page's session, starts (or makes) a local server, signs into it with the
-  seeded admin credentials, creates the mirror there and moves the window
-  to it ([desktop/docs/architecture.md](../../desktop/docs/architecture.md)).
-- **Any Gamma**: Settings → Workspaces → Offline copies → *Mirror a remote
+- **Desktop app**: open the remote server, open the switcher, the *clone*
+  chip on the workspace's row. The shell mints the token on the remote with
+  the page's session, starts (or makes) a local server, signs into it with
+  the seeded admin credentials, creates the mirror there and moves the
+  window to it ([desktop/docs/architecture.md](../../desktop/docs/architecture.md)).
+- **Any Gamma**: Settings → Workspaces → Clones → *Clone a remote
   workspace*: the server address and a write token made there.
 
-**Detach and link again.** *Detach* (`POST /api/mirrors/{ws}/detach`) sets
+**Detach and reattach.** *Detach* (`POST /api/mirrors/{ws}/detach`) sets
 the mirror's `mode` to `off`: no round runs and the workspace lists as an
 ordinary one (`mirror_of` is empty), but the row keeps the token, the
-cursors and every page's base. *Link again* (`POST /api/mirrors/{ws}/relink`,
+cursors and every page's base. *Reattach* (`POST /api/mirrors/{ws}/relink`,
 optionally a new token or address) checks the remote and switches the mode
 back; the next round is a normal three-way merge of what both sides did
 meanwhile. A re-link to a different remote workspace drops the bases and
-adopts its pages (below). *Forget* (`DELETE /api/mirrors/{ws}`) drops the
-link and the sync state; the workspace stays.
+adopts its pages (below). *Remove origin* (`DELETE /api/mirrors/{ws}`)
+drops the link and the sync state; the workspace stays.
 
 **Linking an existing workspace, and the adopt policy.** `POST
 /api/mirrors` with `workspace_id` links a personal workspace of the caller's
@@ -223,13 +235,17 @@ resolvable like a merge. The same path serves a normal mirror whose round
 was cut short between a page's creation and its state. Pages one side alone
 has are created on the other, as always.
 
-**Force.** *Replace copy* / *Replace original* (`POST /api/mirrors/{ws}/force`
+**Force.** *Force pull* / *Force push* (`POST /api/mirrors/{ws}/force`
 `{direction: pull | push}`) makes one side identical to the other whatever
 happened: the bases and cursors are cleared, every page goes through the
 adopt policy (`theirs` for pull, `mine` for push), and pages the losing side
-alone has are deleted there (`prune`); what the loser had is kept in
-`diverged` conflicts. Confirmed inline in the popover; a read-only copy
-cannot replace the original.
+alone has — including pages the winner deleted after a sync, whose
+tombstones say nothing during a force — are deleted there (`prune`); what
+the loser had is kept in `diverged` conflicts. Cheap when little differs:
+a page whose trees are equal costs one read and no write, and only the
+differing blocks of a page are pushed, files only when the other side lacks
+the hash. Confirmed inline in the popover; a pull-only clone cannot force
+push.
 
 ## API
 

@@ -37,8 +37,8 @@ or says it is a manual look (**manual**).
 | 2.4 | The dropdown closes on choose / outside click / Esc, and the bar shrinks back to 38 px | auto (bar height asserted) + manual feel |
 | 2.5 | `Ctrl/Cmd+Shift+L` and the *All servers…* item go to the launcher | auto: *launcher lists sizes …* uses the menu item; accelerator manual |
 | 2.6 | A server added while another is open shows up in the dropdown | auto (Beta is added mid-session) |
-| 2.7 | Offline copies: on a remote server a workspace row shows *keep offline* on hover; choosing it makes the copy on the local server and moves the window there; the copy's row reads *offline copy* with an *original* chip back to the remote; the remote row now shows *offline copy* and opens the copy; a second *keep offline* opens the existing copy instead of making another | auto: *offline copy: "keep offline" on a remote row makes the copy; the rows then cross-link* |
-| 2.8 | At launch the local servers that hold offline copies start in the background (their dots turn on) even when a remote server is the one open | manual |
+| 2.7 | Clones: on a remote server a workspace row shows *clone* on hover; choosing it makes the clone on the local server and moves the window there; the clone's row reads *clone* with an *origin* chip back to the remote; the remote row now shows *open clone* and opens the clone; a second *clone* opens the existing clone instead of making another | auto: *clone: the "clone" chip on a remote row makes the clone; the rows then cross-link* |
+| 2.8 | At launch the local servers that hold clones start in the background (their dots turn on) even when a remote server is the one open | manual |
 
 ## 3. Storage (per-server `GAMMA_DATA_DIR`)
 

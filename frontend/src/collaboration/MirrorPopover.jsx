@@ -1,13 +1,15 @@
-// The sync pill in the topbar of an offline copy (docs/dev/mirror.md) and
-// its popover. The pill is the shortest true thing about the copy — up to
-// date since when, copying N/M, a problem, N to review. The popover is
-// built from icons and numbers, words only as tooltips: the state with its
-// progress bars (pages, then the file in flight with its bytes), Sync now,
-// Review (→ the list of merges, each one jumping to its block), the recent
-// changes with a direction arrow each, and a gear that turns the popover
-// into the copy's sync settings — cadence, direction, replace one side with
-// the other, detach / link again, forget. Polls /api/mirrors/{ws} every
-// 20 s, every 2 s while a round runs; the log too while open.
+// The sync pill in the topbar of a clone (docs/dev/mirror.md) and its
+// popover, in git's words: the workspace is a clone, the workspace it
+// follows on the other server is its origin, a round pulls then pushes.
+// The pill is the shortest true thing about the clone — up to date since
+// when, cloning N/M, a problem, N conflicts. The popover is built from
+// icons and numbers, words only as tooltips: the state with its progress
+// bars (pages, then the file in flight with its bytes), Pull & push,
+// Conflicts (→ the list, each one jumping to its block), the log with a
+// direction arrow per row, and a gear that turns the popover into the
+// clone's sync settings — cadence, direction, force pull / force push,
+// detach / reattach, remove origin. Polls /api/mirrors/{ws} every 20 s,
+// every 2 s while a round runs; the log too while open.
 import React from "react";
 import { API, apiJson } from "../shared/lib/utils";
 import { Segmented, Toggle } from "../settings/SettingsKit";
@@ -17,17 +19,18 @@ import {
   RefreshIcon, SettingsIcon, TrashIcon, UploadIcon, XIcon,
 } from "../shared/ui/Icons";
 
+// The server's sync_log actions, in git's words.
 export const ACTION_TEXT = {
-  "pulled": "updated from the original",
-  "pushed": "sent to the original",
-  "created here": "arrived from the original",
-  "created there": "sent to the original (new page)",
-  "deleted here": "removed here (deleted on the original)",
-  "deleted there": "deleted on the original (removed here)",
-  "restored here": "came back from the original",
-  "restored there": "put back on the original",
-  "replaced here": "replaced by the original's version",
-  "replaced there": "the original took this copy's version",
+  "pulled": "pulled from origin",
+  "pushed": "pushed to origin",
+  "created here": "pulled from origin (new page)",
+  "created there": "pushed to origin (new page)",
+  "deleted here": "deleted on origin — removed here",
+  "deleted there": "deleted here — removed on origin",
+  "restored here": "restored from origin (edited there after it was deleted here)",
+  "restored there": "restored on origin (edited here after it was deleted there)",
+  "replaced here": "force-pulled: origin's version replaced this one",
+  "replaced there": "force-pushed: this version replaced origin's",
 };
 
 const ACTION_ICON = {
@@ -56,35 +59,65 @@ export function bytes(b) {
   return `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// The git-style block counts of a log row or a round: "+3 −1 ~2" ("" when
+// nothing changed). `stats` is {add, del, mod}.
+export function diffStat(stats) {
+  if (!stats) return "";
+  const parts = [];
+  if (stats.add) parts.push(`+${stats.add}`);
+  if (stats.del) parts.push(`−${stats.del}`);
+  if (stats.mod) parts.push(`~${stats.mod}`);
+  return parts.join(" ");
+}
+
+// The same, coloured like a diff stat.
+export function DiffStat({ stats, title }) {
+  if (!stats || !(stats.add || stats.del || stats.mod)) return null;
+  return (
+    <span className="mirrorDiff" title={title || "blocks added · removed · changed"}>
+      {stats.add ? <span className="add">+{stats.add}</span> : null}
+      {stats.del ? <span className="del">−{stats.del}</span> : null}
+      {stats.mod ? <span className="mod">~{stats.mod}</span> : null}
+    </span>
+  );
+}
+
+// A round's block totals from its status.
+export function roundBlocks(s) {
+  return { add: s.blocks_added || 0, del: s.blocks_removed || 0, mod: s.blocks_changed || 0 };
+}
+
 // What the last round moved, as one sentence ("" when nothing moved).
 export function roundSummary(s) {
   const parts = [];
-  if (s.pages_pulled) parts.push(`${n(s.pages_pulled, "page")} arrived`);
-  if (s.pages_pushed) parts.push(`${n(s.pages_pushed, "page")} sent`);
+  if (s.pages_pulled) parts.push(`${n(s.pages_pulled, "page")} pulled`);
+  if (s.pages_pushed) parts.push(`${n(s.pages_pushed, "page")} pushed`);
   if (s.pages_deleted) parts.push(`${n(s.pages_deleted, "page")} removed`);
   const files = (s.files_pulled || 0) + (s.files_pushed || 0);
   if (files) parts.push(n(files, "file"));
+  const blocks = diffStat(roundBlocks(s));
+  if (blocks) parts.push(`${blocks} blocks`);
   return parts.join(", ");
 }
 
-// The pill's text: the shortest true thing about the copy.
+// The pill's text: the shortest true thing about the clone.
 export function mirrorGlance(info) {
   const s = info?.status || {};
   const p = s.progress;
   if (info?.detached) return { text: "detached", tone: "" };
   if (s.running) {
-    if (p && p.total) return { text: `${p.first ? "copying" : "syncing"} ${p.done}/${p.total}`, tone: "busy" };
+    if (p && p.total) return { text: `${p.first ? "cloning" : "syncing"} ${p.done}/${p.total}`, tone: "busy" };
     return { text: "syncing…", tone: "busy" };
   }
-  if (info?.conflicts_open) return { text: `${info.conflicts_open} to review`, tone: "warn" };
+  if (info?.conflicts_open) return { text: n(info.conflicts_open, "conflict"), tone: "warn" };
   if (s.last_error) return { text: "sync problem", tone: "warn" };
-  if (!s.last_sync) return { text: "not copied yet", tone: "" };
+  if (!s.last_sync) return { text: "not cloned yet", tone: "" };
   return { text: `up to date ${clock(s.last_sync)}`, tone: "ok" };
 }
 
-// Cadence presets: the loop's period per copy (0 = only by hand).
+// Cadence presets: the loop's period per clone (0 = only by hand).
 const CADENCE = [[5, "Live"], [30, "30 s"], [300, "5 min"], [0, "Manual"]];
-const CADENCE_HINT = "How often the original is checked for changes. Live: every 5 s.";
+const CADENCE_HINT = "How often origin is checked for changes (a pull, then a push). Live: every 5 s. Manual: only when you ask.";
 
 // The state block: an icon, a short line, the bars while a round runs.
 function StateBlock({ info, busy }) {
@@ -92,7 +125,7 @@ function StateBlock({ info, busy }) {
   const p = s.progress;
   if (info?.detached) {
     return (
-      <div className="mirrorState" title="Detached: the copy does not follow the original until it is linked again. Nothing is lost.">
+      <div className="mirrorState" title="Detached: nothing is pulled or pushed until you reattach. Nothing is lost.">
         <LinkIcon size={14} /><span>Detached{s.detached_at ? ` · ${clock(s.detached_at)}` : ""}</span>
       </div>
     );
@@ -104,12 +137,12 @@ function StateBlock({ info, busy }) {
         <RefreshIcon size={14} />
         <div className="mirrorStateBody">
           <div className="mirrorStateLine">
-            <span>{p?.first ? "Copying" : "Syncing"}{p?.total ? ` ${p.done} / ${p.total}` : "…"}</span>
+            <span>{p?.first ? "Cloning" : "Syncing"}{p?.total ? ` ${p.done} / ${p.total}` : "…"}</span>
             {p?.page ? <span className="popoverHint mirrorEllipsis" title={p.page}>{p.page}</span> : null}
           </div>
           {p?.total ? <div className="mirrorBar"><span style={{ width: `${Math.round((100 * p.done) / p.total)}%` }} /></div> : null}
           {f ? (
-            <div className="mirrorFile" title={f.dir === "up" ? "Sending to the original" : "Fetching from the original"}>
+            <div className="mirrorFile" title={f.dir === "up" ? "Pushing to origin" : "Pulling from origin"}>
               {f.dir === "up" ? <ArrowUpIcon size={12} /> : <ArrowDownIcon size={12} />}
               <span className="mirrorEllipsis">{f.name}</span>
               <span className="mirrorFileBytes">{bytes(f.done)}{f.total ? ` / ${bytes(f.total)}` : ""}</span>
@@ -123,24 +156,24 @@ function StateBlock({ info, busy }) {
   if (s.last_error) {
     const unreachable = /cannot reach|timed out|refused|unreachable/i.test(s.last_error);
     return (
-      <div className="mirrorState warn" title={`${s.last_error}${unreachable ? " — your edits stay here and go over once it is reachable again." : ""}`}>
+      <div className="mirrorState warn" title={`${s.last_error}${unreachable ? " — your commits stay here and are pushed once origin is reachable again." : ""}`}>
         <AlertCircleIcon size={14} />
-        <span>{unreachable ? "Original unreachable" : "Sync problem"}{s.last_attempt || s.last_sync ? ` · ${clock(s.last_attempt || s.last_sync)}` : ""}</span>
+        <span>{unreachable ? "Origin unreachable" : "Sync problem"}{s.last_attempt || s.last_sync ? ` · ${clock(s.last_attempt || s.last_sync)}` : ""}</span>
       </div>
     );
   }
   if (!s.last_sync) {
     return (
-      <div className="mirrorState" title={s.interrupted ? "The first copy was interrupted; it continues in a moment." : "The first copy starts in a moment."}>
-        <CloudDownloadIcon size={14} /><span>{s.interrupted ? "Interrupted · resuming" : "Not copied yet"}</span>
+      <div className="mirrorState" title={s.interrupted ? "The clone was interrupted; it continues in a moment." : "The clone starts in a moment."}>
+        <CloudDownloadIcon size={14} /><span>{s.interrupted ? "Interrupted · resuming" : "Not cloned yet"}</span>
       </div>
     );
   }
   const moved = roundSummary(s);
   return (
-    <div className="mirrorState ok" title={`Last round: ${moved || "nothing had changed on either side"}.${info?.poll_s ? ` Checks every ${info.poll_s} s.` : " Checked only on Sync now."}`}>
+    <div className="mirrorState ok" title={`Last round: ${moved || "nothing had changed on either side"}.${info?.poll_s ? ` Origin is checked every ${info.poll_s} s.` : " Origin is checked only when you pull."}`}>
       <CheckIcon size={14} /><span>Up to date · {clock(s.last_sync)}</span>
-      {moved ? <span className="popoverHint mirrorEllipsis">{moved}</span> : null}
+      <DiffStat stats={roundBlocks(s)} title="Last round: blocks added · removed · changed" />
     </div>
   );
 }
@@ -174,21 +207,21 @@ function SettingsView({ info, wsId, onBack, reload, onOpenSettings }) {
       </div>
       <div className="mirrorSetRow">
         <Toggle checked={Boolean(info?.on_change)} disabled={busy} onChange={(v) => call("", "PATCH", { on_change: v })}
-          label="After an edit here" hint="A round a few seconds after you change something" />
+          label="Push after an edit" hint="A round a few seconds after you change something here" />
       </div>
-      <div className="mirrorSetRow" title="Both ways: edits here go to the original. Read-only: they stay here.">
+      <div className="mirrorSetRow" title="Pull & push: your changes go to origin. Pull only: origin's changes arrive, yours stay here.">
         <ArrowUpIcon size={13} />
         <Segmented value={info?.status?.mode === "pull" || info?.mode === "pull" ? "pull" : "two-way"}
-          onChange={(v) => call("", "PATCH", { mode: v })} options={[["two-way", "Both ways"], ["pull", "Read-only"]]} />
+          onChange={(v) => call("", "PATCH", { mode: v })} options={[["two-way", "Pull & push"], ["pull", "Pull only"]]} />
       </div>
       <div className="popoverDivider" />
       {confirm ? (
         <div className="mirrorConfirm">
           <AlertCircleIcon size={14} />
           <span>
-            {confirm === "pull" ? "Replace this copy with the original? Its own changes are kept under Review."
-              : confirm === "push" ? "Replace the original with this copy? What the original had is kept under Review."
-              : "Forget the link? The workspace stays; syncing stops for good."}
+            {confirm === "pull" ? "Force pull: make this clone identical to origin? Where texts differ, yours are kept as conflicts."
+              : confirm === "push" ? "Force push: make origin identical to this clone? Where texts differ, origin's are kept as conflicts."
+              : "Remove origin? The workspace stays; it never syncs again."}
           </span>
           <span className="mirrorConfirmBtns">
             <button className="uiBtn sm danger" disabled={busy}
@@ -199,22 +232,22 @@ function SettingsView({ info, wsId, onBack, reload, onOpenSettings }) {
       ) : (
         <div className="mirrorSetActions">
           {!detached ? <>
-            <button className="uiBtn sm" disabled={busy} onClick={() => setConfirm("pull")} title="Make this copy identical to the original">
-              <CloudDownloadIcon size={13} /> Replace copy
+            <button className="uiBtn sm" disabled={busy} onClick={() => setConfirm("pull")} title="Make this clone identical to origin (only differing pages are written)">
+              <CloudDownloadIcon size={13} /> Force pull
             </button>
-            <button className="uiBtn sm" disabled={busy || info?.mode === "pull"} onClick={() => setConfirm("push")} title="Make the original identical to this copy">
-              <UploadIcon size={13} /> Replace original
+            <button className="uiBtn sm" disabled={busy || info?.mode === "pull"} onClick={() => setConfirm("push")} title="Make origin identical to this clone (only differing pages are written)">
+              <UploadIcon size={13} /> Force push
             </button>
-            <button className="uiBtn sm" disabled={busy} onClick={() => call("/detach", "POST")} title="Stop following for now; link again later and both sides merge">
+            <button className="uiBtn sm" disabled={busy} onClick={() => call("/detach", "POST")} title="Stop pulling and pushing for now; reattach later and both sides merge">
               <XIcon size={13} /> Detach
             </button>
           </> : (
-            <button className="uiBtn sm primary" disabled={busy} onClick={() => call("/relink", "POST", {})} title="Follow the original again; what both sides did meanwhile merges">
-              <LinkIcon size={13} /> Link again
+            <button className="uiBtn sm primary" disabled={busy} onClick={() => call("/relink", "POST", {})} title="Follow origin again; what both sides did meanwhile merges">
+              <LinkIcon size={13} /> Reattach
             </button>
           )}
-          <button className="uiBtn sm" disabled={busy} onClick={() => setConfirm("forget")} title="Stop for good; the workspace stays as an ordinary one">
-            <TrashIcon size={13} /> Forget
+          <button className="uiBtn sm" disabled={busy} onClick={() => setConfirm("forget")} title="Forget origin for good; the workspace stays as an ordinary one">
+            <TrashIcon size={13} /> Remove origin
           </button>
         </div>
       )}
@@ -232,8 +265,8 @@ function ReviewView({ wsId, onBack, jumpTo }) {
     <>
       <div className="mirrorPopHead">
         <button className="iconBtn sm" onClick={onBack} title="Back" aria-label="Back"><ArrowLeftIcon size={14} /></button>
-        <span className="popoverTitle">To review</span>
-        <span className="popoverHint">click one to decide on its block</span>
+        <span className="popoverTitle">Conflicts</span>
+        <span className="popoverHint">click one to resolve it on its block</span>
       </div>
       {items === null ? <div className="popoverHint">Loading…</div>
         : items.length ? (
@@ -247,7 +280,7 @@ function ReviewView({ wsId, onBack, jumpTo }) {
               </li>
             ))}
           </ul>
-        ) : <div className="popoverHint">Nothing to decide.</div>}
+        ) : <div className="popoverHint">No conflicts.</div>}
     </>
   );
 }
@@ -316,7 +349,7 @@ export function MirrorPopover({ wsId, mirrorOf, open, onToggle, jumpTo, onOpenSe
       <button
         className={`iconBtn mirrorPill ${glance.tone} ${open ? "activeIcon" : ""}`}
         onClick={onToggle}
-        title={`Offline copy of ${mirrorOf}${host ? ` on ${host}` : ""} — ${glance.text}`}
+        title={`Clone of ${mirrorOf}${host ? ` on ${host}` : ""} — ${glance.text}`}
         aria-label="Sync status"
       >
         {glance.tone === "warn" ? <AlertCircleIcon size={15} /> : <RefreshIcon size={15} />}
@@ -329,27 +362,28 @@ export function MirrorPopover({ wsId, mirrorOf, open, onToggle, jumpTo, onOpenSe
             : (
               <>
                 <div className="mirrorPopHead">
-                  <span className="mirrorPopIcon" title={pull ? "A read-only copy: the original's edits arrive here, yours stay here" : "Kept in step both ways: edits here go to the original, edits there arrive here"}>
+                  <span className="mirrorPopIcon" title={pull ? "Pull only: origin's changes arrive here, yours stay here" : "Pull & push: your changes go to origin, origin's arrive here"}>
                     {pull ? <ArrowDownIcon size={15} /> : <RefreshIcon size={15} />}
                   </span>
                   <span className="mirrorPopTitle">
                     <span className="popoverTitle mirrorEllipsis">{mirrorOf}</span>
-                    <span className="popoverHint mirrorEllipsis" title={info?.remote_url}>{host}{s.remote_user ? ` · ${s.remote_user}` : ""}</span>
+                    <span className="popoverHint mirrorEllipsis" title={info?.remote_url}>origin · {host}{s.remote_user ? ` · ${s.remote_user}` : ""}</span>
                   </span>
                   <button className="iconBtn sm" onClick={() => setView("settings")} title="Sync settings" aria-label="Sync settings"><SettingsIcon size={14} /></button>
                 </div>
                 <StateBlock info={info} busy={busy} />
                 <div className="mirrorPopActions">
-                  <button className="uiBtn sm" disabled={running || info?.detached} onClick={syncNow} title={running ? "A round is running" : "Check both sides now"}>
-                    <RefreshIcon size={13} /> Sync now
+                  <button className="uiBtn sm" disabled={running || info?.detached} onClick={syncNow}
+                    title={running ? "A round is running" : pull ? "Pull origin's changes now" : "Pull origin's changes, then push yours"}>
+                    <RefreshIcon size={13} /> {pull ? "Pull" : "Pull & push"}
                   </button>
                   {info?.conflicts_open ? (
-                    <button className="uiBtn sm primary" onClick={() => setView("review")} title="Blocks the sync had to decide on its own; each one opens on its block">
-                      <AlertCircleIcon size={13} /> Review {info.conflicts_open}
+                    <button className="uiBtn sm primary" onClick={() => setView("review")} title="Blocks both sides changed; each one opens on its block to resolve">
+                      <AlertCircleIcon size={13} /> {n(info.conflicts_open, "conflict")}
                     </button>
                   ) : null}
                 </div>
-                <div className="popoverLabel">Recent</div>
+                <div className="popoverLabel">Log</div>
                 {log === null ? <div className="popoverHint">Loading…</div>
                   : log.length ? (
                     <ul className="mirrorPopLog">
@@ -360,13 +394,13 @@ export function MirrorPopover({ wsId, mirrorOf, open, onToggle, jumpTo, onOpenSe
                             <button className="popoverItem mirrorPopItem" disabled={!c.exists} onClick={() => c.exists && jumpTo(c.page_id)}
                               title={`${ACTION_TEXT[c.action] || c.action}${c.exists ? "" : " (the page is gone)"}`}>
                               <span className="mirrorPopItemTitle"><Icon size={12} /> {c.title || c.page_id}</span>
-                              <span className="mirrorPopItemMeta">{clock(c.at)}</span>
+                              <span className="mirrorPopItemMeta">{clock(c.at)}<DiffStat stats={c.stats} /></span>
                             </button>
                           </li>
                         );
                       })}
                     </ul>
-                  ) : <div className="popoverHint">{running ? "Pages show up here as they are copied." : s.last_sync ? "No changes yet." : "Nothing copied yet."}</div>}
+                  ) : <div className="popoverHint">{running ? "Pages show up here as they are pulled." : s.last_sync ? "Nothing pulled or pushed yet." : "Nothing cloned yet."}</div>}
               </>
             )}
         </div>

@@ -415,29 +415,66 @@ def _conflict(conn, page_id: str, block_id: str, kind: str, mine="", theirs="", 
     conn.commit()
 
 
-def _note(ws: str, page_id: str, action: str, title: str = "") -> None:
+def _stats(ops: list[dict], before: dict | None = None) -> dict:
+    """The git-style counts of a batch of ops on one page: ``add`` blocks
+    inserted, ``del`` blocks removed (a delete takes its subtree — counted
+    from ``before``, the tree the ops applied to), ``mod`` blocks whose text,
+    props or place changed (a set or move on a block the batch did not
+    insert)."""
+    add = {op["id"] for op in ops if op["op"] == "insert"}
+    removed = set()
+    for op in ops:
+        if op["op"] == "delete":
+            removed |= subtree_ids(before, op["id"]) if before and op["id"] in before else {op["id"]}
+    mod = {op["id"] for op in ops if op["op"] in ("set", "move")} - add - removed
+    return {"add": len(add), "del": len(removed), "mod": len(mod)}
+
+
+def _whole(tree: dict, key: str) -> dict:
+    """The counts of a page that came or went whole: its blocks under the
+    root, all ``add`` or all ``del``."""
+    return {"add": 0, "del": 0, "mod": 0, key: max(0, len(tree) - 1)}
+
+
+def _note(ws: str, page_id: str, action: str, title: str = "", *, stats: dict | None = None,
+          report: dict | None = None) -> None:
     """One sync_log row: what a round did to a page (``pulled``, ``pushed``,
     ``created here``, ``created there``, ``deleted here``, ``deleted
-    there``, ``restored here``, ``restored there``)."""
+    there``, ``restored here``, ``restored there``, ``replaced here`` /
+    ``there``) with its block counts, which also add up on the round's
+    ``report`` (``blocks_added`` / ``blocks_removed`` / ``blocks_changed``)."""
+    if report is not None and stats:
+        report["blocks_added"] = report.get("blocks_added", 0) + stats["add"]
+        report["blocks_removed"] = report.get("blocks_removed", 0) + stats["del"]
+        report["blocks_changed"] = report.get("blocks_changed", 0) + stats["mod"]
     with connect_pages_db(ws) as conn:
         if not title:
             row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
             title = (row[0] if row else "") or ""
-        conn.execute("INSERT INTO sync_log (at, page_id, title, action) VALUES (?, ?, ?, ?)",
-                     (page_now(), page_id, title[:200], action))
+        conn.execute("INSERT INTO sync_log (at, page_id, title, action, stats) VALUES (?, ?, ?, ?, ?)",
+                     (page_now(), page_id, title[:200], action, json.dumps(stats) if stats else ""))
         conn.execute("DELETE FROM sync_log WHERE id <= (SELECT MAX(id) FROM sync_log) - ?", (SYNC_LOG_KEEP,))
         conn.commit()
 
 
 def list_log(ws: str, limit: int = 50) -> list[dict]:
-    """The newest sync_log rows: ``[{id, at, page_id, title, action,
-    exists}]`` (``exists``: the page is still here, so it can be opened)."""
+    """The newest sync_log rows: ``[{id, at, page_id, title, action, stats,
+    exists}]`` (``stats``: ``{add, del, mod}`` block counts, ``{}`` for a row
+    from before they were kept; ``exists``: the page is still here, so it
+    can be opened)."""
     with connect_pages_db(ws) as conn:
         rows = conn.execute(
-            "SELECT l.id, l.at, l.page_id, l.title, l.action, "
+            "SELECT l.id, l.at, l.page_id, l.title, l.action, l.stats, "
             "EXISTS (SELECT 1 FROM unified_blocks b WHERE b.id = l.page_id) FROM sync_log l "
             "ORDER BY l.id DESC LIMIT ?", (max(1, min(int(limit or 50), 500)),)).fetchall()
-    return [{**dict(zip(("id", "at", "page_id", "title", "action"), r[:5])), "exists": bool(r[5])} for r in rows]
+    out = []
+    for r in rows:
+        try:
+            stats = json.loads(r[5]) if r[5] else {}
+        except ValueError:
+            stats = {}
+        out.append({**dict(zip(("id", "at", "page_id", "title", "action"), r[:5])), "stats": stats, "exists": bool(r[6])})
+    return out
 
 
 def open_conflicts(ws: str) -> int:
@@ -646,11 +683,11 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
     push_allowed = mode == "two-way"
     adopt, prune = report.get("adopt") or "theirs", bool(report.get("prune"))
     if prune:
-        # a force: the losing side's tombstones say nothing — its pages go, the winner's come
-        if adopt == "theirs":
-            local_gone = False
-        else:
-            remote_gone = False
+        # a force: tombstones say nothing on either side (the per-page state
+        # was cleared, so "deleted here, never synced" would skip a page the
+        # copy removed) — what the winner has comes over whole, and a page
+        # only the loser has is deleted there (the two branches below)
+        local_gone = remote_gone = False
 
     # --- page-level: one side deleted it
     if remote_gone and not local_gone:
@@ -668,14 +705,14 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
                     _save_state(conn, page_id, seq, remote_after or local)
                     _conflict(conn, page_id, page_id, "page_restored", mine=local[page_id]["content"],
                               result="the other side deleted this page; it was edited here, so it came back there")
-                _note(ws, page_id, "restored there", local[page_id]["content"])
+                _note(ws, page_id, "restored there", local[page_id]["content"], stats=_whole(local, "add"), report=report)
                 report["pages_pushed"] += 1
             return
         title = local[page_id]["content"]
         with connect_pages_db(ws) as conn:
             delete_page(ws, conn, page_id, actor=ACTOR)
             _drop_state(conn, page_id)
-        _note(ws, page_id, "deleted here", title)
+        _note(ws, page_id, "deleted here", title, stats=_whole(local, "del"), report=report)
         report["pages_deleted"] += 1
         return
     if local_gone and local is None:
@@ -690,7 +727,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             remote.delete(f"/api/blocks/{page_id}")
             with connect_pages_db(ws) as conn:
                 _drop_state(conn, page_id)
-            _note(ws, page_id, "deleted there", remote_tree[page_id]["content"])
+            _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"), report=report)
             report["pages_pushed"] += 1
             return
         # the remote edited it since (or we may not delete there): it comes back here
@@ -702,7 +739,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             _save_state(conn, page_id, seq, remote_tree)
             _conflict(conn, page_id, page_id, "page_restored_from_remote", theirs=remote_tree[page_id]["content"],
                       result="this page was deleted here but edited on the other side, so it came back")
-        _note(ws, page_id, "restored here", remote_tree[page_id]["content"])
+        _note(ws, page_id, "restored here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"), report=report)
         report["pages_pulled"] += 1
         return
 
@@ -717,7 +754,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             # a force pull: a page the original does not have goes
             with connect_pages_db(ws) as conn:
                 delete_page(ws, conn, page_id, actor=ACTOR)
-            _note(ws, page_id, "deleted here", local[page_id]["content"])
+            _note(ws, page_id, "deleted here", local[page_id]["content"], stats=_whole(local, "del"), report=report)
             report["pages_deleted"] += 1
             return
         if state is None and local is not None and push_allowed:
@@ -728,14 +765,14 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             remote_after, seq = _remote_tree(remote, page_id)
             with connect_pages_db(ws) as conn:
                 _save_state(conn, page_id, seq, remote_after or local)
-            _note(ws, page_id, "created there", local[page_id]["content"])
+            _note(ws, page_id, "created there", local[page_id]["content"], stats=_whole(local, "add"), report=report)
             report["pages_pushed"] += 1
         # else: the feed said it changed, but it is gone now (deleted after the feed): next round's tombstone
         return
     if local is None and prune and adopt == "mine" and push_allowed:
         # a force push: a page this copy does not have goes from the original
         remote.delete(f"/api/blocks/{page_id}")
-        _note(ws, page_id, "deleted there", remote_tree[page_id]["content"])
+        _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"), report=report)
         report["pages_pushed"] += 1
         return
     if local is None:
@@ -746,7 +783,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
         _apply_local(ws, page_id, diff({page_id: remote_tree[page_id]}, remote_tree, page_id, with_base=False))
         with connect_pages_db(ws) as conn:
             _save_state(conn, page_id, seq, remote_tree)
-        _note(ws, page_id, "created here", remote_tree[page_id]["content"])
+        _note(ws, page_id, "created here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"), report=report)
         report["pages_pulled"] += 1
         return
 
@@ -772,7 +809,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
                         and op["content"] != sent[op["id"]]["content"]:
                     _conflict(conn, page_id, op["id"], "merged", mine=local[op["id"]]["content"],
                               theirs=sent[op["id"]]["content"], result=op["content"])
-        _note(ws, page_id, "pulled", remote_tree[page_id]["content"])
+        _note(ws, page_id, "pulled", remote_tree[page_id]["content"], stats=_stats(remote_ops, local), report=report)
         report["pages_pulled"] += 1
     # 2. what still differs here goes there
     with connect_pages_db(ws) as conn:
@@ -790,7 +827,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             _apply_local(ws, page_id, settle)
         with connect_pages_db(ws) as conn:
             _save_state(conn, page_id, seq, remote_after)
-        _note(ws, page_id, "pushed", local_now[page_id]["content"])
+        _note(ws, page_id, "pushed", local_now[page_id]["content"], stats=_stats(push_ops, remote_tree), report=report)
         report["pages_pushed"] += 1
     else:
         # the base is always the remote's tree: what is not there is a local
@@ -821,7 +858,7 @@ def _adopt_page(ws: str, remote: Remote, page_id: str, local: dict, remote_tree:
             for bid in differed:
                 _conflict(conn, page_id, bid, "diverged", mine=local[bid]["content"],
                           theirs=remote_tree[bid]["content"], result=local[bid]["content"])
-        _note(ws, page_id, "replaced there", local[page_id]["content"])
+        _note(ws, page_id, "replaced there", local[page_id]["content"], stats=_stats(push_ops, remote_tree), report=report)
         report["pages_pushed"] += 1
         return
     ops_ = diff(local, remote_tree, page_id, with_base=False)
@@ -833,7 +870,7 @@ def _adopt_page(ws: str, remote: Remote, page_id: str, local: dict, remote_tree:
         for bid in differed:
             _conflict(conn, page_id, bid, "diverged", mine=local[bid]["content"],
                       theirs=remote_tree[bid]["content"], result=remote_tree[bid]["content"])
-    _note(ws, page_id, "replaced here", remote_tree[page_id]["content"])
+    _note(ws, page_id, "replaced here", remote_tree[page_id]["content"], stats=_stats(ops_, local), report=report)
     report["pages_pulled"] += 1
 
 
@@ -903,7 +940,8 @@ def _round(ws: str, mirror: dict, fetch) -> dict:
     status.pop("interrupted", None)
     _save(ws, status=status)
     report = {"pages_pulled": 0, "pages_pushed": 0, "pages_deleted": 0, "files_pulled": 0,
-              "files_pushed": 0, "errors": [], "adopt": mirror["status"].get("adopt"),
+              "files_pushed": 0, "blocks_added": 0, "blocks_removed": 0, "blocks_changed": 0,
+              "errors": [], "adopt": mirror["status"].get("adopt"),
               "prune": bool(mirror["status"].get("prune"))}
     last_file_save = [0.0]
 

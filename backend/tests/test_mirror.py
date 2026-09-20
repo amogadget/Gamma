@@ -284,8 +284,23 @@ def test_the_sync_log_names_what_a_round_did():
     assert set(actions[1:3]) == {("created here", "Gone"), ("pushed", "Logged")}
     assert actions[3] == ("created here", "Logged")
     assert log[0]["exists"] is False and next(c for c in log if c["action"] == "pushed")["exists"] is True
+    # git-style counts per row: the blocks a page gained, lost or changed
+    by = {(c["action"], c["title"]): c["stats"] for c in log}
+    assert by[("created here", "Logged")] == {"add": 1, "del": 0, "mod": 0}
+    assert by[("pushed", "Logged")] == {"add": 0, "del": 0, "mod": 1}
+    assert by[("created here", "Gone")] == {"add": 0, "del": 0, "mod": 0}
     info = local.client.get(f"/api/mirrors/{local.ws}").json()
     assert info["conflicts_open"] == 0 and info["status"]["last_sync"]
+    # a subtree deleted on the original counts every block it took, and the round adds the counts up
+    remote.insert(page["id"], "lg2", "parent")
+    remote.insert(page["id"], "lg3", "child", parent="lg2")
+    _sync(local)
+    remote.ops(page["id"], [{"op": "delete", "id": "lg2"}, {"op": "insert", "id": "lg4", "parent": page["id"],
+                            "position": "a5", "content": "new"}])
+    st = _sync(local)
+    log = local.client.get(f"/api/mirrors/{local.ws}/log?limit=1").json()["changes"]
+    assert (log[0]["action"], log[0]["stats"]) == ("pulled", {"add": 1, "del": 2, "mod": 0})
+    assert (st["blocks_added"], st["blocks_removed"], st["blocks_changed"]) == (1, 2, 0)
 
 
 def test_a_round_reports_its_progress_and_an_interrupted_one_is_reset(monkeypatch):
@@ -417,6 +432,39 @@ def test_force_pull_and_push_make_one_side_identical(monkeypatch):
     assert r.status_code == 200, r.text
     assert remote.texts(page["id"])["fc1"] == "the copy wins"
     assert theirs["id"] not in remote.pages() and theirs["id"] not in local.pages()
+
+
+def test_force_push_removes_what_the_copy_deleted_and_skips_identical_pages(monkeypatch):
+    """A page (and a block) deleted in the copy after a sync goes from the
+    original on a force push; pages that are identical cost one read each
+    and no write."""
+    remote, local, _ = _pair()
+    gone = remote.page("Deleted in the copy")
+    kept = remote.page("Untouched")
+    remote.insert(kept["id"], "k1", "same on both sides")
+    edited = remote.page("Block removed in the copy")
+    remote.insert(edited["id"], "e1", "stays")
+    remote.insert(edited["id"], "e2", "removed in the copy")
+    _sync(local)
+    assert gone["id"] in local.pages() and local.texts(edited["id"])["e2"] == "removed in the copy"
+    monkeypatch.setattr(sync_engine, "sync_in_background", lambda ws: sync_engine.sync_workspace(ws))
+    assert local.client.delete(f"/api/blocks/{gone['id']}").status_code == 200
+    local.ops(edited["id"], [{"op": "delete", "id": "e2"}])
+    writes = []
+    real = sync_engine.default_fetch
+
+    def counting(method, path, body, headers):
+        if method in ("POST", "PUT", "DELETE"):
+            writes.append((method, path))
+        return real(method, path, body, headers)
+
+    monkeypatch.setattr(sync_engine, "default_fetch", counting)
+    r = local.client.post(f"/api/mirrors/{local.ws}/force", json={"direction": "push"})
+    assert r.status_code == 200, r.text
+    assert gone["id"] not in remote.pages(), "the page deleted in the copy is deleted on the original"
+    assert remote.texts(edited["id"]) == {"e1": "stays"}, "the block deleted in the copy is deleted there"
+    assert not [w for w in writes if kept["id"] in w[1]], "an identical page is not pushed"
+    assert [w for w in writes if w[0] == "DELETE"] == [("DELETE", f"/api/blocks/{gone['id']}")]
 
 
 def test_cadence_and_sync_on_change():

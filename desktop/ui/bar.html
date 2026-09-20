@@ -76,9 +76,9 @@
   .item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item .sub { color: var(--text-dim); font-size: 11px; margin-left: 6px; }
   .item .check { color: var(--accent); display: inline-flex; width: 14px; }
-  /* A workspace row's trailing chip: on a remote server "keep offline" (on
-     hover) or, once it has one, "offline copy" (always shown — click opens
-     the copy); on a local copy "original" (opens the workspace it follows). */
+  /* A workspace row's trailing chip: on a remote server "clone" (on hover)
+     or, once it has one, "open clone" (always shown — click opens the
+     clone); on a local clone "origin" (opens the workspace it follows). */
   .item .rowAct {
     display: none; align-items: center; gap: 4px; flex-shrink: 0;
     color: var(--text-muted); border: 1px solid var(--border); border-radius: 99px;
@@ -200,18 +200,18 @@
         const b = document.createElement('button');
         b.className = 'item wsItem' + (isCur ? ' current' : '');
         b.dataset.ws = w.id;
-        b.title = w.mirror_of ? `Offline copy of ${w.mirror_of} — kept in step with the original whenever it is reachable`
+        b.title = w.mirror_of ? `Clone of ${w.mirror_of} — pulls from and pushes to its origin whenever it is reachable`
           : w.personal ? 'Your personal workspace' : `Shared · ${w.members} member${w.members === 1 ? '' : 's'} · you ${ROLE[w.role] || w.role}`;
-        if (w.copy) b.title += ` · has an offline copy on ${w.copy.serverName}`;
-        // The trailing chip (see .rowAct): open the copy / open the original / keep offline.
+        if (w.copy) b.title += ` · has a clone on ${w.copy.serverName}`;
+        // The trailing chip (see .rowAct): open the clone / open the origin / clone.
         const chip = w.copy
-          ? `<span class="rowAct on" role="button" tabindex="0" data-act="copy" title="Open the offline copy on ${esc(w.copy.serverName)}${w.copy.running ? ' — syncing in the background' : ''}">${ICONS.local}offline copy</span>`
+          ? `<span class="rowAct on" role="button" tabindex="0" data-act="copy" title="Open the clone on ${esc(w.copy.serverName)}${w.copy.running ? ' — syncing in the background' : ''}">${ICONS.local}open clone</span>`
           : w.original
-          ? `<span class="rowAct on" role="button" tabindex="0" data-act="original" title="Open the original: ${esc(w.original.name)} on ${esc(w.original.serverName)}">${ICONS.remote}original</span>`
+          ? `<span class="rowAct on" role="button" tabindex="0" data-act="original" title="Open the origin: ${esc(w.original.name)} on ${esc(w.original.serverName)}">${ICONS.remote}origin</span>`
           : state.current.type === 'remote' && !w.mirror_of
-          ? `<span class="rowAct" role="button" tabindex="0" data-act="keep" title="Keep an offline copy of ${esc(w.name)} on this computer — opens without a connection, edits go both ways">${ICONS.download}keep offline</span>`
+          ? `<span class="rowAct" role="button" tabindex="0" data-act="keep" title="Clone ${esc(w.name)} onto this computer — opens without a connection, pulls and pushes changes">${ICONS.download}clone</span>`
           : '';
-        b.innerHTML = `<span class="badge"></span><span class="label"></span><span class="sub">${w.mirror_of ? 'offline copy' : w.personal ? 'personal' : (ROLE[w.role] || w.role)}</span>` +
+        b.innerHTML = `<span class="badge"></span><span class="label"></span><span class="sub">${w.mirror_of ? 'clone' : w.personal ? 'personal' : (ROLE[w.role] || w.role)}</span>` +
           chip + `<span class="check">${isCur ? ICONS.check : ''}</span>`;
         b.querySelector('.badge').textContent = (w.name || '?').charAt(0).toUpperCase();
         b.querySelector('.label').textContent = w.name;

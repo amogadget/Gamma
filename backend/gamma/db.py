@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class SchemaOutdated(RuntimeError):
@@ -243,13 +243,15 @@ PAGES_SCHEMA = [
         synced_at TEXT NOT NULL
     )""",
     # sync_log = what the last rounds did, page by page (the header pill's
-    # "recent changes"); pruned to the newest SYNC_LOG_KEEP rows.
+    # log), each row with its git-style block counts (stats: JSON
+    # {add, del, mod}); pruned to the newest SYNC_LOG_KEEP rows.
     """CREATE TABLE IF NOT EXISTS sync_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         at TEXT NOT NULL,
         page_id TEXT NOT NULL,
         title TEXT NOT NULL DEFAULT '',
-        action TEXT NOT NULL
+        action TEXT NOT NULL,
+        stats TEXT NOT NULL DEFAULT ''
     )""",
     """CREATE TABLE IF NOT EXISTS sync_conflicts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

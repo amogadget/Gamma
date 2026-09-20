@@ -389,9 +389,9 @@ async function main() {
       return cur.url;
     });
 
-    await step('offline copy: "keep offline" on a remote row makes the copy; the rows then cross-link', async () => {
+    await step('clone: the "clone" chip on a remote row makes the clone; the rows then cross-link', async () => {
       // On the remote (Alpha by URL — same server, so the session is there):
-      // the personal workspace row carries the "keep offline" chip on hover.
+      // the personal workspace row carries the "clone" chip on hover.
       const g = await waitFor(async () => hook(app, (s) => s.gamma()), 'workspaces read off the remote', 15_000);
       const origWs = g.current;
       await bar.click('#wsBtn');
@@ -411,17 +411,17 @@ async function main() {
       assert.equal(mirrors[0].workspace, copyWs);
       assert.equal(mirrors[0].remoteWs, origWs);
       await waitLoggedIn(content);
-      // The copy's row reads "offline copy" and its chip opens the original…
+      // The clone's row reads "clone" and its "origin" chip opens the origin…
       await bar.click('#wsBtn');
       const copyRow = bar.locator(`#menu .wsItem[data-ws="${copyWs}"]`);
       await copyRow.waitFor({ timeout: 15_000 });
-      assert((await copyRow.textContent()).includes('offline copy'), 'row reads offline copy');
+      assert((await copyRow.textContent()).includes('clone'), 'row reads clone');
       await copyRow.locator('.rowAct.on[data-act="original"]').click();
       await waitFor(async () => {
         const c = await hook(app, (s) => s.current());
         return c && c.id === ids.remote && new URL(content.url()).searchParams.get('ws') === origWs;
       }, 'back on the original', 30_000);
-      // …and on the remote the original's row now shows "offline copy" instead of "keep offline": it opens the copy.
+      // …and on the remote the origin's row now shows "open clone" instead of "clone": it opens the clone.
       await bar.click('#wsBtn');
       const again = bar.locator(`#menu .wsItem[data-ws="${origWs}"] .rowAct.on[data-act="copy"]`);
       await again.waitFor({ timeout: 15_000 });
@@ -430,7 +430,7 @@ async function main() {
         const c = await hook(app, (s) => s.current());
         return c && c.id === ids.alpha && new URL(content.url()).searchParams.get('ws') === copyWs;
       }, 'the copy opened from the remote row', 30_000);
-      // A second "keep offline" of the same workspace makes no second copy: it opens the existing one.
+      // A second "clone" of the same workspace makes no second clone: it opens the existing one.
       await hook(app, (s, id) => s.openServer(id), ids.remote);
       await waitFor(async () => {
         const c = await hook(app, (s) => s.current());

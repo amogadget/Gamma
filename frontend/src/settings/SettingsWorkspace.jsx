@@ -30,7 +30,7 @@ const ROLE_TEXT = { owner: "own it", editor: "can edit", viewer: "can view" };
 // One line under a switcher entry / workspace row: what kind it is and, for
 // a shared one, your role.
 export function workspaceMeta(w) {
-  if (w.mirror_of) return `offline copy of ${w.mirror_of}`;
+  if (w.mirror_of) return `clone of ${w.mirror_of}`;
   if (w.personal) return w.default ? "personal · default" : "personal";
   return `${w.access === "public" ? "public · " : ""}${ROLE_LABEL[w.role] || w.role}`;
 }
