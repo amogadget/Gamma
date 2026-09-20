@@ -319,6 +319,12 @@ def set_cadence(ws: str, *, poll_s: int | None = None, on_change: bool | None = 
         if mode not in ("two-way", "pull"):
             raise ValueError("mode must be two-way or pull")
         fields["mode"] = mode
+        # a receive-only round moves the local cursor past edits it did not
+        # push: back in two-way, the next round looks at every page changed
+        # here since the beginning (one tree compare each) and pushes them
+        current = get_mirror(ws)
+        if current and current["mode"] == "pull" and mode == "two-way":
+            fields["local_cursor"] = ""
     if fields:
         _save(ws, **fields)
     return get_mirror(ws)

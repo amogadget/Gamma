@@ -535,3 +535,18 @@ def test_pending_local_edits_are_reported_until_pushed():
     _sync(local)
     assert local.client.get(f"/api/mirrors/{local.ws}").json()["pending_local"] is False
     assert remote.texts(page["id"])["pd1"] == "text (local)"
+
+
+def test_switching_back_to_two_way_pushes_what_receive_only_kept():
+    remote, local, _ = _pair()
+    page = remote.page("Kept here")
+    remote.insert(page["id"], "kh1", "text")
+    _sync(local)
+    local.client.patch(f"/api/mirrors/{local.ws}", json={"mode": "pull"}).raise_for_status()
+    local.ops(page["id"], [{"op": "set", "id": "kh1", "content": "text (local)"}])
+    _sync(local)  # receive only: the edit stays here, the cursor moves past it
+    assert remote.texts(page["id"])["kh1"] == "text"
+    local.client.patch(f"/api/mirrors/{local.ws}", json={"mode": "two-way"}).raise_for_status()
+    _sync(local)  # two-way again: the page is looked at once more and the edit goes out
+    assert remote.texts(page["id"])["kh1"] == "text (local)"
+    assert local.client.get(f"/api/mirrors/{local.ws}").json()["pending_local"] is False

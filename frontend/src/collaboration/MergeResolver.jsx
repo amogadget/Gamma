@@ -6,10 +6,10 @@
 // against the text before either edit (removed words struck through, added
 // words in the side's colour), and under them the text that is in the block
 // now — the automatic merge, its additions coloured by who wrote them.
-// Every version carries its own Use button, the current one a Keep. A
-// decision is an ordinary edit the next round pushes. Rows from before the
-// base was kept (and diverged blocks, which have none) show the two texts
-// against each other instead.
+// Every version carries a radio, the one in the block preselected, and one
+// Apply confirms. A decision is an ordinary edit the next round pushes.
+// Rows from before the base was kept (and diverged blocks, which have
+// none) show the two texts against each other instead.
 import React from "react";
 import {
   AlertCircleIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon,
@@ -160,52 +160,64 @@ export function Marked({ parts }) {
 }
 
 // One version of the block: a header naming the side, a tag when it is the
-// text in the block now, its Use / Keep button, the text with the marks.
-function Version({ side, parts, current, busy, onUse, hint }) {
+// text in the block now, a radio to pick it, the text with the marks.
+function Version({ side, parts, current, hint, group, selected, onSelect, busy }) {
   const s = SIDE[side];
-  const choice = side === "result" ? "keep" : side;
-  const word = side === "result" ? "merged" : s.label.toLowerCase();
+  const pickable = Boolean(onSelect);
   return (
-    <section className={`mergeVersion ${side} ${current ? "current" : ""}`} aria-label={`${s.label} (${s.hint})`}>
+    <section className={`mergeVersion ${side} ${current ? "current" : ""} ${selected === side ? "selected" : ""}`}
+      aria-label={`${s.label} (${s.hint})`} onClick={pickable ? () => onSelect(side) : undefined}>
       <header className="mergeVersionHead">
+        {pickable ? (
+          <input type="radio" className="mergePick" name={group} value={side} checked={selected === side} disabled={busy}
+            onChange={() => onSelect(side)} aria-label={s.label} title={`Put the ${s.label.toLowerCase()} text into the block`} />
+        ) : null}
         <span className={`mergeSide ${side}`} title={hint || s.hint}><s.Icon size={12} />{s.label}</span>
         <span className="popoverHint mergeSideHint">{hint || s.hint}</span>
         {current ? <span className="uiTag">in the block</span> : null}
-        {onUse ? (
-          <button type="button" className={`uiBtn sm ${current ? "primary" : ""}`} disabled={busy}
-            onClick={() => onUse(current ? "keep" : choice)}
-            aria-label={current ? `Keep ${word}` : `Use ${word}`}
-            title={current ? "This is the text in the block now: mark it resolved" : `Put the ${word} text into the block`}>
-            {current ? <><CheckIcon size={13} /> Keep</> : "Use"}
-          </button>
-        ) : null}
       </header>
       <div className="mergeText"><Marked parts={parts} /></div>
     </section>
   );
 }
 
-// The versions of a textual conflict. With a base (an auto-merge): local
-// and remote as what each changed, the merged text as what the merge did.
-// Without one (diverged, or an older row): the two texts against each
-// other, the merged text by attribution.
+// The versions of a textual conflict, one radio each and an Apply. With a
+// base (an auto-merge): local and remote as what each changed, the merged
+// text as what the merge did. Without one (diverged, or an older row): the
+// two texts against each other, the merged text by attribution. The
+// version in the block now is preselected, so Apply on its own marks the
+// conflict resolved as it is.
 function Versions({ conflict, busy, onUse }) {
   const c = conflict;
   const diverged = c.kind === "diverged";
-  const mineCurrent = diverged && c.result === c.mine;
-  const theirsCurrent = diverged && c.result !== c.mine;
+  const currentSide = !diverged ? "result" : c.result === c.mine ? "mine" : "theirs";
+  const [selected, setSelected] = React.useState(currentSide);
+  const group = React.useId();
   const base = !diverged && typeof c.base === "string" && c.base ? c.base : null;
   const mineParts = base ? sideParts(base, c.mine, "mine") : onlyIn(c.mine, c.theirs, "mine");
   const theirsParts = base ? sideParts(base, c.theirs, "theirs") : onlyIn(c.theirs, c.mine, "theirs");
+  const pick = { group, selected, onSelect: setSelected, busy };
+  const keeps = selected === currentSide;
   return (
-    <div className={`mergeVersions ${diverged ? "two" : "three"}`}>
-      <Version side="mine" parts={mineParts} current={mineCurrent} busy={busy} onUse={onUse} hint={base ? "changed here" : undefined} />
-      <Version side="theirs" parts={theirsParts} current={theirsCurrent} busy={busy} onUse={onUse} hint={base ? "changed on origin" : undefined} />
-      {diverged ? null : (
-        <Version side="result" current busy={busy} onUse={onUse}
-          parts={base ? mergedParts(base, c.mine, c.theirs, c.result) : attribute(c.result, c.mine, c.theirs)} />
-      )}
-    </div>
+    <>
+      <div className={`mergeVersions ${diverged ? "two" : "three"}`}>
+        <Version side="mine" parts={mineParts} current={currentSide === "mine"} hint={base ? "changed here" : undefined} {...pick} />
+        <Version side="theirs" parts={theirsParts} current={currentSide === "theirs"} hint={base ? "changed on origin" : undefined} {...pick} />
+        {diverged ? null : (
+          <Version side="result" current {...pick}
+            parts={base ? mergedParts(base, c.mine, c.theirs, c.result) : attribute(c.result, c.mine, c.theirs)} />
+        )}
+      </div>
+      <div className="mergeActions">
+        <span className="popoverHint mergeActionsHint">
+          {keeps ? "Keeps the text as it is and marks the conflict resolved" : `Puts the ${SIDE[selected].label.toLowerCase()} text into the block`}
+        </span>
+        <button type="button" className="uiBtn sm primary" disabled={busy} onClick={() => onUse(keeps ? "keep" : selected)}
+          title={keeps ? "Mark resolved as it is" : "Write the chosen text; the next round pushes it"}>
+          <CheckIcon size={13} /> Apply
+        </button>
+      </div>
+    </>
   );
 }
 

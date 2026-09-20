@@ -22,7 +22,7 @@ for theme in ('light', 'dark'):
     )
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: your research, connected</title>
-  <desc id="desc">Gamma connects to three groups: ChatGPT and Claude plugins together on the left, Gamma Connector below, and Obsidian, Notion, and Zotero together on the right.</desc>
+  <desc id="desc">Gamma connects to three groups: a read-only arrow to ChatGPT and Claude plugins on the left, an incoming arrow from Gamma Connector below, and a bidirectional arrow to the Obsidian, Notion, and Zotero group on the right.</desc>
   <defs>
 {MARK.replace('#1a1a18', ink)}
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
@@ -43,10 +43,13 @@ for theme in ('light', 'dark'):
 
     <!-- Each surrounding cluster has one box and one connection to Gamma. -->
     <g fill="none" stroke="#e8a020" stroke-width="3" stroke-linecap="round">
-      <path d="M600 550 H800"/>
-      <path d="M1120 550 H1320"/>
+      <path d="M800 550 H610" marker-end="url(#arrow)"/>
+      <path d="M1130 550 H1310" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
       <path d="M960 800 V678" stroke-dasharray="3 10" marker-end="url(#arrow)"/>
     </g>
+
+    <text x="700" y="527" text-anchor="middle" font-size="22" fill="{muted}">Read-only</text>
+    <text x="1220" y="527" text-anchor="middle" font-size="22" fill="{muted}">Bidirectional</text>
 
     <rect x="140" y="380" width="460" height="340" rx="22" fill="{card}" stroke="{edge}" stroke-width="1.5" filter="url(#shadow)"/>
     <text x="184" y="437" font-size="26" font-weight="600" fill="{muted}">PLUGINS</text>
@@ -54,6 +57,7 @@ for theme in ('light', 'dark'):
     <text x="264" y="525" font-size="36" font-weight="600" fill="{ink}">ChatGPT</text>
     <path d="{claude}" transform="translate(184 595) scale(2.25)" fill="{'#e5a185' if dark else '#c15f3c'}"/>
     <text x="264" y="635" font-size="36" font-weight="600" fill="{ink}">Claude</text>
+    <text x="184" y="689" font-size="21" fill="{muted}">“Find my notes on diffusion.”</text>
 
     <rect x="800" y="450" width="320" height="220" rx="22" fill="{card}" stroke="{edge}" stroke-width="1.5" filter="url(#shadow)"/>
     <use href="#gammaMark" transform="translate(936 480)"/>
@@ -61,7 +65,8 @@ for theme in ('light', 'dark'):
     <text x="960" y="625" text-anchor="middle" font-size="24" fill="{muted}">Papers + notes</text>
 
     <rect x="1320" y="380" width="460" height="340" rx="22" fill="{card}" stroke="{edge}" stroke-width="1.5" filter="url(#shadow)"/>
-    <text x="1364" y="437" font-size="26" font-weight="600" fill="{muted}">NOTES &amp; KNOWLEDGE BASES</text>
+    <text x="1364" y="428" font-size="26" font-weight="600" fill="{muted}">NOTES &amp; KNOWLEDGE BASES</text>
+    <text x="1364" y="460" font-size="21" fill="{muted}">Import &amp; export</text>
     <path d="{obsidian}" transform="translate(1364 477) scale(2)" fill="{'#a78bfa' if dark else '#7c3aed'}"/>
     <text x="1440" y="515" font-size="34" font-weight="600" fill="{ink}">Obsidian</text>
     <path d="{notion}" transform="translate(1364 555) scale(2)" fill="{ink}"/>
