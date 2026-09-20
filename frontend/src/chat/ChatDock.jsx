@@ -12,6 +12,7 @@ import { addUsage, cachedPercent, conversationUsage, fmtTokens, liveUsage, usage
 import { createTitleScorer } from "../library/librarySearch";
 import { pageAttachment } from "../library/libraryUtils";
 import { MenuSelect } from "../shared/ui/Menus";
+import { guideEvents } from "../guide/events.js";
 import { CharSlider, approxPages } from "../settings/SettingsKit";
 import { AgentToolPicker, CHAT_KIND_ROWS } from "../settings/SettingsDialog";
 import { AlertCircleIcon, ArrowDownIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
@@ -151,7 +152,7 @@ export default function ChatDock({
   organizeFolder = null, toolRounds, agentReadChars, agentPerms, setAgentPerms, agentSystem,
   agentEnabled, setAgentEnabled, onLibraryChange, onNotesChange, onAgentEvent,
   // Opens a page the reply links to (/?page=<id>) in place.
-  onOpenPage,
+  onOpenPage, onShowGuide,
   onGrip, onGripDoubleClick, collapsed, onClose,
 }) {
   const [loadedMessages, setChatMessages] = useState([]);
@@ -533,6 +534,7 @@ export default function ChatDock({
     if (readOnly) return;
     const text = (rawText || "").trim();
     if (!text || chatLoading) return;
+    guideEvents.emit("chat.sent");
     const selectedDocs = referenceMessage ? (referenceMessage.contextPages || []).map((p) => p.id) : chatDocs;
     const includeNotes = referenceMessage ? !!referenceMessage.includeNotes : chatIncludeNotes;
     if (referenceMessage) { setChatDocs(selectedDocs); setChatIncludeNotes(includeNotes); }
@@ -890,7 +892,7 @@ export default function ChatDock({
           const usageTitle = totalUsage ? `; this conversation: ${fmtTokens(totalUsage.input)} tokens in, ${fmtTokens(totalUsage.output)} out` : "";
           return (
             <span data-popover="chatsettings" className="popoverAnchor">
-              <button type="button" className={`ctlBtn ${settingsOpen ? "modeActive" : ""}`}
+              <button type="button" data-guide="chat.settings" className={`ctlBtn ${settingsOpen ? "modeActive" : ""}`}
                 onClick={() => setOpenPopover((p) => (p === "chatsettings" ? null : "chatsettings"))}
                 title={`Chat settings — ${currentModel?.model || "model"}${chatEffort ? `, effort: ${chatEffort}` : ""}, context ${chatContextChars.toLocaleString()} chars${usageTitle}`}
                 aria-label="Chat settings" aria-expanded={settingsOpen}>
@@ -955,6 +957,7 @@ export default function ChatDock({
         <button
           type="button"
           className={`ctlBtn ${toolsEnabled ? "modeActive" : ""}`}
+          data-guide="chat.tools"
           aria-pressed={toolsEnabled}
           aria-label={`Tools ${toolsEnabled ? "on" : "off"}`}
           onClick={() => { setOpenPopover(null); toggleTools(); }}
@@ -963,6 +966,12 @@ export default function ChatDock({
           <SlidersIcon size={15} />
         </button>
         {findBtn}
+        {aiInfo?.enabled && onShowGuide ? (
+          <button type="button" className="ctlBtn" onClick={onShowGuide}
+            title="Chat guide" aria-label="Chat guide">
+            <InfoIcon size={15} />
+          </button>
+        ) : null}
         <span data-popover="chathistory" className="popoverAnchor">
           <button type="button" className={`ctlBtn ${historyOpen ? "modeActive" : ""}`}
             onClick={() => setOpenPopover((p) => (p === "chathistory" ? null : "chathistory"))}
@@ -1302,6 +1311,9 @@ export default function ChatDock({
       ) : null}
       <form
         className="chatInputRow"
+        data-guide="chat.composer"
+        onPointerDownCapture={(e) => { if (e.isTrusted) guideEvents.emit("chat.focused"); }}
+        onFocusCapture={(e) => { if (e.isTrusted) guideEvents.emit("chat.focused"); }}
         onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
       >
         {dictation === "rec" ? (
@@ -1327,6 +1339,7 @@ export default function ChatDock({
           <button
             type="button"
             className={`chatAttachToggle chatPlusBtn ${(chatDocs.length || chatIncludeNotes) ? "on" : ""}`}
+            data-guide="chat.context"
             onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
             title="Add photos & files, or pages from your library"
             aria-label="Add attachments or chat context"

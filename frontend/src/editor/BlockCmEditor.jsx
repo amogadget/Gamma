@@ -948,6 +948,7 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
       ref={hostRef}
       className={className}
       data-block-id={dataBlockId}
+      data-guide="notes.editor"
     />
   );
 });

@@ -2064,7 +2064,7 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
     && (transEntry.queued || transEntry.busy?.size > 0);
 
   return (
-    <div ref={wrapRef} data-page={pageNumber} className={"pdfPageWrap" + (transActive ? " transShown" : "")}
+    <div ref={wrapRef} data-page={pageNumber} data-guide="pdf.page" className={"pdfPageWrap" + (transActive ? " transShown" : "")}
       onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
@@ -2128,7 +2128,7 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
           })()}
         </div>
       ) : null}
-      <div ref={textRef} className="textLayer" style={{
+      <div ref={textRef} className="textLayer" data-guide="pdf.textLayer" style={{
         userSelect: readOnly || inkTool ? "none" : "text", WebkitUserSelect: readOnly || inkTool ? "none" : "text",
       }} />
       <PdfCitationOverlay citation={citation} wrapRef={wrapRef}
@@ -2263,6 +2263,7 @@ function PlainTip({ onConfirm, onLink }) {
           <button
             key={c}
             className="colorBtn"
+            data-guide="pdf.highlightColor"
             style={{ background: c }}
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onConfirm("", c); }}
             type="button"

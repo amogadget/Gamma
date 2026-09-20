@@ -62,17 +62,22 @@ function placeCard(rect, cardH, vw, vh, prefer) {
 }
 
 export default function GuideOverlay({ guide }) {
-  const { running, step, index, count, done, live, next, back, dismiss } = guide;
+  const { running, offer, index, count, done, live, back } = guide;
+  const inviting = !running && !!offer;
+  const visible = running || inviting;
+  const step = inviting ? offer.invitation : guide.step;
+  const next = inviting ? guide.acceptOffer : guide.next;
+  const dismiss = inviting ? guide.dismissOffer : guide.dismiss;
   const [rect, setRect] = useState(null);   // spotlight rect (padded) or null
   const [missing, setMissing] = useState(false);
   const cardRef = useRef(null);
   const [cardPos, setCardPos] = useState(null);
   // A demo step's spotlight follows what it acts on; otherwise the step's anchor.
-  const anchor = live?.anchor || step?.anchor || null;
+  const anchor = (!inviting && live?.anchor) || step?.anchor || null;
 
   // Track the anchor's box: on change, resize, scroll and DOM mutations.
   useEffect(() => {
-    if (!running || !step) return undefined;
+    if (!visible || !step) return undefined;
     if (!anchor) { setRect(null); setMissing(false); return undefined; }
     let raf = 0;
     let gone = false;
@@ -80,22 +85,22 @@ export default function GuideOverlay({ guide }) {
     const measure = () => {
       raf = 0;
       const el = anchorElement(anchor);
-      if (!el) {
+      const b = el?.getBoundingClientRect();
+      if (!b?.width || !b?.height) {
         setRect(null);
         if (performance.now() - started > WAIT_MS && !gone && !step.do) {
           gone = true;
-          console.warn(`guide: anchor "${anchor}" not found, skipping step "${step.id}"`);
+          if (!inviting) console.warn(`guide: anchor "${anchor}" not found, skipping step "${step.id}"`);
           setMissing(true);
         }
         return;
       }
-      const b = el.getBoundingClientRect();
       setRect({ top: b.top - PAD, left: b.left - PAD, width: b.width + PAD * 2, height: b.height + PAD * 2,
         right: b.right + PAD, bottom: b.bottom + PAD });
     };
     const schedule = () => { if (!raf) raf = requestAnimationFrame(measure); };
     measure();
-    anchorElement(anchor)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (!inviting) anchorElement(anchor)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     const mo = new MutationObserver(schedule);
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
     window.addEventListener("resize", schedule);
@@ -108,37 +113,37 @@ export default function GuideOverlay({ guide }) {
       clearInterval(retry);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [running, step, anchor]);
+  }, [visible, inviting, step, anchor]);
 
   // A missing anchor skips the step.
   useEffect(() => {
-    if (missing) { setMissing(false); next(); }
-  }, [missing, next]);
+    if (missing) { setMissing(false); if (inviting) dismiss(); else next(); }
+  }, [missing, inviting, dismiss, next]);
 
   // Card placement follows the spotlight; measured after render.
   useLayoutEffect(() => {
-    if (!running) return;
+    if (!visible) return;
     const card = cardRef.current;
     if (!card) return;
     const vw = window.innerWidth, vh = window.innerHeight;
     if (!rect) { setCardPos(null); return; }
     setCardPos(placeCard(rect, card.offsetHeight, vw, vh, step?.placement));
-  }, [running, rect, step]);
+  }, [visible, rect, step]);
 
-  if (!running || !step) return null;
+  if (!visible || !step) return null;
   const waiting = anchor && !rect;
   const centered = !anchor;
-  const busy = !!live?.busy;
+  const busy = !inviting && !!live?.busy;
   const vw = window.innerWidth, vh = window.innerHeight;
   const hole = rect
     ? `M${rect.left},${rect.top} h${rect.width} a8,8 0 0 1 8,8 v${rect.height - 16} a8,8 0 0 1 -8,8 h${-rect.width} a8,8 0 0 1 -8,-8 v${-(rect.height - 16)} a8,8 0 0 1 8,-8 z`
     : "";
   const primaryLabel = step.next
-    || (index + 1 >= count ? "Done" : busy ? "Skip" : step.advanceOn && !done ? "Skip" : "Next");
+    || (index + 1 >= count ? "Done" : live?.failed || (step.advanceOn && !done) ? "Skip" : "Next");
 
   return (
-    <div className={`guideRoot ${done ? "done" : ""} ${busy ? "busy" : ""}`} data-guide-overlay={step.id} data-guide-busy={busy ? "1" : undefined}>
-      <svg className="guideDim" width={vw} height={vh} viewBox={`0 0 ${vw} ${vh}`} aria-hidden="true">
+    <div className={`guideRoot ${inviting ? "guideInvitation" : ""} ${done ? "done" : ""} ${busy ? "busy" : ""}`} data-guide-overlay={inviting ? undefined : step.id} data-guide-offer={inviting ? offer.id : undefined} data-guide-busy={busy ? "1" : undefined}>
+      {!inviting ? <svg className="guideDim" width={vw} height={vh} viewBox={`0 0 ${vw} ${vh}`} aria-hidden="true">
         <path
           d={`M0,0 H${vw} V${vh} H0 Z ${hole}`}
           fillRule="evenodd"
@@ -146,23 +151,24 @@ export default function GuideOverlay({ guide }) {
           style={{ pointerEvents: centered || busy ? "auto" : "visiblePainted" }}
         />
         {rect ? <path d={hole} className="guideRing" /> : null}
-      </svg>
+      </svg> : null}
       {busy && rect ? <div className="guideShield" aria-hidden="true" /> : null}
-      {live?.cursor ? (
+      {!inviting && live?.cursor ? (
         <div
-          className={`guideCursor ${live.cursor.pressed ? "pressed" : ""}`}
+          className={`guideCursor ${live.cursor.pressed ? "pressed" : ""} ${live.cursor.dragging ? "dragging" : ""}`}
           style={{ transform: `translate(${live.cursor.x}px, ${live.cursor.y}px)` }}
           aria-hidden="true"
         >
           <svg width="22" height="26" viewBox="0 0 22 26">
             <path d="M2 2 L2 20 L7 15.5 L10.5 23 L14 21.5 L10.5 14 L17 14 Z" fill="#fff" stroke="#111" strokeWidth="1.4" strokeLinejoin="round" />
           </svg>
+          {live.cursor.modifier ? <kbd className="guideModifier">{live.cursor.modifier}</kbd> : null}
         </div>
       ) : null}
       {!waiting || busy ? (
         <div
           ref={cardRef}
-          className={`guideCard ${centered && !busy ? "guideCardCentered" : ""} ${cardPos ? `side-${cardPos.side}` : ""} ${busy && !cardPos ? "guideCardCorner" : ""}`}
+          className={`guideCard ${rect && rect.top > vh / 2 ? "guideCardAbove" : ""} ${centered && !busy ? "guideCardCentered" : ""} ${cardPos ? `side-${cardPos.side}` : ""} ${busy && !cardPos ? "guideCardCorner" : ""}`}
           style={cardPos ? { top: cardPos.top, left: cardPos.left, width: CARD_W } : undefined}
           role="dialog"
           aria-live="polite"
@@ -170,22 +176,22 @@ export default function GuideOverlay({ guide }) {
         >
           <div className="guideHead">
             <span className="guideStep">
-              {index + 1} / {count}
-              {done ? <span className="guideDone">✓ Done</span> : null}
+              {inviting ? `Quick guide · ${offer.estimate}` : `${index + 1} / ${count}`}
+              {!inviting && done ? <span className="guideDone">✓ Done</span> : null}
               {busy ? <span className="guideBusy">watch</span> : null}
               {live?.failed ? <span className="guideFailed">couldn't finish</span> : null}
             </span>
-            <button className="uiClose uiCloseSm guideClose" onClick={dismiss} title="Leave the tour (Esc)" aria-label="Leave the tour">×</button>
+            <button className="uiClose uiCloseSm guideClose" onClick={dismiss} title={inviting ? "Dismiss guide (Esc)" : "Leave the tour (Esc)"} aria-label={inviting ? "Dismiss guide" : "Leave the tour"}>×</button>
           </div>
           <div className="guideTitle">{step.title}</div>
           <div className="guideBody">{renderBody(step.body)}</div>
           <div className="guideFoot">
-            <span className="guideDots" aria-hidden="true">
+            {!inviting ? <span className="guideDots" aria-hidden="true">
               {Array.from({ length: count }, (_, i) => <i key={i} className={i === index ? "on" : i < index ? "done" : ""} />)}
-            </span>
+            </span> : <button className="uiBtn sm" onClick={dismiss}>Not now</button>}
             <span className="guideBtns">
-              {index > 0 && !busy ? <button className="uiBtn" onClick={back}>Back</button> : null}
-              <button className="uiBtn primary" onClick={next}>{primaryLabel}</button>
+              {!inviting && index > 0 && !busy && !done ? <button className="uiBtn" onClick={back}>Back</button> : null}
+              {!busy && (!done || inviting) ? <button className="uiBtn primary" onClick={next}>{inviting ? "Show me" : primaryLabel}</button> : null}
             </span>
           </div>
         </div>

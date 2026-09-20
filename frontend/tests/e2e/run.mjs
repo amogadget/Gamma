@@ -28,6 +28,7 @@ import { chatNavigationScenarios } from "./scenarios/chatNavigation.mjs";
 import { transferScenarios } from "./scenarios/transfers.mjs";
 import { inkScenarios } from "./scenarios/ink.mjs";
 import { guideScenarios } from "./scenarios/guide.mjs";
+import { contextualGuideScenarios } from "./scenarios/contextualGuide.mjs";
 import { inkEditingScenarios } from "./scenarios/inkEditing.mjs";
 import { pdfLoadScenarios } from "./scenarios/pdfload.mjs";
 import { pdfTouchScenarios } from "./scenarios/pdfTouch.mjs";
@@ -96,6 +97,7 @@ try {
   const pdf = await pdfScenarios(env, notes);
   await inkScenarios(env);
   await guideScenarios(env);
+  await contextualGuideScenarios(env);
   await inkEditingScenarios(env);
   await pdfLoadScenarios(env);
   await pdfTouchScenarios(env);

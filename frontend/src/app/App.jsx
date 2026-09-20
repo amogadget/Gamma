@@ -4365,6 +4365,13 @@ function LibraryApp() {
   // Open a PDF by URL: resolve it, find or create its page, open that page.
   async function openPdf(sourceUrl) {
     if (!sourceUrl || shareMode) return;
+    // Prefer the saved copy, including its notes and locally cached PDF.
+    // Re-resolving an arXiv link needlessly depends on the external source.
+    const existingId = findPageForUrl(sourceUrl, homeBlocks.filter((b) => pageAttachment(b)));
+    if (existingId) {
+      await openBlock(existingId);
+      return;
+    }
     setLoading(true);
     setStatus("Opening PDF...");
     // Visible from the moment Enter is pressed — resolve can take seconds.
@@ -4763,6 +4770,8 @@ function LibraryApp() {
       if (savedUi?.pdfScale) setPdfScale(savedUi.pdfScale);
       if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
+      // Emit for every successful open, including reopening the same paper.
+      guideEvents.emit("page.opened", { id: blockId });
       return openedPdfUrl;
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
@@ -4954,6 +4963,7 @@ function LibraryApp() {
     } else {
       window.history.replaceState({}, "", window.location.pathname);
     }
+    guideEvents.emit("home.opened");
   }
 
   function closeTab(id) {
@@ -5489,7 +5499,7 @@ function LibraryApp() {
     setBlocks(nextBlocks);
     // autosave effect will persist
     setStatus("Highlight saved.");
-    guideEvents.emit("highlight.created", { id: withId.id });
+    guideEvents.emit("highlight.created", { id: withId.id, kind: withId.position?.area ? "area" : "text" });
   }
 
   // --- Handwriting ----------------------------------------------------------
@@ -5953,12 +5963,36 @@ function LibraryApp() {
   // The first-run guide (docs/dev/onboarding.md): tours point at data-guide
   // anchors and advance on the events emitted below; never in the share view.
   const guide = useGuide({
+    services: {
+      findEquation: async () => {
+        const hits = await pdfSearchRef.current?.(/Attention\s*\(/i);
+        return hits?.[0] || null;
+      },
+      prepareNote: (text) => {
+        const flat = flattenBlocks(blocks);
+        const existing = flat.find((b) => b.properties?.guide_demo === "attention-note" && text.startsWith(b.content || ""));
+        const empty = [...flat].reverse().find((b) => b.properties?.highlight_id && !(b.content || "").trim());
+        const target = existing || empty;
+        const id = target?.id || makeId();
+        pendingFocusRef.current = id;
+        setNotesVisible(true);
+        setBlocks((prev) => target
+          ? updateBlockTree(prev, id, (b) => ({ ...b, editMode: true, properties: { ...b.properties, guide_demo: "attention-note" } }))
+          : [...prev, { id, content: "", children: [], editMode: true, properties: { guide_demo: "attention-note" } }]);
+        return id;
+      },
+    },
     enabled: !shareMode && wsReady && !!authUser?.user,
-    facts: { view: homeMode ? "home" : pageAttach ? "pdf" : "page", hasPdf: !!pageAttach, aiConfigured: !!aiProvider },
+    scope: authUser?.user || "",
+    facts: {
+      view: homeMode ? "home" : pageAttach ? "pdf" : "page", hasPdf: !!pageAttach,
+      aiConfigured: !!aiInfo?.enabled && !!aiInfo?.models?.length,
+      chatVisible: isPhone ? phonePanel === "chat" : !chatHidden && !collapsedWins.chat,
+      guideAvailable: !settingsOpen,
+    },
     onStepChange: () => setOpenPopover(null),
   });
   useEffect(() => { if (openPopover) guideEvents.emit("popover.opened", { name: openPopover }); }, [openPopover]);
-  useEffect(() => { if (focusedBlockId) guideEvents.emit("page.opened", { id: focusedBlockId }); }, [focusedBlockId]);
   // The props a folder card shares between the pinned strip and the library
   // grid: glyph, title, count, selection/drag/drop behaviour and the context
   // menu. Each site adds its own className, tip, time and extras.
@@ -6639,6 +6673,7 @@ function LibraryApp() {
                         ) : null)}
                         <input
                           className="categoryFrontmatterInput"
+                          data-guide="page.labelInput"
                           value={categoryInput}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -6696,6 +6731,7 @@ function LibraryApp() {
                   })() : (
                     <span
                       className={`categoryFrontmatterValue ${category ? "" : "empty"}`}
+                      data-guide="page.labels"
                       onClick={() => { setCategoryInput(""); setCategorySuggestionIdx(-1); setCategoryEditing(true); }}
                       title="Click to edit"
                     >
@@ -7810,6 +7846,7 @@ function LibraryApp() {
         <ChatDock
           {...common}
           session={chatSession}
+          onShowGuide={() => guide.start("ai-chat")}
           readOnly={shareMode}
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}

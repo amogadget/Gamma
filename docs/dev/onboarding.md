@@ -1,21 +1,104 @@
-# Onboarding: the first-run guide
+# Onboarding: tours and contextual guides
 
-**Status: the engine is built (build-order steps 1 to 3 plus a first tour);
-the welcome page, the `onboarding` pref, the invitation card, the checklist
-and hints are still design.** What exists: `frontend/src/guide/` (registry,
+**Status: the engine, first-run tour, contextual triggers, and AI chat guide
+are built.** The welcome page, synced `onboarding` pref, first-sign-in
+invitation, checklist and standalone hints are still design.
+What exists: `frontend/src/guide/` (registry,
 event bus, `useGuide`, `GuideOverlay`, `tours/firstRun.js`), six `data-guide`
 anchors in the topbar, one `popover.opened` emit point in App, the node test
 `tests/guide.test.mjs` and the e2e step `scenarios/guide.mjs`. A tour starts
 from `/?guide=first-run` or the account menu's **Take the tour**; the first
 tour is a welcome card, the add-a-paper demo, then the user's own highlight
-on that paper, the notes window, Share and a closing card; progress is a localStorage key
+on that paper, a typed note demonstration, an `llm` label demonstration, and a final spotlight
+on the Home button. Returning to the library emits `home.opened`, shows Done,
+and completes the tour automatically; Finish can also close it. Progress is a localStorage key
 (`gamma-guide:<tourId>`), not yet the synced pref. The seeded welcome page in
 `gamma/seed.py` is unchanged (guest workspaces only, hard-coded block tuples).
 
+## Contextual guides (implemented)
+
+The box demonstration searches the PDF for the attention equation, scrolls to
+its page, and frames the rendered equation at the current zoom. Other PDFs
+without that equation retain the generic rectangle demonstration. Notes type
+through the real CodeMirror editor into an empty highlight note (or a separate
+demo note), preserving existing writing and resuming incomplete demo text on
+replay. The label demo uses the normal label field, whose add operation avoids
+duplicates and preserves the paper's other labels.
+
+Contextual tours reuse the same steps, spotlight, and event bus. Their
+`trigger` determines **when to offer** help; the invitation appears without
+dimming the app or moving focus. **Show me** starts the walkthrough.
+**Not now**, the close button, and Escape dismiss the offer. An offer,
+started tour, dismissal, or completion suppresses automatic offers for that
+version. Bump `version` only when the changed guide merits another invitation.
+
+The AI chat guide lives in `frontend/src/guide/tours/aiChat.js`. It is offered
+on deliberate pointer or keyboard contact with the composer, after
+`/api/ai/models` reports AI enabled with at least one model. A stale remembered
+provider id does not qualify; the default provider works without an explicit
+provider selection. Contact before setup does not consume the opportunity.
+The guide covers context attachments and `@` mentions, model/effort/context
+settings, tool permissions, and a sample question. It never fills or clears a
+draft, changes preferences, or sends a request. The user's own send completes
+the final step; **Got it** also finishes. The chat header's **Chat guide** info
+button replays it, as does `/?guide=ai-chat` once its prerequisites hold.
+
+To configure another guide, add a data file to `guide/tours/` and register it
+in `tours/index.js`:
+
+```js
+export default {
+  id: "ai-chat",
+  version: 1,
+  title: "Chat with your library",
+  estimate: "1 min",
+  trigger: {
+    event: "chat.focused", // a registered event; optional `match` filters payload
+    requires: { aiConfigured: true, chatVisible: true, guideAvailable: true },
+  },
+  invitation: {
+    anchor: "chat.composer",
+    placement: "top",
+    title: "A little context. Better answers.",
+    body: "Your AI is ready. Take a quick look around.",
+  },
+  steps: [/* ordinary tour steps */],
+};
+```
+
+- **First eligible use:** set `trigger.event` plus any `requires`. Use
+  `match: { name: "search" }` with `popover.opened` to target a particular menu.
+- **Requirements becoming true:** omit `event`, for example
+  `trigger: { requires: { hasPdf: true } }`. The engine checks current facts
+  when the app renders. Include all conditions that keep the guide relevant;
+  these conditions also govern manual entry and continued visibility.
+- **Facts and events:** App supplies facts through `useGuide`; feature code
+  emits named events where the interaction happens. Register new event and
+  anchor ids in `events.js` and `anchors.js`. The guide engine does not import
+  feature state. Step-level `requires` is a snapshot taken when a run starts.
+- **One guide at a time:** interactions during a running tour or an existing
+  invitation are ignored, not queued. A later eligible interaction can offer
+  the other guide. Share views and unavailable sessions disable all guides.
+  Closing chat, opening Settings, or losing AI configuration removes its guide.
+- **Persistence:** contextual progress is stored per account and origin at
+  `gamma-guide:<encoded-account>:<tourId>`, shared across that account's
+  workspaces in this browser. It is not yet synced across devices. Storage
+  failures fall back to memory for the mounted app. The original manually
+  started tour retains its existing `gamma-guide:first-run` key.
+- **Presentation:** invitations use the tour's theme tokens and placement,
+  without a backdrop. On narrow screens, a card for a lower control moves
+  above it so the composer remains usable. Reduced-motion settings apply.
+
+`tests/guide.test.mjs` checks trigger eligibility, version suppression,
+account isolation, storage failures, and registry consistency. Browser
+scenarios in `tests/e2e/scenarios/contextualGuide.mjs` exercise desktop and
+phone offers, draft preservation, user-driven completion, replay, dismissal,
+prerequisites, version changes, and coexistence with the first-run tour.
+
 Three behaviours the build settled that the design below did not spell out:
-a step whose event fires is marked **done** (a check in the card, the primary
-button turns from Skip into Next) rather than jumping on, so whatever the user
-just opened stays open until they move on; the app closes any open popover on
+a step whose event fires is marked **Done** for 1.1 seconds, then automatically
+advances; its navigation buttons hide during that acknowledgement. Dismissing
+or changing steps cancels the pending advance. The app closes any open popover on
 every step change (`onStepChange` from `useGuide`); and **demo steps** exist
 (next section), which the design had not planned.
 
@@ -25,6 +108,27 @@ A step with `do: [...]` acts on the UI itself instead of asking the user to.
 The first tour's second step clicks Add, types the arXiv link of *Attention
 Is All You Need*, presses Enter, waits for the page to open and moves on; the
 user's first task is then a highlight on a real paper rather than a menu.
+If the link identifies a paper with a PDF already in the library, Add opens
+that saved copy without resolving or downloading the source again. Reopening
+the current paper also emits `page.opened`, so replaying the tour completes.
+
+Before the user's highlight step, `{previewHighlight: true}` demonstrates a
+drag across visible, rendered PDF text and points to the real colour palette.
+It clears its temporary selection on completion or dismissal, never saving a
+highlight or note. It waits for text to render, skips after 15 seconds on a
+scan without selectable text, and respects reduced motion. The text-layer
+and colour anchors may repeat; the preview chooses a visible passage and the
+first colour. The user's own highlight is still what completes the next step.
+For the demo paper it prefers the abstract sentence beginning “We propose a
+new simple network architecture”, matching across text spans and line breaks
+and scrolling the passage into view. Other papers use a visible passage.
+
+The next demo, `{previewArea: true}`, uses the PDF's real Ctrl+pointer-drag
+handler to draw a rectangle, with a Ctrl badge beside the animated cursor.
+It cancels the drag before release, so it creates no snapshot or annotation.
+The user then draws their own rectangle and chooses a colour. The
+`highlight.created` event carries `kind: "text" | "area"`, so each practice
+step completes only for its matching type.
 
 - Actions: `{click: anchor}`, `{type: anchor, text, speed?}`,
   `{press: "Enter", on?: anchor}`, `{waitFor: {event, match?}, timeout?}`,
@@ -37,8 +141,9 @@ user's first task is then a highlight on a real paper rather than a menu.
 - `{name}` in typed text is filled from the tour's `vars`, which the
   localStorage key `gamma-guide-vars` overrides — how the browser suite points
   the demo at an uploaded PDF instead of the network.
-- While actions run the sheet swallows every click (a stray click can't
-  derail the demo), the card shows "watch" and only Skip; Back is hidden.
+- From the demo's initial pause through its final action, the sheet swallows
+  clicks, the card shows "watch", and Back/Next are hidden. Arrow and Enter
+  navigation is paused too; the close button and Esc still leave the tour.
   After the actions, a step without `advanceOn` advances by itself, one with
   it hands over to the user. A failed action (anchor never appeared, event
   timed out) leaves the card up with "couldn't finish" and Skip; the tour is

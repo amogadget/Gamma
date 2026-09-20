@@ -18,7 +18,17 @@ export const ANCHORS = {
   "account.tour": { view: "any", open: ["header.account"], description: "Take the tour, in the account menu" },
   "add.urlInput": { view: "any", open: ["header.add"], description: "The Add popover's URL / arXiv / DOI box" },
   "pdf.viewer": { view: "pdf", description: "The PDF viewer" },
+  "pdf.page": { view: "pdf", description: "Each rendered PDF page; supports rectangle drags" },
+  "pdf.textLayer": { view: "pdf", description: "Selectable text on each rendered PDF page" },
+  "pdf.highlightColor": { view: "pdf", open: ["pdf.textLayer"], description: "The first colour in the text selection palette" },
   "dock.notes": { view: "page", description: "The Notes window" },
+  "notes.editor": { view: "page", open: ["dock.notes"], description: "The active note editor" },
+  "page.labels": { view: "page", description: "The paper's labels" },
+  "page.labelInput": { view: "page", open: ["page.labels"], description: "Add a label to this paper" },
+  "chat.composer": { view: "chat", description: "The message composer and Send button" },
+  "chat.context": { view: "chat", description: "Add attachments or library pages" },
+  "chat.settings": { view: "chat", description: "Chat model, reasoning, context and tool settings" },
+  "chat.tools": { view: "chat", description: "Enable or disable assistant tools" },
 };
 
 export const ATTR = "data-guide";

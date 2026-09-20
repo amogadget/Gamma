@@ -98,6 +98,22 @@
   z-index: 1;
 }
 .guideCursor.pressed svg { transform: scale(0.85); transform-origin: 4px 4px; transition: transform 90ms; }
+.guideCursor.dragging { transition: transform 40ms linear; }
+.guideModifier {
+  position: absolute;
+  top: 24px;
+  left: 10px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: 600 11px system-ui;
+}
+@media (prefers-reduced-motion: reduce) {
+  .guideCursor, .guideCursor.dragging, .guideDimFill { transition: none; }
+  .guideRing, .guideCard { animation: none; }
+}
 .guideTitle {
   font-size: 14px;
   font-weight: 600;
@@ -134,6 +150,9 @@
 .guideDots i.done { background: var(--accent-bg); }
 .guideDots i.on { background: var(--accent); width: 14px; border-radius: 3px; }
 .guideBtns { display: inline-flex; gap: 6px; }
+.guideInvitation .guideCard { border-top: 2px solid var(--accent); gap: 8px; }
+.guideInvitation .guideStep { color: var(--accent); }
+.guideInvitation .guideTitle { font-size: 16px; }
 
 /* Narrow screens: the card becomes a bottom sheet; the spotlight stays. */
 @media (max-width: 640px) {
@@ -145,4 +164,9 @@
     width: auto !important;
   }
   .guideCardCentered { width: min(340px, calc(100vw - 32px)); }
+  /* Keep lower controls, especially the composer, usable during practice. */
+  .guideCard.guideCardAbove {
+    top: calc(12px + env(safe-area-inset-top)) !important;
+    bottom: auto;
+  }
 }

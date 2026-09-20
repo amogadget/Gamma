@@ -5,10 +5,12 @@
 export const EVENTS = [
   "popover.opened",   // {name} — a topbar popover opened: add, search, user, share, downloads
   "page.opened",      // {id}
-  "highlight.created",
+  "home.opened",      // returned to the library
+  "highlight.created", // {id, kind: "text" | "area"}
   "block.created",
   "block.indented",
   "chat.sent",
+  "chat.focused",     // deliberate pointer or keyboard contact with the composer
   "settings.opened",  // {pane}
 ];
 
