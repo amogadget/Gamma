@@ -98,7 +98,7 @@ that raises is logged and never breaks the write.
 per-page log lacks: the pages whose root block was stamped after a cursor,
 each with its latest `seq`, and the `deleted_pages` tombstones written after
 it, as one time-ordered stream. It exists for anything that keeps a copy of
-a workspace in step — the planned desktop mirror, a backup merge — so it
+a workspace in step (a mirror, [mirror.md](mirror.md); a backup merge) so it
 can find out *which* pages to look at without walking the library; what
 actually changed on a page is still its op log (`seq`,
 `GET /pages/{id}/ops?since=`), and a page whose log no longer reaches back

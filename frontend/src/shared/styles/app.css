@@ -2325,21 +2325,21 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
    for conflicts, a dot (accent: local edits not pushed, green: up to
    date, red: a problem); the words are its tooltip. */
 .topbar .iconBtn.mirrorPill { position: relative; }
-.mirrorPill.warn svg, .mirrorPill.error svg { color: var(--warning, #c47a10); }
+.mirrorPill.warn svg { color: #d9822b; }
 .mirrorPill.error svg { color: var(--danger); }
 .mirrorPill.busy svg, .mirrorSpin svg { animation: mirrorSpin 1.2s linear infinite; }
 @keyframes mirrorSpin { to { transform: rotate(360deg); } }
 .mirrorPillDot { position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); box-shadow: 0 0 0 2px var(--bg-elevated); pointer-events: none; }
 .mirrorPillDot.ok { background: var(--ok); }
 .mirrorPillDot.pending { background: var(--accent); }
-.mirrorPillDot.warn { background: var(--warning, #c47a10); }
+.mirrorPillDot.warn { background: #d9822b; }
 .mirrorPillDot.error { background: var(--danger); }
-.mirrorPillBadge { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; font-size: 9.5px; font-weight: 700; line-height: 1; color: #fff; background: var(--warning, #c47a10); display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-elevated); pointer-events: none; }
+.mirrorPillBadge { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; font-size: 9.5px; font-weight: 700; line-height: 1; color: #fff; background: #d9822b; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-elevated); pointer-events: none; }
 .mirrorPopBtns { display: inline-flex; gap: 2px; flex-shrink: 0; }
 .mirrorState.pending > svg { color: var(--accent); }
 .mirrorState.error > svg { color: var(--danger); }
 .mirrorStateLine .uiBtn { margin-left: auto; }
-.mirrorConflictBtn { color: var(--warning, #c47a10); }
+.mirrorConflictBtn { color: #d9822b; }
 /* A log row: the row itself opens its changes, the arrow opens the page. */
 .mirrorPopItemRow { display: flex; align-items: center; gap: 2px; }
 .mirrorPopItemRow .popoverItem { flex: 1; min-width: 0; }
@@ -2352,7 +2352,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorChangeGlyph { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; width: 10px; flex-shrink: 0; font-weight: 700; }
 .mirrorChange.add .mirrorChangeGlyph { color: var(--ok); }
 .mirrorChange.del .mirrorChangeGlyph { color: var(--danger); }
-.mirrorChange.mod .mirrorChangeGlyph { color: var(--warning, #c47a10); }
+.mirrorChange.mod .mirrorChangeGlyph { color: #d9822b; }
 .mirrorChangeText { white-space: pre-wrap; word-break: break-word; min-width: 0; border-radius: 3px; padding: 0 3px; max-height: 96px; overflow: auto; }
 .mirrorChange.add .mirrorChangeText { background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .mirrorChange.del .mirrorChangeText { background: color-mix(in srgb, var(--danger) 10%, transparent); text-decoration: line-through; color: var(--text-muted); }
@@ -2372,9 +2372,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorState { display: flex; align-items: flex-start; gap: 7px; padding: 4px 4px 8px; font-size: 13px; color: var(--text-primary); min-width: 0; }
 .mirrorState > svg { flex-shrink: 0; margin-top: 2px; }
 .mirrorState.ok > svg { color: var(--accent-dark); }
-.mirrorState.warn > svg { color: var(--warning, #c47a10); }
+.mirrorState.warn > svg { color: #d9822b; }
 .mirrorState.busy > svg { animation: mirrorSpin 1.2s linear infinite; }
-.mirrorState > .popoverHint { padding: 0; margin-left: auto; max-width: 45%; }
 .mirrorStateBody { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 .mirrorStateLine { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .mirrorStateLine .popoverHint { padding: 0; flex: 1; }
@@ -2385,11 +2384,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorFile > svg { flex-shrink: 0; }
 .mirrorFile .mirrorEllipsis { flex: 1; min-width: 0; }
 .mirrorFileBytes { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.mirrorPopActions { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 4px 8px; }
 /* The settings view: icon + control rows, a confirm strip, the action chips. */
 .mirrorSetActions { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 4px; }
 .mirrorConfirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 4px; font-size: 12px; color: var(--text-secondary); }
-.mirrorConfirm > svg { color: var(--warning, #c47a10); flex-shrink: 0; }
+.mirrorConfirm > svg { color: #d9822b; flex-shrink: 0; }
 .mirrorConfirmBtns { display: inline-flex; gap: 6px; margin-left: auto; }
 .mirrorMore { font-size: 12px; color: var(--text-muted); }
 /* The merge chip on a block row and the conflict card (MergeResolver.jsx):
@@ -2397,12 +2395,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
    kind line (with ‹ n / N › on a row chip), the versions (ours · theirs
    side by side, the merged text under them), each with its Use / Keep. */
 .mergeChipWrap { position: absolute; right: 4px; top: 2px; z-index: 4; }
-.mergeChip { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--warning, #c47a10); background: var(--bg-elevated); color: var(--warning, #c47a10); cursor: pointer; padding: 0; }
-.mergeChip:hover, .mergeChip.on { background: var(--warning, #c47a10); color: #fff; }
+.mergeChip { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #d9822b; background: var(--bg-elevated); color: #d9822b; cursor: pointer; padding: 0; }
+.mergeChip:hover, .mergeChip.on { background: #d9822b; color: #fff; }
 .mergePopover { position: absolute; right: 0; top: 22px; width: 480px; max-width: calc(100vw - 24px); z-index: 30; cursor: default; text-align: left; font-weight: normal; }
 .mergeCard { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .mergeHead { display: flex; align-items: flex-start; gap: 8px; padding: 2px 4px 4px; }
-.mergeKindIcon { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 8px; background: color-mix(in srgb, var(--warning, #c47a10) 14%, transparent); color: var(--warning, #c47a10); flex-shrink: 0; }
+.mergeKindIcon { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 8px; background: color-mix(in srgb, #d9822b 14%, transparent); color: #d9822b; flex-shrink: 0; }
 .mergeHeadText { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .mergeHeadText .popoverTitle, .mergeHeadText .popoverHint { padding: 0; }
 .mergePage { font-weight: 500; color: var(--text-muted); }
@@ -2412,25 +2410,24 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mergeVersions.one, .mirrorPopover .mergeVersions { grid-template-columns: 1fr; }
 .mergeVersions .mergeVersion.result { grid-column: 1 / -1; }
 @media (max-width: 560px) { .mergeVersions { grid-template-columns: 1fr; } }
-.mergeVersion { display: flex; flex-direction: column; gap: 4px; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px; background: var(--bg-block); }
+.mergeVersion { display: flex; flex-direction: column; gap: 4px; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px; background: var(--bg-block); cursor: pointer; }
 .mergeVersion.current { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .mergeVersionHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .mergeVersionHead .uiTag { margin-left: auto; }
 .mergeSide { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; color: var(--text-primary); flex-shrink: 0; }
 .mergeSide.mine { background: color-mix(in srgb, var(--accent) 22%, transparent); }
-.mergeSide.theirs { background: color-mix(in srgb, var(--warning, #c47a10) 24%, transparent); }
+.mergeSide.theirs { background: color-mix(in srgb, #d9822b 24%, transparent); }
 .mergeSide.result { background: var(--bg-hover); }
 .mergeSideHint { padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .mergeText { font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--text-primary); max-height: 180px; overflow: auto; }
 .mergeText mark { border-radius: 3px; padding: 0 1px; color: inherit; }
 mark.merge-mine { background: color-mix(in srgb, var(--accent) 28%, transparent); }
-mark.merge-theirs { background: color-mix(in srgb, var(--warning, #c47a10) 30%, transparent); }
+mark.merge-theirs { background: color-mix(in srgb, #d9822b 30%, transparent); }
 mark.merge-both { background: var(--bg-hover); text-decoration: underline dotted; }
 mark.merge-add { background: color-mix(in srgb, var(--ok) 25%, transparent); }
 mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent); text-decoration: line-through; color: var(--text-muted); }
 .mergeActions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; padding: 4px 4px 2px; }
 .mergeActionsHint { padding: 0; flex: 1; text-align: right; min-width: 0; }
-.mergeVersion { cursor: pointer; }
 .mergeVersion.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .mergePick { margin: 0 2px 0 0; accent-color: var(--accent); flex-shrink: 0; cursor: pointer; }
 /* Lists of cards (the pill's conflicts view, Settings' conflicts). */
@@ -2438,21 +2435,20 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
 .mirrorCards .mergeCard { padding: 8px; border-radius: 10px; border: 1px solid var(--border-subtle); }
 /* A clone row's avatar in Settings carries its state. */
 .mirrorAvatar.ok { color: var(--ok); }
-.mirrorAvatar.warn { color: var(--warning, #c47a10); }
+.mirrorAvatar.warn { color: #d9822b; }
 .mirrorAvatar.busy svg { animation: mirrorSpin 1.2s linear infinite; }
-.uiTag.warn { color: var(--warning, #c47a10); border-color: color-mix(in srgb, var(--warning, #c47a10) 45%, transparent); }
+.uiTag.warn { color: #d9822b; border-color: color-mix(in srgb, #d9822b 45%, transparent); }
 .uiTag.pending { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .mirrorPopLog { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
 /* out-specifies the topbar's popoverItem rule, which centres its content */
 .mirrorPopover .mirrorPopLog .popoverItem.mirrorPopItem { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 1px; width: 100%; }
-.mirrorPopItem:disabled { opacity: 0.6; cursor: default; }
 .mirrorPopItemTitle { font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .mirrorPopItemMeta { font-size: 11px; color: var(--text-dim); display: inline-flex; gap: 8px; align-items: baseline; }
 /* git-style block counts: +added −removed ~changed */
 .mirrorDiff { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; display: inline-flex; gap: 5px; white-space: nowrap; }
 .mirrorDiff .add { color: var(--ok); }
 .mirrorDiff .del { color: var(--danger); }
-.mirrorDiff .mod { color: var(--warning, #c47a10); }
+.mirrorDiff .mod { color: #d9822b; }
 .popoverHint { font-size: 11px; color: var(--text-muted); line-height: 1.45; padding: 0 4px; }
 .popoverSection {
   font-size: 10px;

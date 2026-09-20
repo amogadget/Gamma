@@ -124,6 +124,7 @@ a visitor without an account) in its top bar.
 ---|---|
 | `app/App.jsx` | routing, block-tree editor state, docks, the page's live session glue, AI chat glue (decomposition in progress) |
 | `collaboration/usePageCollab.js`, `shared/model/blockOps.js`, `collaboration/Presence.jsx` | the live session (ops out, ops + presence in), the pure tree diff/apply, the avatar stack / row chips ([collab.md](collab.md)) |
+| `collaboration/MirrorPopover.jsx`, `collaboration/MergeResolver.jsx`, `settings/SettingsMirrors.jsx` | a clone's sync pill with its settings and conflicts views, the conflict card + the row chip, Settings → Workspaces → Clones ([mirror.md](mirror.md)) |
 | `app/prefs.js` | every localStorage preference (`useAppPrefs`) |
 | `settings/SettingsDialog.jsx` + the `settings/Settings*.jsx` panes | the Settings dialog (`SettingsKit.jsx` holds the shared primitives incl. `AccountPicker`, the search-box-over-account-rows people picker, and `LogBox`) |
 | `settings/SettingsAppearance.jsx`, `settings/SettingsLibraryDisplay.jsx` | the Appearance pane (theme cards + PDF sample) and Library › Display (a live `PageCard` beside its switches) ([settings.md](settings.md)) |

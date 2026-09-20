@@ -401,14 +401,15 @@ def commit_ops(ws: str, page_id: str, ops: list[dict], *, actor: str, client: st
         return after_commit(ws, conn, result)
 
 
-def delete_page(ws: str, conn, page_id: str, *, actor: str) -> dict:
+def delete_page(ws: str, conn, page_id: str, *, actor: str, client: str = "") -> dict:
     """Delete a page: the subtree, its op log, then a ``deleted_pages``
     tombstone (so a copy of the workspace can later tell a deleted page
     from one it never had). Commits, sweeps orphan uploads, purges the
     page's data.db rows, and tells the page's room to reload (which
     surfaces the 404). Returns ``{deleted_ids, removed_uploads}``. Pages
     are not blocks of any page, so this is the one writer outside the op
-    batches — every other block write goes through ``apply_ops``."""
+    batches — every other block write goes through ``apply_ops``.
+    ``client`` names the writer to the commit listeners like a batch's."""
     deleted_ids = [r[0] for r in fetch_subtree(conn, page_id)]
     delete_subtree(conn, page_id)
     conn.execute("DELETE FROM page_ops WHERE page_id = ?", (page_id,))
@@ -418,7 +419,7 @@ def delete_page(ws: str, conn, page_id: str, *, actor: str) -> dict:
     removed = cleanup_orphan_uploads(conn, ws_uploads_dir(ws))
     block_index.purge_page_data(ws, conn, deleted_ids)
     collab.publish_reload(ws, page_id)
-    _notify(ws, "sync" if actor == "mirror" else "")
+    _notify(ws, client)
     return {"deleted_ids": deleted_ids, "removed_uploads": removed}
 
 

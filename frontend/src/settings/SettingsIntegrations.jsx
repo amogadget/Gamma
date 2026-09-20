@@ -204,7 +204,7 @@ export function IntegrationSettings({ workspaceId }) {
         </div>
       </Row>
       <Row label="Scope" hint={scope === "write"
-        ? "Read and write: what an offline copy on another Gamma (Settings → Workspaces → Offline copies there) signs in with. Assistants only need read."
+        ? "Read and write: what an offline copy on another Gamma (Settings → Workspaces → Clones there) signs in with. Assistants only need read."
         : "Read-only: assistants. Choose “Read and write” for an offline copy of this workspace on another Gamma."}>
         <Segmented value={scope} onChange={setScope} options={[["read", "Read-only"], ["write", "Read and write"]]} />
       </Row>

@@ -69,10 +69,12 @@ def list_mirrors(request: Request):
 
 @router.post("", status_code=201)
 def create_mirror(payload: MirrorCreate, request: Request):
-    """Start mirroring: ``{remote_url, token, name?, mode?}`` → the mirror.
-    The token is a write-scope integration token made on the remote
-    (Settings → Integrations there); a read token, or a viewer's, gives a
-    pull-only copy. The first fill runs in the background."""
+    """Start mirroring: ``{remote_url, token, name?, mode?, workspace_id?,
+    adopt?}`` → the mirror. The token is a write-scope integration token
+    made on the remote (Settings → Integrations there); a read token, or a
+    viewer's, gives a pull-only copy. ``workspace_id`` links an existing
+    workspace of the caller's under the ``adopt`` policy. The first fill
+    runs in the background."""
     user = _me(request)
     try:
         mirror = sync_engine.create_mirror(user, payload.remote_url, payload.token, name=payload.name,
@@ -160,7 +162,8 @@ def delete_mirror(ws: str, request: Request):
 @router.get("/{ws}/log")
 def sync_log(ws: str, request: Request, limit: int = 50):
     """What the last rounds did, newest first: ``{changes: [{id, at,
-    page_id, title, action, exists}]}``."""
+    page_id, title, action, stats, changes, exists}]}`` (``stats`` the
+    block counts, ``changes`` what each edit did block by block)."""
     _mine(request, ws)
     return {"changes": sync_engine.list_log(ws, limit)}
 

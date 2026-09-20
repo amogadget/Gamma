@@ -436,24 +436,6 @@ def _v13_sync_conflict_base(conn: sqlite3.Connection) -> None:
             pdb.commit()
 
 
-def _v13_sync_conflict_base(conn: sqlite3.Connection) -> None:
-    """Every workspace's ``sync_conflicts`` gains ``base``: the text a merged
-    block had before either side edited it, so the resolver can show what
-    each side changed (rows from before carry none and show as before)."""
-    if not config.WORKSPACES_DIR.is_dir():
-        return
-    for ws_root in sorted(config.WORKSPACES_DIR.iterdir()):
-        pages_db = ws_root / "pages.db"
-        if not ws_root.is_dir() or not pages_db.is_file():
-            continue
-        with closing(sqlite3.connect(str(pages_db))) as pdb:
-            for stmt in PAGES_SCHEMA:
-                pdb.execute(stmt)
-            if "base" not in _columns(pdb, "sync_conflicts"):
-                pdb.execute("ALTER TABLE sync_conflicts ADD COLUMN base TEXT NOT NULL DEFAULT ''")
-            pdb.commit()
-
-
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),

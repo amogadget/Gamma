@@ -11,6 +11,7 @@
 // Rows from before the base was kept (and diverged blocks, which have
 // none) show the two texts against each other instead.
 import React from "react";
+import { API, apiJson } from "../shared/lib/utils";
 import {
   AlertCircleIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon,
   HardDriveIcon, MergeIcon, ServerIcon,
@@ -232,6 +233,35 @@ function Decision({ conflict }) {
       <Version side={ours ? "mine" : "theirs"} parts={[{ text, tag: "same" }]} hint={ours ? "kept and pushed back" : "pulled back"} />
     </div>
   );
+}
+
+// A mirror's open conflicts and their resolution, for the lists (the sync
+// pill's review view, Settings → Workspaces → Clones): `[items, busy,
+// resolve]` — `items` null while loading; `resolve(conflict, choice)` posts
+// the choice, drops the row and raises `gamma:mirror` so the page's chips
+// and the pill follow; `onError(message)` hears a failed post.
+export function useConflicts(wsId, { onError } = {}) {
+  const [items, setItems] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    setItems(null);
+    apiJson(`${API}/mirrors/${encodeURIComponent(wsId)}/conflicts`).then((d) => setItems(d.conflicts || [])).catch(() => setItems([]));
+  }, [wsId]);
+  const resolve = React.useCallback(async (c, choice) => {
+    setBusy(true);
+    try {
+      await apiJson(`${API}/mirrors/${encodeURIComponent(wsId)}/conflicts/${c.id}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }),
+      });
+      setItems((prev) => (prev || []).filter((x) => x.id !== c.id));
+    } catch (err) {
+      onError?.(err.message);
+    } finally {
+      setBusy(false);
+      window.dispatchEvent(new CustomEvent("gamma:mirror"));
+    }
+  }, [wsId, onError]);
+  return [items, busy, resolve];
 }
 
 // The card. `onResolve(conflict, choice)` with choice keep | mine | theirs;
