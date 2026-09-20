@@ -25,7 +25,7 @@
     "tools/branding/mark.mjs": "058db1f84fb4faa93e179f6b565eeb015b0598efe8dbd861c9e946317ef961e3",
     "tools/branding/render.mjs": "1a28eaead43ccd8ecf96e07b0b1b39b0c10b73c0ece25eba4476b5a93c5f2b92",
     "tools/branding/runtime.mjs": "7c1ba52f4b42922a9384e860132311affe5887370430399423311d8bca975836",
-    "tools/branding/store-layouts.mjs": "5c8cb3841cbec2a5ee9a3c30a6a81a863fe16f0b64e88af99763aac516e9a915",
+    "tools/branding/store-layouts.mjs": "fe18376358075cd3ace68a155865c4b38ac20664b926c2491796169fbc4f3a23",
     "tools/branding/svg-source.mjs": "5b4843f96d03859e4f79b7f1ad8489b9e0e89507ab4636fe25e9ce55aa9fc020"
   },
   "outputs": {
@@ -639,7 +639,7 @@
         16,
         16
       ],
-      "sha256": "921de3ab9a50a537b84490e127f5e74358f1f5a35d1f30e7137950cda5faa0e5"
+      "sha256": "f6d64b3e6f965cd1eb8062490e8ca654bc368e8ec211109b37ab1c91d1928e6f"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-20.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -657,7 +657,7 @@
         20,
         20
       ],
-      "sha256": "e950547f568fbe615a330b0b0eed252263ba9817331b15bc61d8c329dce17158"
+      "sha256": "56a9aaee361e74528e5802050262fe1edb1d0c657da095dbdd59f24fb15bba70"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-24.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -675,7 +675,7 @@
         24,
         24
       ],
-      "sha256": "4adeac65b657ddd090bf1b0f91b1d5dcee700849b5836c1424523c13cbece367"
+      "sha256": "fbbb4438a9d40ea41e0dfe3e19717e1a15f3131848cb90993fc1898cae6f3116"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-30.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -693,7 +693,7 @@
         30,
         30
       ],
-      "sha256": "023149d0fb6b834626ab30efd3b624ba8ffc2f30682f577ea9ebcc93f414c4cf"
+      "sha256": "fa896420d1952fa3026102245fdd9dd3b723f0167eb8f08e467f0a13c31c366a"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-32.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -711,7 +711,7 @@
         32,
         32
       ],
-      "sha256": "3f33eac2413d25688795e001fe9112a0b6ab927bde5d7565951c03c78ce31992"
+      "sha256": "b2ce63ce5436229e9b1be5e839a5a5968d42c49a64191db49233a7abe7b997ab"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-36.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -729,7 +729,7 @@
         36,
         36
       ],
-      "sha256": "1699ce307a483be6a03249529c4e5b8df3f6452de7974a226d011d189a232a9f"
+      "sha256": "ce853cff6e8688778085bfc0fa949145dbc0f7ec195282bab8c5513adf8f9368"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-40.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -747,7 +747,7 @@
         40,
         40
       ],
-      "sha256": "f5189db49ad561f1fbc19d168c66c1bc66fd2c264b65ff7722f5e0fb9c516080"
+      "sha256": "f6051b835c8410906a865cedbd90fcf56567efc81f507e87b11a88c831d2cce5"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-48.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -765,7 +765,7 @@
         48,
         48
       ],
-      "sha256": "110b3ab91a647926e7bcfa99a5439cefabb64e16b722561e26d0845a78ffb894"
+      "sha256": "9aec153f069fba8af5bd261382da2dcc8a3cbc35c61cb3757680a4e3cbadfc91"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-64.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -783,7 +783,7 @@
         64,
         64
       ],
-      "sha256": "5fdc7ff9f9926c3ce169e9c5d2582220099b7f0e3b489da8eae9550168685cf0"
+      "sha256": "16104632bd3321b07c89f357146c927afe644d0344f74b48089daa4c89248eb6"
     },
     "desktop/assets/appx/Square44x44Logo.targetsize-256.png": {
       "source": "tools/branding/store-layouts.mjs",
@@ -801,7 +801,7 @@
         256,
         256
       ],
-      "sha256": "c25fe111e8da6099321c180c6d52a229e7f9be186424cef9d28b2ed25a7a1334"
+      "sha256": "d93fa9cc06cc8ac29c04115984147ab4ce2b731dfca532145fd1bd61e0b95f99"
     },
     "docs/assets/branding/gamma-hero-light.png": {
       "source": "docs/assets/branding/gamma-hero-light.svg",

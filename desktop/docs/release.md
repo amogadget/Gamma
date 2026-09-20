@@ -137,7 +137,11 @@ Start list, plus `targetsize-N` and `_altform-unplated` variants),
 `StoreLogo`, `SplashScreen`, each with `.scale-125/150/200/400` variants
 (their presence makes electron-builder run `makepri`, so Windows picks a
 sharp one per DPI). The tiles are the bare mark on a transparent plate,
-coloured by `backgroundColor`; the 44 px logo is the rounded app icon.
+coloured by `backgroundColor`; the 44 px logo is the rounded app icon, and
+its `_altform-unplated` variants (what Windows 11 shows in Start, the
+taskbar and Alt+Tab) are that same rounded tile, not a bare mark — Windows
+paints nothing behind an unplated asset, so the mark alone would lose its
+cream glyph on a light Start menu.
 `npm run store-art` renders all of them from the logo mark (same script as
 the listing art below). **The folder must exist**: without it
 electron-builder ships its own `SampleAppx.*` placeholders and

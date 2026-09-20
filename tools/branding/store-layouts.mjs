@@ -51,8 +51,11 @@ function plateSvg(w, h, frac) {
 // electron-builder run makepri so Windows picks the sharp one per DPI; the
 // unqualified file is the scale-100 fallback. The 44px logo and its
 // targetsize variants are the icon Windows shows in the taskbar, Start list
-// and Alt+Tab, so they are the same rounded tile as assets/icon.png;
-// `_altform-unplated` is that icon without the colored plate.
+// and Alt+Tab, so they are the same rounded tile as assets/icon.png.
+// `_altform-unplated` is the variant Windows 11 actually picks there, and it
+// gets the SAME rounded tile rather than a bare mark: without the plate the
+// cream glyph is invisible on a light Start menu, and Windows paints no
+// BackgroundColor behind an unplated asset.
 const APPX_JOBS = [];
 const scaled = (name, w, h, make) => {
   APPX_JOBS.push([`${name}.png`, w, h, make(w, h)]);
@@ -71,7 +74,7 @@ scaled('LargeTile', 310, 310, (w, h) => plateSvg(w, h, 0.45));
 scaled('SplashScreen', 620, 300, (w, h) => plateSvg(w, h, 0.5));
 for (const px of [16, 20, 24, 30, 32, 36, 40, 48, 64, 256]) {
   APPX_JOBS.push([`Square44x44Logo.targetsize-${px}.png`, px, px, tileSvg(px)]);
-  APPX_JOBS.push([`Square44x44Logo.targetsize-${px}_altform-unplated.png`, px, px, markSvg(px, { bare: true })]);
+  APPX_JOBS.push([`Square44x44Logo.targetsize-${px}_altform-unplated.png`, px, px, tileSvg(px)]);
 }
 
 const JOBS = [
