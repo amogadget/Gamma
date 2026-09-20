@@ -156,6 +156,7 @@ def test_same_block_edits_merge_by_span_and_are_reported():
     conflicts = local.client.get(f"/api/mirrors/{local.ws}/conflicts").json()["conflicts"]
     assert [(c["kind"], c["block_id"], c["mine"], c["theirs"], c["result"]) for c in conflicts] == [
         ("merged", "s1", "alpha beta gamma DELTA", "ALPHA beta gamma delta", merged)]
+    assert conflicts[0]["base"] == "alpha beta gamma delta"  # so the resolver can show what each side changed
     # choosing "mine" writes it back as an ordinary edit, which the next round pushes
     r = local.client.post(f"/api/mirrors/{local.ws}/conflicts/{conflicts[0]['id']}", json={"choice": "mine"})
     assert r.status_code == 200
@@ -289,6 +290,11 @@ def test_the_sync_log_names_what_a_round_did():
     assert by[("created here", "Logged")] == {"add": 1, "del": 0, "mod": 0}
     assert by[("pushed", "Logged")] == {"add": 0, "del": 0, "mod": 1}
     assert by[("created here", "Gone")] == {"add": 0, "del": 0, "mod": 0}
+    # and what each edit did, block by block
+    changes = {(c["action"], c["title"]): c["changes"] for c in log}
+    assert changes[("pushed", "Logged")] == [{"k": "mod", "id": "lg1", "old": "one", "text": "one (local)"}]
+    assert changes[("created here", "Logged")] == [{"k": "add", "id": "lg1", "text": "one"}]
+    assert changes[("created here", "Gone")] == []
     info = local.client.get(f"/api/mirrors/{local.ws}").json()
     assert info["conflicts_open"] == 0 and info["status"]["last_sync"]
     # a subtree deleted on the original counts every block it took, and the round adds the counts up
@@ -300,6 +306,8 @@ def test_the_sync_log_names_what_a_round_did():
     st = _sync(local)
     log = local.client.get(f"/api/mirrors/{local.ws}/log?limit=1").json()["changes"]
     assert (log[0]["action"], log[0]["stats"]) == ("pulled", {"add": 1, "del": 2, "mod": 0})
+    assert sorted((c["k"], c["id"], c["text"]) for c in log[0]["changes"]) == [
+        ("add", "lg4", "new"), ("del", "lg2", "parent"), ("del", "lg3", "child")]
     assert (st["blocks_added"], st["blocks_removed"], st["blocks_changed"]) == (1, 2, 0)
 
 
@@ -514,3 +522,16 @@ def test_stop_mirroring_keeps_the_workspace():
     assert local.client.get(f"/api/mirrors/{local.ws}").status_code == 404
     assert page["id"] in local.pages()
     assert local.client.post(f"/api/mirrors/{local.ws}/sync?wait=1").status_code == 404
+
+
+def test_pending_local_edits_are_reported_until_pushed():
+    remote, local, _ = _pair()
+    page = remote.page("Pending")
+    remote.insert(page["id"], "pd1", "text")
+    _sync(local)
+    assert local.client.get(f"/api/mirrors/{local.ws}").json()["pending_local"] is False
+    local.ops(page["id"], [{"op": "set", "id": "pd1", "content": "text (local)"}])
+    assert local.client.get(f"/api/mirrors/{local.ws}").json()["pending_local"] is True
+    _sync(local)
+    assert local.client.get(f"/api/mirrors/{local.ws}").json()["pending_local"] is False
+    assert remote.texts(page["id"])["pd1"] == "text (local)"

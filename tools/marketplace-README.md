@@ -47,9 +47,10 @@ moving the source can break plugin discovery even when the plugin is cached.
 
 Open the desktop Plugins Directory, select **Gamma PDF**, and install the plugin.
 Start a new chat. Installing the workflow alone does not connect your library.
-Mention Gamma PDF with @ and ask "Let me choose a paper". An MCP Apps-capable
-client shows a searchable picker; other clients receive a text list. The picker
-requires the updated Gamma backend and stays in the authorized workspace.
+Paste a Gamma page or share link with your question. In Gamma, use **Copy for
+assistant** in the page menu to include your reading position, or in a note or
+highlight menu to include that passage. The assistant reads it through your
+authorized workspace connection.
 This package contains no credentials and does not publish a public directory listing.
 
 ## Publish this marketplace on GitHub

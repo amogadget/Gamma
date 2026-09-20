@@ -8,9 +8,9 @@ servers, and connecting Codex does not invoke Gamma's AI provider.
 
 | File | Owns |
 |---|---|
-| `gamma/mcp_server.py` | the `/mcp` transport (official Python MCP SDK), the four read tools plus the two picker tools |
+| `gamma/mcp_server.py` | the `/mcp` transport (official Python MCP SDK), the four library read tools plus link reading |
 | `gamma/mcp_oauth.py` | discovery, dynamic registration, PKCE authorization and token exchange, the consent API (`/api/integrations/oauth/*`), `public_base` |
-| `gamma/mcp_picker.py` + `mcp_paper_picker.html` | the sandboxed MCP-Apps paper picker and its text fallback |
+| `gamma/mcp_links.py` | local page/block/share link resolution within the connected workspace |
 | `gamma/integrations.py` | integration tokens (`integration_tokens` table, hashes only) and their resolution |
 | `gamma/server_settings.py` | the admin-confirmed public URL and the MCP host allowlist |
 | `gamma/routers/integrations.py` | the session-only token management API |
@@ -108,51 +108,30 @@ Ask Codex to find a page, search a topic, or summarize notes. Tools available:
 | `search_library` | Full-text note and PDF matches, with source locations |
 | `read_page` | Notes, highlights, properties, and windowed PDF text |
 | `read_block` | One block/subtree or a page's nested note outline |
-| `show_paper_picker` | Interactive title search and paper selection, with a text fallback |
-| `search_paper_choices` | Picker pagination/search through the host bridge (app visibility) |
+| `read_gamma_link` | Resolve and read a page, block, or share URL, including PDF page context |
 
-### Choose a paper inside ChatGPT
+### Send a page to either assistant
 
-Install the Gamma PDF plugin, keep its MCP connection enabled, and start a new
-chat. Mention the plugin with `@` and ask **"Let me choose a paper"**. The
-`show_paper_picker` tool opens a searchable list in clients that render MCP Apps.
-Select a paper, optionally type a question, then click **Use this paper** or
-**Ask about this paper**. This sends a short message containing the title and
-Gamma URL (with exact page/workspace IDs), plus your question if provided.
-The picker collapses after sending; **Choose another paper** reopens it.
-The assistant reads the selected page through `read_page`. If you already know
-the title, simply ask **"Use Gamma to explain [paper title]"** to skip the picker.
+Paste a Gamma page, block, or share URL with your question. `read_gamma_link`
+validates the server and workspace, resolves the reference locally, and reads the
+page through the same dispatcher as the other read tools. A block link also reads
+that block; `pdf_page` starts the PDF excerpt at that physical page. A URL's
+optional `quote` is returned as selected context, not treated as an instruction.
+The response includes stable IDs and a canonical URL for subsequent reads.
 
-The picker searches titles (including notes pages), shows 20 results at a time,
-and stays inside the connection's authorized workspace. Choosing a paper does
-not change Gamma's current workspace or grant additional access. Duplicate
-titles are distinguished by page ID. This is an in-conversation picker, not
-individual-paper autocomplete in ChatGPT's native `@` menu.
+Copy the page URL directly from the browser's address bar, or use an existing
+block or share link. The assistant keeps that reference as context until another
+is supplied; it does not track the user's active tab or PDF scroll position.
 
-The server supplies `ui://gamma/paper-picker-v1.html` as an authenticated MCP
-resource with MIME type `text/html;profile=mcp-app`. It is a self-contained,
-sandboxed component with no external scripts or network access. Search uses
-host-proxied `tools/call`; selection uses `ui/message` with a content-block array.
-Gamma's existing icon is bundled with the plugin, MCP metadata, and picker;
-whether the tool card displays the supplied icon depends on the host.
-Tokens are never embedded
-in the HTML. The UI is served by Gamma, so updating the skills-only plugin does
-not replace the server's picker code.
+Links never grant extra MCP access. Share tokens resolve only inside the already
+authorized workspace, including restricted shares whose workspace the user can
+already read. Revoked, unknown, mismatched, or cross-workspace references fail
+without disclosing the target. URLs are never fetched; foreign origins are
+rejected. Localhost, 127.0.0.1 and ::1 are equivalent only at the same scheme and
+port. A new server address requires the corresponding connection and link.
 
-If the client does not render MCP Apps, the tool also returns text choices with
-titles and page links. Choose one in a reply. The assistant is
-instructed not to duplicate the list beneath a working picker.
-If the host rejects the selection message, the
-picker shows a copyable reference. A connected MCP server by itself does not
-guarantee UI support; check your client's support when no picker appears.
-
-Implementation references: [OpenAI MCP Apps UI](https://developers.openai.com/plugins/build/chatgpt-ui)
-and [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview).
-
-Results include an absolute page URL or URL template carrying the workspace ID.
-PDF page numbers are physical 1-based page numbers. Existing read budgets and
-indexing/incomplete-result notices still apply. The tools read text only: no
-rendered PDF figures, no handwriting recognition.
+`read_page`, `read_block`, `list_pages`, and `search_library` remain available for
+follow-up reading and requests naming a page or topic without a URL.
 
 ## Self-hosted and remote connections
 

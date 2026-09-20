@@ -2321,13 +2321,41 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .popoverTitle { font-size: 13px; font-weight: 600; color: var(--text-primary); padding: 2px 4px; }
 
 /* The offline copy's sync pill (collaboration/MirrorPopover.jsx): an icon
-   button that also carries a word or two; the tone colours the text. */
-.topbar .iconBtn.mirrorPill { width: auto; gap: 5px; padding: 0 9px; }
-.mirrorPill .mirrorPillText { font-size: 12px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
-.mirrorPill.warn .mirrorPillText, .mirrorPill.warn svg { color: var(--warning, #c47a10); }
-.mirrorPill.busy svg { animation: mirrorSpin 1.2s linear infinite; }
+   whose state is drawn on it — a spin while a round runs, a count badge
+   for conflicts, a dot (accent: local edits not pushed, green: up to
+   date, red: a problem); the words are its tooltip. */
+.topbar .iconBtn.mirrorPill { position: relative; }
+.mirrorPill.warn svg, .mirrorPill.error svg { color: var(--warning, #c47a10); }
+.mirrorPill.error svg { color: var(--danger); }
+.mirrorPill.busy svg, .mirrorSpin svg { animation: mirrorSpin 1.2s linear infinite; }
 @keyframes mirrorSpin { to { transform: rotate(360deg); } }
-@media (max-width: 640px) { .mirrorPill .mirrorPillText { display: none; } .topbar .iconBtn.mirrorPill { padding: 0; width: 32px; } }
+.mirrorPillDot { position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); box-shadow: 0 0 0 2px var(--bg-elevated); pointer-events: none; }
+.mirrorPillDot.ok { background: var(--ok); }
+.mirrorPillDot.pending { background: var(--accent); }
+.mirrorPillDot.warn { background: var(--warning, #c47a10); }
+.mirrorPillDot.error { background: var(--danger); }
+.mirrorPillBadge { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; font-size: 9.5px; font-weight: 700; line-height: 1; color: #fff; background: var(--warning, #c47a10); display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-elevated); pointer-events: none; }
+.mirrorPopBtns { display: inline-flex; gap: 2px; flex-shrink: 0; }
+.mirrorState.pending > svg { color: var(--accent); }
+.mirrorState.error > svg { color: var(--danger); }
+.mirrorStateLine .uiBtn { margin-left: auto; }
+.mirrorConflictBtn { color: var(--warning, #c47a10); }
+/* A log row: the row itself opens its changes, the arrow opens the page. */
+.mirrorPopItemRow { display: flex; align-items: center; gap: 2px; }
+.mirrorPopItemRow .popoverItem { flex: 1; min-width: 0; }
+.mirrorPopOpen { flex-shrink: 0; }
+.mirrorPopOpen:disabled { opacity: 0.35; cursor: default; }
+.mirrorPopLog li.open > .mirrorPopItemRow .popoverItem { background: var(--bg-hover); }
+.mirrorChanges { list-style: none; margin: 2px 0 8px 16px; padding: 2px 6px 2px 8px; display: flex; flex-direction: column; gap: 3px; border-left: 2px solid var(--border-subtle); }
+.mirrorChangesNone { padding: 2px 4px 8px 20px; }
+.mirrorChange { display: flex; gap: 6px; font-size: 12px; line-height: 1.4; color: var(--text-secondary); min-width: 0; }
+.mirrorChangeGlyph { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; width: 10px; flex-shrink: 0; font-weight: 700; }
+.mirrorChange.add .mirrorChangeGlyph { color: var(--ok); }
+.mirrorChange.del .mirrorChangeGlyph { color: var(--danger); }
+.mirrorChange.mod .mirrorChangeGlyph { color: var(--warning, #c47a10); }
+.mirrorChangeText { white-space: pre-wrap; word-break: break-word; min-width: 0; border-radius: 3px; padding: 0 3px; max-height: 96px; overflow: auto; }
+.mirrorChange.add .mirrorChangeText { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.mirrorChange.del .mirrorChangeText { background: color-mix(in srgb, var(--danger) 10%, transparent); text-decoration: line-through; color: var(--text-muted); }
 .mirrorPopover { width: 380px; max-width: calc(100vw - 24px); max-height: min(80vh, calc(100dvh - 80px)); overflow-y: auto; }
 /* Settings-kit rows inside the popover (the sync settings view) sit tighter than in a pane; the buttons keep the shared look under the topbar's pill rule. */
 .mirrorPopover .setRow { padding: 5px 4px; gap: 9px; }
@@ -2399,6 +2427,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 mark.merge-mine { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 mark.merge-theirs { background: color-mix(in srgb, var(--warning, #c47a10) 30%, transparent); }
 mark.merge-both { background: var(--bg-hover); text-decoration: underline dotted; }
+mark.merge-add { background: color-mix(in srgb, var(--ok) 25%, transparent); }
+mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent); text-decoration: line-through; color: var(--text-muted); }
 .mergeActions { display: flex; gap: 6px; justify-content: flex-end; padding: 4px 4px 2px; }
 /* Lists of cards (the pill's conflicts view, Settings' conflicts). */
 .mirrorCards { display: flex; flex-direction: column; gap: 10px; }
@@ -2408,6 +2438,7 @@ mark.merge-both { background: var(--bg-hover); text-decoration: underline dotted
 .mirrorAvatar.warn { color: var(--warning, #c47a10); }
 .mirrorAvatar.busy svg { animation: mirrorSpin 1.2s linear infinite; }
 .uiTag.warn { color: var(--warning, #c47a10); border-color: color-mix(in srgb, var(--warning, #c47a10) 45%, transparent); }
+.uiTag.pending { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .mirrorPopLog { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
 /* out-specifies the topbar's popoverItem rule, which centres its content */
 .mirrorPopover .mirrorPopLog .popoverItem.mirrorPopItem { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 1px; width: 100%; }

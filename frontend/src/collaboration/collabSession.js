@@ -62,8 +62,9 @@ const sameCursor = (a, b) => !!a && !!b && a.block === b.block && a.anchor === b
 //       onReload(pageId)              refetch the tree (a change ops can't express)
 //       onStatus(text)                the status line
 //   onPeers(peers), onMe(me) — presence changes (the hook's React state)
+//   onQueued()                — a local edit was queued (the clone's sync pill shows it as pending)
 //   timers                — {set(fn, ms) → id, clear(id)}; default the globals
-export function createCollabSession({ clientId, api, openSocket, keepalivePost, opts, onPeers, onMe, timers }) {
+export function createCollabSession({ clientId, api, openSocket, keepalivePost, opts, onPeers, onMe, onQueued, timers }) {
   const later = timers?.set || ((fn, ms) => globalThis.setTimeout(fn, ms));
   const cancel = timers?.clear || ((id) => globalThis.clearTimeout(id));
   const o = () => opts();
@@ -238,6 +239,7 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
     const delay = now ? 0 : structural ? STRUCTURAL_DEBOUNCE_MS : TYPING_DEBOUNCE_MS;
     if (s.timer) cancel(s.timer);
     s.timer = later(() => { s.timer = null; send(s); }, delay);
+    onQueued?.();
   }
 
   // Called by the tree's transition effect. `isLoad`: the transition was a

@@ -56,7 +56,7 @@ CLIENT = "sync"            # the op-log client of every local write the engine m
 ACTOR = "mirror"           # ...and its actor (the remote's per-op authors are not carried over)
 MODES = ("two-way", "pull", "off")   # off = detached: the link (token, cursors, bases) is kept, no round runs
 ADOPT = ("theirs", "mine")           # whose version a never-reconciled page takes (a linked workspace, a force)
-DEBOUNCE_S = 3                       # a local edit → a round once things have been quiet this long
+DEBOUNCE_S = 1.0                     # a local edit → a round once things have been quiet this long (the loop wakes for it)
 TICK_S = 1                           # the loop's clock
 STREAM_CHUNK = 256 * 1024
 default_fetch = None       # the tests point this at an in-process TestClient; None = urllib
@@ -408,10 +408,13 @@ def remove_mirror(ws: str) -> None:
 
 # --- conflicts -----------------------------------------------------------------------
 
-def _conflict(conn, page_id: str, block_id: str, kind: str, mine="", theirs="", result="") -> None:
+def _conflict(conn, page_id: str, block_id: str, kind: str, mine="", theirs="", result="", base="") -> None:
+    """One row to look at. ``base`` is the text before either side edited it
+    (a ``merged`` block), so the resolver can show what each side did."""
     conn.execute(
-        "INSERT INTO sync_conflicts (page_id, block_id, kind, mine, theirs, result, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (page_id, block_id, kind, mine or "", theirs or "", result or "", page_now()))
+        "INSERT INTO sync_conflicts (page_id, block_id, kind, mine, theirs, result, base, at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (page_id, block_id, kind, mine or "", theirs or "", result or "", base or "", page_now()))
     conn.commit()
 
 
@@ -436,13 +439,113 @@ def _whole(tree: dict, key: str) -> dict:
     return {"add": 0, "del": 0, "mod": 0, key: max(0, len(tree) - 1)}
 
 
+CHANGES_CAP = 40   # block changes kept per log row
+TEXT_CAP = 240     # characters of a block's text kept per change
+
+
+def _clip(text) -> str:
+    text = text or ""
+    return text if len(text) <= TEXT_CAP else text[:TEXT_CAP] + "…"
+
+
+def _changes(ops: list[dict], before: dict | None = None) -> list[dict]:
+    """What a batch of ops did, block by block, for the log's diff view:
+    ``{k: add | del | mod | props | move, id, text, old?}`` — the new text
+    (``old`` the text before, for ``mod``), the removed text for ``del``
+    (one entry per block of a deleted subtree), the block's text for a
+    property or place change. Capped at ``CHANGES_CAP`` entries."""
+    before = before or {}
+    inserted = {op["id"] for op in ops if op["op"] == "insert"}
+    out: list[dict] = []
+    for op in ops:
+        if len(out) >= CHANGES_CAP:
+            break
+        bid = op["id"]
+        if op["op"] == "insert":
+            out.append({"k": "add", "id": bid, "text": _clip(op.get("content", ""))})
+        elif op["op"] == "delete":
+            ids = subtree_ids(before, bid) if bid in before else {bid}
+            for d in sorted(ids, key=lambda i: (i != bid, i)):
+                if len(out) >= CHANGES_CAP:
+                    break
+                out.append({"k": "del", "id": d, "text": _clip((before.get(d) or {}).get("content", ""))})
+        elif op["op"] == "set" and bid not in inserted:
+            old = (before.get(bid) or {}).get("content", "")
+            if "content" in op:
+                if op["content"] != old:
+                    out.append({"k": "mod", "id": bid, "old": _clip(old), "text": _clip(op["content"])})
+            else:
+                out.append({"k": "props", "id": bid, "text": _clip(old)})
+        elif op["op"] == "move" and bid not in inserted:
+            out.append({"k": "move", "id": bid, "text": _clip((before.get(bid) or {}).get("content", ""))})
+    return out
+
+
+def _whole_changes(tree: dict, key: str, root: str) -> list[dict]:
+    """The changes of a page that came or went whole: every block under
+    the root as one ``add`` / ``del``."""
+    return [{"k": key, "id": bid, "text": _clip(b.get("content", ""))}
+            for bid, b in tree.items() if bid != root][:CHANGES_CAP]
+
+
+CHANGES_CAP = 40   # block changes kept per log row
+TEXT_CAP = 240     # characters of a block's text kept per change
+
+
+def _clip(text) -> str:
+    text = text or ""
+    return text if len(text) <= TEXT_CAP else text[:TEXT_CAP] + "…"
+
+
+def _changes(ops: list[dict], before: dict | None = None) -> list[dict]:
+    """What a batch of ops did, block by block, for the log's diff view:
+    ``{k: add | del | mod | props | move, id, text, old?}`` — the new text
+    (``old`` the text before, for ``mod``), the removed text for ``del``
+    (one entry per block of a deleted subtree), the block's text for a
+    property or place change. Capped at ``CHANGES_CAP`` entries."""
+    before = before or {}
+    inserted = {op["id"] for op in ops if op["op"] == "insert"}
+    out: list[dict] = []
+    for op in ops:
+        if len(out) >= CHANGES_CAP:
+            break
+        bid = op["id"]
+        if op["op"] == "insert":
+            out.append({"k": "add", "id": bid, "text": _clip(op.get("content", ""))})
+        elif op["op"] == "delete":
+            ids = subtree_ids(before, bid) if bid in before else {bid}
+            for d in sorted(ids, key=lambda i: (i != bid, i)):
+                if len(out) >= CHANGES_CAP:
+                    break
+                out.append({"k": "del", "id": d, "text": _clip((before.get(d) or {}).get("content", ""))})
+        elif op["op"] == "set" and bid not in inserted:
+            old = (before.get(bid) or {}).get("content", "")
+            if "content" in op:
+                if op["content"] != old:
+                    out.append({"k": "mod", "id": bid, "old": _clip(old), "text": _clip(op["content"])})
+            else:
+                out.append({"k": "props", "id": bid, "text": _clip(old)})
+        elif op["op"] == "move" and bid not in inserted:
+            out.append({"k": "move", "id": bid, "text": _clip((before.get(bid) or {}).get("content", ""))})
+    return out
+
+
+def _whole_changes(tree: dict, key: str, root: str) -> list[dict]:
+    """The changes of a page that came or went whole: every block under
+    the root as one ``add`` / ``del``."""
+    return [{"k": key, "id": bid, "text": _clip(b.get("content", ""))}
+            for bid, b in tree.items() if bid != root][:CHANGES_CAP]
+
+
 def _note(ws: str, page_id: str, action: str, title: str = "", *, stats: dict | None = None,
-          report: dict | None = None) -> None:
+          changes: list[dict] | None = None, report: dict | None = None) -> None:
     """One sync_log row: what a round did to a page (``pulled``, ``pushed``,
     ``created here``, ``created there``, ``deleted here``, ``deleted
     there``, ``restored here``, ``restored there``, ``replaced here`` /
     ``there``) with its block counts, which also add up on the round's
-    ``report`` (``blocks_added`` / ``blocks_removed`` / ``blocks_changed``)."""
+    ``report`` (``blocks_added`` / ``blocks_removed`` / ``blocks_changed``),
+    and with ``changes``, what each edit did (``_changes``), stored in the
+    same JSON."""
     if report is not None and stats:
         report["blocks_added"] = report.get("blocks_added", 0) + stats["add"]
         report["blocks_removed"] = report.get("blocks_removed", 0) + stats["del"]
@@ -451,17 +554,19 @@ def _note(ws: str, page_id: str, action: str, title: str = "", *, stats: dict | 
         if not title:
             row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
             title = (row[0] if row else "") or ""
+        blob = {**stats, "changes": changes} if stats and changes else stats
         conn.execute("INSERT INTO sync_log (at, page_id, title, action, stats) VALUES (?, ?, ?, ?, ?)",
-                     (page_now(), page_id, title[:200], action, json.dumps(stats) if stats else ""))
+                     (page_now(), page_id, title[:200], action, json.dumps(blob) if blob else ""))
         conn.execute("DELETE FROM sync_log WHERE id <= (SELECT MAX(id) FROM sync_log) - ?", (SYNC_LOG_KEEP,))
         conn.commit()
 
 
 def list_log(ws: str, limit: int = 50) -> list[dict]:
     """The newest sync_log rows: ``[{id, at, page_id, title, action, stats,
-    exists}]`` (``stats``: ``{add, del, mod}`` block counts, ``{}`` for a row
-    from before they were kept; ``exists``: the page is still here, so it
-    can be opened)."""
+    changes, exists}]`` (``stats``: ``{add, del, mod}`` block counts, ``{}``
+    for a row from before they were kept; ``changes``: what each edit did,
+    block by block (``_changes``), ``[]`` when none were kept; ``exists``:
+    the page is still here, so it can be opened)."""
     with connect_pages_db(ws) as conn:
         rows = conn.execute(
             "SELECT l.id, l.at, l.page_id, l.title, l.action, l.stats, "
@@ -473,7 +578,9 @@ def list_log(ws: str, limit: int = 50) -> list[dict]:
             stats = json.loads(r[5]) if r[5] else {}
         except ValueError:
             stats = {}
-        out.append({**dict(zip(("id", "at", "page_id", "title", "action"), r[:5])), "stats": stats, "exists": bool(r[6])})
+        changes = stats.pop("changes", []) if isinstance(stats, dict) else []
+        out.append({**dict(zip(("id", "at", "page_id", "title", "action"), r[:5])), "stats": stats,
+                    "changes": changes, "exists": bool(r[6])})
     return out
 
 
@@ -488,11 +595,11 @@ def list_conflicts(ws: str, *, resolved: bool = False, page_id: str = "") -> lis
     with connect_pages_db(ws) as conn:
         rows = conn.execute(
             "SELECT c.id, c.page_id, c.block_id, c.kind, c.mine, c.theirs, c.result, c.at, c.resolved, "
-            "(SELECT content FROM unified_blocks WHERE id = c.page_id) FROM sync_conflicts c "
+            "(SELECT content FROM unified_blocks WHERE id = c.page_id), c.base FROM sync_conflicts c "
             "WHERE c.resolved = ? AND (? = '' OR c.page_id = ?) ORDER BY c.id DESC LIMIT 500",
             (1 if resolved else 0, page_id, page_id)).fetchall()
     return [dict(zip(("id", "page_id", "block_id", "kind", "mine", "theirs", "result", "at", "resolved",
-                      "page_title"), r)) for r in rows]
+                      "page_title", "base"), r)) for r in rows]
 
 
 def resolve_conflict(ws: str, conflict_id: int, choice: str) -> dict | None:
@@ -705,14 +812,16 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
                     _save_state(conn, page_id, seq, remote_after or local)
                     _conflict(conn, page_id, page_id, "page_restored", mine=local[page_id]["content"],
                               result="the other side deleted this page; it was edited here, so it came back there")
-                _note(ws, page_id, "restored there", local[page_id]["content"], stats=_whole(local, "add"), report=report)
+                _note(ws, page_id, "restored there", local[page_id]["content"], stats=_whole(local, "add"),
+                      changes=_whole_changes(local, "add", page_id), report=report)
                 report["pages_pushed"] += 1
             return
         title = local[page_id]["content"]
         with connect_pages_db(ws) as conn:
             delete_page(ws, conn, page_id, actor=ACTOR)
             _drop_state(conn, page_id)
-        _note(ws, page_id, "deleted here", title, stats=_whole(local, "del"), report=report)
+        _note(ws, page_id, "deleted here", title, stats=_whole(local, "del"),
+              changes=_whole_changes(local, "del", page_id), report=report)
         report["pages_deleted"] += 1
         return
     if local_gone and local is None:
@@ -727,7 +836,8 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             remote.delete(f"/api/blocks/{page_id}")
             with connect_pages_db(ws) as conn:
                 _drop_state(conn, page_id)
-            _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"), report=report)
+            _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"),
+                  changes=_whole_changes(remote_tree, "del", page_id), report=report)
             report["pages_pushed"] += 1
             return
         # the remote edited it since (or we may not delete there): it comes back here
@@ -739,7 +849,8 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             _save_state(conn, page_id, seq, remote_tree)
             _conflict(conn, page_id, page_id, "page_restored_from_remote", theirs=remote_tree[page_id]["content"],
                       result="this page was deleted here but edited on the other side, so it came back")
-        _note(ws, page_id, "restored here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"), report=report)
+        _note(ws, page_id, "restored here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"),
+              changes=_whole_changes(remote_tree, "add", page_id), report=report)
         report["pages_pulled"] += 1
         return
 
@@ -754,7 +865,8 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             # a force pull: a page the original does not have goes
             with connect_pages_db(ws) as conn:
                 delete_page(ws, conn, page_id, actor=ACTOR)
-            _note(ws, page_id, "deleted here", local[page_id]["content"], stats=_whole(local, "del"), report=report)
+            _note(ws, page_id, "deleted here", local[page_id]["content"], stats=_whole(local, "del"),
+                  changes=_whole_changes(local, "del", page_id), report=report)
             report["pages_deleted"] += 1
             return
         if state is None and local is not None and push_allowed:
@@ -765,14 +877,16 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             remote_after, seq = _remote_tree(remote, page_id)
             with connect_pages_db(ws) as conn:
                 _save_state(conn, page_id, seq, remote_after or local)
-            _note(ws, page_id, "created there", local[page_id]["content"], stats=_whole(local, "add"), report=report)
+            _note(ws, page_id, "created there", local[page_id]["content"], stats=_whole(local, "add"),
+                  changes=_whole_changes(local, "add", page_id), report=report)
             report["pages_pushed"] += 1
         # else: the feed said it changed, but it is gone now (deleted after the feed): next round's tombstone
         return
     if local is None and prune and adopt == "mine" and push_allowed:
         # a force push: a page this copy does not have goes from the original
         remote.delete(f"/api/blocks/{page_id}")
-        _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"), report=report)
+        _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"),
+              changes=_whole_changes(remote_tree, "del", page_id), report=report)
         report["pages_pushed"] += 1
         return
     if local is None:
@@ -783,7 +897,8 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
         _apply_local(ws, page_id, diff({page_id: remote_tree[page_id]}, remote_tree, page_id, with_base=False))
         with connect_pages_db(ws) as conn:
             _save_state(conn, page_id, seq, remote_tree)
-        _note(ws, page_id, "created here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"), report=report)
+        _note(ws, page_id, "created here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"),
+              changes=_whole_changes(remote_tree, "add", page_id), report=report)
         report["pages_pulled"] += 1
         return
 
@@ -808,8 +923,10 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
                 if op["op"] == "set" and "content" in op and op["id"] in sent \
                         and op["content"] != sent[op["id"]]["content"]:
                     _conflict(conn, page_id, op["id"], "merged", mine=local[op["id"]]["content"],
-                              theirs=sent[op["id"]]["content"], result=op["content"])
-        _note(ws, page_id, "pulled", remote_tree[page_id]["content"], stats=_stats(remote_ops, local), report=report)
+                              theirs=sent[op["id"]]["content"], result=op["content"],
+                              base=((base or {}).get(op["id"]) or {}).get("content", ""))
+        _note(ws, page_id, "pulled", remote_tree[page_id]["content"], stats=_stats(remote_ops, local),
+              changes=_changes(remote_ops, local), report=report)
         report["pages_pulled"] += 1
     # 2. what still differs here goes there
     with connect_pages_db(ws) as conn:
@@ -827,7 +944,8 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             _apply_local(ws, page_id, settle)
         with connect_pages_db(ws) as conn:
             _save_state(conn, page_id, seq, remote_after)
-        _note(ws, page_id, "pushed", local_now[page_id]["content"], stats=_stats(push_ops, remote_tree), report=report)
+        _note(ws, page_id, "pushed", local_now[page_id]["content"], stats=_stats(push_ops, remote_tree),
+              changes=_changes(push_ops, remote_tree), report=report)
         report["pages_pushed"] += 1
     else:
         # the base is always the remote's tree: what is not there is a local
@@ -858,7 +976,8 @@ def _adopt_page(ws: str, remote: Remote, page_id: str, local: dict, remote_tree:
             for bid in differed:
                 _conflict(conn, page_id, bid, "diverged", mine=local[bid]["content"],
                           theirs=remote_tree[bid]["content"], result=local[bid]["content"])
-        _note(ws, page_id, "replaced there", local[page_id]["content"], stats=_stats(push_ops, remote_tree), report=report)
+        _note(ws, page_id, "replaced there", local[page_id]["content"], stats=_stats(push_ops, remote_tree),
+              changes=_changes(push_ops, remote_tree), report=report)
         report["pages_pushed"] += 1
         return
     ops_ = diff(local, remote_tree, page_id, with_base=False)
@@ -870,7 +989,8 @@ def _adopt_page(ws: str, remote: Remote, page_id: str, local: dict, remote_tree:
         for bid in differed:
             _conflict(conn, page_id, bid, "diverged", mine=local[bid]["content"],
                       theirs=remote_tree[bid]["content"], result=remote_tree[bid]["content"])
-    _note(ws, page_id, "replaced here", remote_tree[page_id]["content"], stats=_stats(ops_, local), report=report)
+    _note(ws, page_id, "replaced here", remote_tree[page_id]["content"], stats=_stats(ops_, local),
+          changes=_changes(ops_, local), report=report)
     report["pages_pulled"] += 1
 
 
@@ -936,6 +1056,7 @@ def _round(ws: str, mirror: dict, fetch) -> dict:
         return mirror["status"]  # detached: nothing runs until it is linked again
     remote = Remote(mirror["remote_url"], mirror["remote_ws"], mirror["token"], fetch)
     first = not mirror["status"].get("last_sync")  # the first fill (or one that never completed)
+    started = time.monotonic()  # local writes up to here are this round's to push
     status = {**mirror["status"], "running": True, "started_at": page_now(), "progress": None}
     status.pop("interrupted", None)
     _save(ws, status=status)
@@ -1003,6 +1124,10 @@ def _round(ws: str, mirror: dict, fetch) -> dict:
             # a link's or a force's policy is spent once every page went through
             status.pop("adopt", None)
             status.pop("prune", None)
+        if not report["errors"] and _dirty.get(ws, float("inf")) <= started:
+            _dirty.pop(ws, None)  # everything written before the round started went out with it
+        if not report["errors"] and _dirty.get(ws, float("inf")) <= started:
+            _dirty.pop(ws, None)  # everything written before the round started went out with it
     except Exception as e:  # noqa: BLE001 — whatever happens, the running flag comes down
         status = {**status, "running": False, "last_error": str(e), "last_attempt": page_now()}
         log.warning(f"[mirror] {ws}: {e}")
@@ -1049,19 +1174,33 @@ FIRST_PASS_S = 5  # the loop's first round after startup (a copy interrupted mid
 _pending: dict[str, float] = {}   # ws -> earliest monotonic time a requested round may run
 _last_run: dict[str, float] = {}  # ws -> monotonic time of the last round the loop started
 _wants_change: dict[str, bool] = {}  # ws -> a round after a local edit (mode on, on_change set)
+_dirty: dict[str, float] = {}     # ws -> monotonic time of the last local write no round has pushed yet
+_wake = threading.Event()         # set by request_sync so the loop looks again at once
 
 
 def request_sync(ws: str, delay: float = DEBOUNCE_S) -> None:
     """A round for ``ws`` once things have been quiet for ``delay`` seconds
-    (the loop picks it up; every further request within the delay pushes it
+    (the loop wakes for it; every further request within the delay pushes it
     back — a typing burst is one round)."""
     _pending[ws] = time.monotonic() + delay
+    _wake.set()
+
+
+def has_local_changes(ws: str) -> bool:
+    """Whether a local write happened since the last round that could push
+    it (the pill's "edits waiting" state). In memory: a restart runs a round
+    anyway."""
+    return ws in _dirty
 
 
 def _on_commit(ws: str, client: str) -> None:
-    """``ops.commit_listeners``: a local write in a copy set to sync on
-    change asks for a round; the engine's own writes (client ``sync``) do not."""
-    if client != CLIENT and _wants_change.get(ws):
+    """``ops.commit_listeners``: a local write marks the copy dirty and, in
+    a copy set to sync on change, asks for a round; the engine's own writes
+    (client ``sync``) do neither."""
+    if client == CLIENT:
+        return
+    _dirty[ws] = time.monotonic()
+    if _wants_change.get(ws):
         request_sync(ws)
 
 
@@ -1117,6 +1256,12 @@ def start_loop() -> None:
                     sync_workspace(ws)
                 except Exception as e:  # noqa: BLE001
                     log.warning(f"[mirror] {ws}: {e}")
-            time.sleep(TICK_S)
+            # sleep until the next tick, or until the earliest requested round is due, or a request comes in
+            now = time.monotonic()
+            wait = TICK_S
+            for due in _pending.values():
+                wait = min(wait, max(0.05, due - now))
+            _wake.wait(wait)
+            _wake.clear()
 
     threading.Thread(target=run, name="mirror-loop", daemon=True).start()

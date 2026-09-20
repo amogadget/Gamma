@@ -3,4 +3,4 @@ interface:
   icon_small: "./assets/icon.png"
   icon_large: "./assets/icon.png"
   short_description: "Search and read Gamma pages, notes, and PDFs"
-  default_prompt: "Use $gamma to open the paper picker so I can choose a paper to discuss."
+  default_prompt: "Use $gamma to read the Gamma link I paste and answer my question about that page."

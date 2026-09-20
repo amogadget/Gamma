@@ -26,7 +26,8 @@ Start Claude Code, open `/mcp`, select `gamma`, and authenticate. Sign in to Gam
 in the browser and approve read-only access to your chosen workspace. Start a new
 session and run `/gamma:gamma`, or ask Claude to find your Gamma notes. If tools
 are missing, inspect `/mcp` or `claude mcp get gamma` before retrying sign-in.
-Clients without the interactive paper picker receive a text list to choose from.
+Copy the Gamma page URL from your browser and paste it with your question.
+A share link works too.
 
 To update an extracted marketplace, replace its contents with the newer release.
 Then run `claude plugin marketplace update gamma-local`
@@ -68,12 +69,11 @@ is not required. To connect manually or install a development package:
 
 The IDE extension can use the direct MCP connection without the plugin.
 
-To select a paper, mention **Gamma PDF** with `@` in a new desktop chat and ask
-**"Let me choose a paper"**. Search by title, select a result, and click
-**Use this paper**. Ask questions about it in the same conversation. The picker
-uses the existing authorized workspace; it does not change workspaces. It needs
-an updated Gamma server and an MCP Apps-capable client. Clients without UI get
-a text list to choose from. This does not add papers to the native `@` menu.
+Paste a Gamma page or share link with your question. The assistant uses
+`read_gamma_link` to resolve and read it. Copy the page URL directly from your
+browser's address bar, or use an existing block or share link.
+Both assistants use the same workflow. Follow-up questions keep the last supplied
+page as context until you send a different reference.
 
 Gamma must be running and reachable from the machine running the MCP client.
 The packaged workflow uses the configured tools; installing it alone does not

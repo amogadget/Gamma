@@ -54,6 +54,8 @@ export function usePageCollab(opts) {
       opts: () => o.current,
       onPeers: setPeers,
       onMe: setMe,
+      // a clone's sync pill (MirrorPopover) marks local edits as not pushed yet
+      onQueued: () => window.dispatchEvent(new CustomEvent("gamma:local-edit")),
     });
   }
   const session = ref.current;

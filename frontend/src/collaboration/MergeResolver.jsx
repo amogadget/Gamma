@@ -1,12 +1,15 @@
 // Conflict resolution for a clone (docs/dev/mirror.md), in git's words:
-// ours is this clone, theirs is origin. One card — ConflictCard — serves
+// local is this clone, remote is origin. One card — ConflictCard — serves
 // every surface: the chip on a block row (its popover walks the page's
 // conflicts one by one), the sync pill's list and Settings → Workspaces.
-// A block both sides edited shows the two versions side by side, each with
-// the words the other side lacks highlighted, and under them the text that
-// is in the block now (the automatic merge, coloured by who wrote what);
-// every version carries its own Use button, the current one a Keep. A
-// decision is an ordinary edit the next round pushes.
+// A block both sides edited shows what each side changed as a word diff
+// against the text before either edit (removed words struck through, added
+// words in the side's colour), and under them the text that is in the block
+// now — the automatic merge, its additions coloured by who wrote them.
+// Every version carries its own Use button, the current one a Keep. A
+// decision is an ordinary edit the next round pushes. Rows from before the
+// base was kept (and diverged blocks, which have none) show the two texts
+// against each other instead.
 import React from "react";
 import {
   AlertCircleIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, ExternalLinkIcon,
@@ -19,17 +22,24 @@ function tokens(s) {
   return (s || "").match(/\s+|[^\s]+/g) || [];
 }
 
-// For every token of `a`, whether it is part of the longest common
-// subsequence with `b` (a classic DP; block texts are short).
-function matched(a, b) {
-  const n = a.length, m = b.length;
-  if (!n || !m) return new Array(n).fill(false);
+// The LCS table of two token arrays (a classic DP; block texts are short).
+function lcs(A, B) {
+  const n = A.length, m = B.length;
   const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
+  return dp;
+}
+
+// For every token of `a`, whether it is part of the longest common
+// subsequence with `b`.
+function matched(a, b) {
+  const n = a.length, m = b.length;
+  if (!n || !m) return new Array(n).fill(false);
+  const dp = lcs(a, b);
   const out = new Array(n).fill(false);
   let i = 0, j = 0;
   while (i < n && j < m) {
@@ -40,8 +50,31 @@ function matched(a, b) {
   return out;
 }
 
+// A git-style word diff from `a` to `b`: runs tagged "same", "del" (only
+// in a) and "add" (only in b), whitespace kept.
+export function wordDiff(a, b) {
+  const A = tokens(a), B = tokens(b);
+  const n = A.length, m = B.length;
+  const dp = lcs(A, B);
+  const out = [];
+  const push = (text, tag) => {
+    const prev = out[out.length - 1];
+    if (prev && prev.tag === tag) prev.text += text;
+    else out.push({ text, tag });
+  };
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { push(A[i], "same"); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { push(A[i], "del"); i++; }
+    else { push(B[j], "add"); j++; }
+  }
+  while (i < n) push(A[i++], "del");
+  while (j < m) push(B[j++], "add");
+  return out;
+}
+
 // The result's tokens, each tagged by where it came from: "same" (in both
-// versions), "mine" (ours only), "theirs" (origin's only), "both" (neither
+// versions), "mine" (local only), "theirs" (remote only), "both" (neither
 // — a merge artefact, rare).
 export function attribute(result, mine, theirs) {
   const r = tokens(result);
@@ -61,14 +94,31 @@ export function onlyIn(text, other, tag) {
   return t.map((s, i) => ({ text: s, tag: m[i] ? "same" : tag }));
 }
 
-// The sync_conflicts kinds, in git's words (ours = this clone, theirs = origin).
+// What one side changed: the diff from the base, its additions in the
+// side's colour, its removals struck through.
+function sideParts(base, text, tag) {
+  return wordDiff(base, text).map((p) => ({ text: p.text, tag: p.tag === "add" ? tag : p.tag }));
+}
+
+// What the merge did: the diff from the base, each added word coloured by
+// the side that wrote it (both, when both added it).
+function mergedParts(base, mine, theirs, result) {
+  const added = (text) => new Set(wordDiff(base, text).filter((p) => p.tag === "add").flatMap((p) => tokens(p.text)));
+  const mineAdds = added(mine), theirsAdds = added(theirs);
+  return wordDiff(base, result).flatMap((p) => p.tag !== "add" ? [p] : tokens(p.text).map((t) => ({
+    text: t,
+    tag: /^\s+$/.test(t) ? "same" : mineAdds.has(t) && theirsAdds.has(t) ? "both" : mineAdds.has(t) ? "mine" : theirsAdds.has(t) ? "theirs" : "both",
+  })));
+}
+
+// The sync_conflicts kinds, in git's words (local = this clone, remote = origin).
 export const MERGE_KIND = {
   merged: { short: "Auto-merged", long: "Both sides changed this block; the two edits were merged into one text.", Icon: MergeIcon },
-  diverged: { short: "Diverged", long: "The two versions differed when the clone was attached; one was taken, the other is here.", Icon: AlertCircleIcon },
-  kept_local_edit: { short: "Kept ours", long: "Origin deleted this, but it was edited here, so it stayed and was pushed back.", Icon: ArrowUpIcon },
-  restored_remote_edit: { short: "Restored theirs", long: "This was deleted here, but origin edited it, so it was pulled back.", Icon: ArrowDownIcon },
-  page_restored: { short: "Page restored on origin", long: "Origin deleted this page; it was edited here, so it was pushed back.", Icon: ArrowUpIcon },
-  page_restored_from_remote: { short: "Page restored from origin", long: "This page was deleted here but edited on origin, so it was pulled back.", Icon: ArrowDownIcon },
+  diverged: { short: "Diverged", long: "Local and remote differed when the clone was attached; one was taken, the other is here.", Icon: AlertCircleIcon },
+  kept_local_edit: { short: "Kept local", long: "Remote deleted this, but it was edited here, so it stayed and was pushed back.", Icon: ArrowUpIcon },
+  restored_remote_edit: { short: "Restored remote", long: "This was deleted here, but remote edited it, so it was pulled back.", Icon: ArrowDownIcon },
+  page_restored: { short: "Page restored on remote", long: "Remote deleted this page; it was edited here, so it was pushed back.", Icon: ArrowUpIcon },
+  page_restored_from_remote: { short: "Page restored from remote", long: "This page was deleted here but edited on remote, so it was pulled back.", Icon: ArrowDownIcon },
 };
 
 export function kindOf(conflict) {
@@ -81,10 +131,10 @@ export function isTextual(conflict) {
   return conflict.kind === "merged" || conflict.kind === "diverged";
 }
 
-// The sides: a glyph, a word, where it lives.
+// The sides: a glyph, a word, where it lives. (The API keeps mine / theirs.)
 const SIDE = {
-  mine: { label: "Ours", hint: "this clone", Icon: HardDriveIcon },
-  theirs: { label: "Theirs", hint: "origin", Icon: ServerIcon },
+  mine: { label: "Local", hint: "this clone", Icon: HardDriveIcon },
+  theirs: { label: "Remote", hint: "origin", Icon: ServerIcon },
   result: { label: "Merged", hint: "both edits in one text", Icon: MergeIcon },
 };
 
@@ -103,7 +153,9 @@ function runs(parts) {
   return out;
 }
 
-function Marked({ parts }) {
+// Marked text: a run per tag, `mark.merge-<tag>` for everything but "same"
+// (mine / theirs / both / add / del).
+export function Marked({ parts }) {
   return runs(parts).map((p, i) => p.tag === "same" ? <span key={i}>{p.text}</span> : <mark key={i} className={`merge-${p.tag}`}>{p.text}</mark>);
 }
 
@@ -123,7 +175,7 @@ function Version({ side, parts, current, busy, onUse, hint }) {
           <button type="button" className={`uiBtn sm ${current ? "primary" : ""}`} disabled={busy}
             onClick={() => onUse(current ? "keep" : choice)}
             aria-label={current ? `Keep ${word}` : `Use ${word}`}
-            title={current ? "This is the text in the block now: mark it resolved" : `Put ${word === "merged" ? "the merged text" : `${word} text`} into the block`}>
+            title={current ? "This is the text in the block now: mark it resolved" : `Put the ${word} text into the block`}>
             {current ? <><CheckIcon size={13} /> Keep</> : "Use"}
           </button>
         ) : null}
@@ -133,20 +185,26 @@ function Version({ side, parts, current, busy, onUse, hint }) {
   );
 }
 
-// The versions of a textual conflict: ours and theirs side by side, each
-// with what it adds highlighted; for a merge, the merged text under them
-// with each side's words coloured. The version that is in the block now
-// is marked and offers Keep instead of Use.
+// The versions of a textual conflict. With a base (an auto-merge): local
+// and remote as what each changed, the merged text as what the merge did.
+// Without one (diverged, or an older row): the two texts against each
+// other, the merged text by attribution.
 function Versions({ conflict, busy, onUse }) {
   const c = conflict;
   const diverged = c.kind === "diverged";
   const mineCurrent = diverged && c.result === c.mine;
   const theirsCurrent = diverged && c.result !== c.mine;
+  const base = !diverged && typeof c.base === "string" && c.base ? c.base : null;
+  const mineParts = base ? sideParts(base, c.mine, "mine") : onlyIn(c.mine, c.theirs, "mine");
+  const theirsParts = base ? sideParts(base, c.theirs, "theirs") : onlyIn(c.theirs, c.mine, "theirs");
   return (
     <div className={`mergeVersions ${diverged ? "two" : "three"}`}>
-      <Version side="mine" parts={onlyIn(c.mine, c.theirs, "mine")} current={mineCurrent} busy={busy} onUse={onUse} />
-      <Version side="theirs" parts={onlyIn(c.theirs, c.mine, "theirs")} current={theirsCurrent} busy={busy} onUse={onUse} />
-      {diverged ? null : <Version side="result" parts={attribute(c.result, c.mine, c.theirs)} current busy={busy} onUse={onUse} />}
+      <Version side="mine" parts={mineParts} current={mineCurrent} busy={busy} onUse={onUse} hint={base ? "changed here" : undefined} />
+      <Version side="theirs" parts={theirsParts} current={theirsCurrent} busy={busy} onUse={onUse} hint={base ? "changed on origin" : undefined} />
+      {diverged ? null : (
+        <Version side="result" current busy={busy} onUse={onUse}
+          parts={base ? mergedParts(base, c.mine, c.theirs, c.result) : attribute(c.result, c.mine, c.theirs)} />
+      )}
     </div>
   );
 }

@@ -44,6 +44,7 @@ export function mirrorStatusLine(m) {
   }
   if (s.last_error) return `problem: ${s.last_error}`;
   if (!s.last_sync) return s.interrupted ? "interrupted · continues at the next round" : "not cloned yet";
+  if (m.pending_local) return `local edits not pushed yet · up to date ${clock(s.last_sync)}`;
   return `up to date ${clock(s.last_sync)} · ${roundSummary(s) || "nothing had changed"}`;
 }
 
@@ -77,7 +78,7 @@ export function MirrorDialog({ busy, error, onSubmit, onClose, candidates = [] }
       ) : null}
       {into ? (
         <Field label="If a page differs" hint="both versions are kept; the other waits under Conflicts">
-          <Segmented value={adopt} onChange={setAdopt} options={[["theirs", "Take origin's"], ["mine", "Keep ours"]]} />
+          <Segmented value={adopt} onChange={setAdopt} options={[["theirs", "Take remote's"], ["mine", "Keep local"]]} />
         </Field>
       ) : (
         <Field label="Name here" hint="optional — defaults to the origin workspace's name">
@@ -244,6 +245,7 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
             {pullOnly ? <span className="uiTag" title="Origin's changes arrive here; yours stay here">pull only</span> : null}
             {detached ? <span className="uiTag">detached</span> : null}
             {!detached && s.last_error ? <span className="uiTag warn">problem</span> : null}
+            {!detached && !s.last_error && m.pending_local ? <span className="uiTag pending" title="Local edits the next round pushes">unpushed edits</span> : null}
             {m.conflicts_open ? <span className="uiTag warn">{m.conflicts_open} conflict{m.conflicts_open === 1 ? "" : "s"}</span> : null}
           </span>
           <span className="aiProvDesc" title={m.remote_url}>
@@ -260,8 +262,8 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
             </button>
           ) : (
             <button className="uiBtn sm" disabled={busy || s.running} onClick={() => syncNow(m)}
-              title={pullOnly ? "Pull origin's changes now" : "Pull origin's changes, then push yours"}>
-              <RefreshIcon size={13} /> {pullOnly ? "Pull" : "Pull & push"}
+              title={pullOnly ? "Pull the remote's changes now" : "Pull the remote's changes, then push yours"}>
+              <RefreshIcon size={13} /> {pullOnly ? "Pull" : "Sync"}
             </button>
           )}
           <button className={`uiBtn sm ${m.conflicts_open ? "primary" : ""}`} disabled={busy} onClick={() => setConflictsOf({ ...m, name: nameOf(m) })}

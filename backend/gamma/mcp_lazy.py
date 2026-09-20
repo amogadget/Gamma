@@ -91,7 +91,7 @@ async def _authorize(scope, receive, send):
                                if base else "Bearer"), "Cache-Control": "no-store"})(scope, receive, send)
         return False
     request.state.gamma_integration = identity
-    # Use the same canonical origin for picker and read-tool citations.
+    # Use the same canonical origin for link resolution and read-tool citations.
     # Manual tokens still support HTTP LAN addresses without an OAuth issuer.
     request.state.gamma_base = base or str(request.base_url).rstrip("/")
     return True

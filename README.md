@@ -72,7 +72,7 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-connections-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-connections-light.svg">
-  <img alt="Gamma connects your research: import and export Obsidian vaults and Zotero libraries, import Notion notes, save papers with Gamma Connector, and search and read your library with Codex" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
+  <img alt="Gamma connects three groups: ChatGPT and Claude plugins on the left, Gamma Connector below, and Obsidian, Notion, and Zotero notes and knowledge-base apps on the right" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
 </picture>
 
 The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.

@@ -25,7 +25,7 @@ def test_v7_adds_mcp_oauth_and_preserves_tokens(data_dir):
         conn.execute("DROP TABLE mcp_oauth")
         conn.execute("PRAGMA user_version = 6")
         conn.execute("INSERT INTO integration_tokens VALUES ('id', 'hash', 'user', 'ws', 'Codex', 'now', 9999999999, 'read')")
-    assert migrations.ensure_current()["applied"] == ["mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats"]
+    assert migrations.ensure_current()["applied"] == ["mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats", "sync_conflict_base"]
     with connect_users_db() as conn:
         assert conn.execute("SELECT id FROM integration_tokens").fetchone()[0] == 'id'
         assert conn.execute("SELECT * FROM mcp_oauth").fetchall() == []
@@ -38,7 +38,7 @@ def test_v6_adds_integration_tokens_and_is_repeatable(data_dir):
         conn.execute("DROP TABLE integration_tokens")
         conn.execute("PRAGMA user_version = 5")
         conn.commit()
-    assert migrations.ensure_current()["applied"] == ["integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats"]
+    assert migrations.ensure_current()["applied"] == ["integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats", "sync_conflict_base"]
     with connect_users_db() as conn:
         assert conn.execute("SELECT * FROM integration_tokens").fetchall() == []
     assert migrations.ensure_current()["applied"] == []
@@ -51,7 +51,7 @@ def test_v5_adds_publisher_sessions_and_is_repeatable(data_dir):
         conn.execute("PRAGMA user_version = 4")
         conn.commit()
     result = migrations.ensure_current()
-    assert result["applied"] == ["publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats"]
+    assert result["applied"] == ["publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats", "sync_conflict_base"]
     with connect_users_db() as conn:
         assert conn.execute("SELECT * FROM publisher_sessions").fetchall() == []
     assert migrations.ensure_current()["applied"] == []
@@ -141,7 +141,7 @@ def test_status_and_refusal_on_a_v0_directory(data_dir):
     build_v0(data_dir)
     st = migrations.status()
     assert st["version"] == 0 and st["target"] == SCHEMA_VERSION and not st["fresh"]
-    assert [p["name"] for p in st["pending"]] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats"]
+    assert [p["name"] for p in st["pending"]] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats", "sync_conflict_base"]
     # Nothing but the runner may open an old users.db.
     with pytest.raises(SchemaOutdated):
         connect_users_db()
@@ -153,7 +153,7 @@ def test_upgrade_v0_to_current(data_dir):
     build_v0(data_dir)
     result = migrations.ensure_current()
     assert result["from"] == 0 and result["to"] == SCHEMA_VERSION
-    assert result["applied"] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats"]
+    assert result["applied"] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats", "sync_conflict_base"]
     assert migrations.data_version() == SCHEMA_VERSION
 
     # A snapshot of every database was taken first, with a manifest.
@@ -243,7 +243,7 @@ def test_interrupted_upgrade_resumes(data_dir):
         m._move_prefs = original
     assert migrations.data_version() == 1  # the failed step did not stamp
     result = migrations.ensure_current()   # resumes: the moved account is skipped, the rest done
-    assert result["applied"] == ["workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats"] and migrations.data_version() == SCHEMA_VERSION
+    assert result["applied"] == ["workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens", "mcp_oauth", "ai_usage", "upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats", "sync_conflict_base"] and migrations.data_version() == SCHEMA_VERSION
     with connect_users_db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM users WHERE default_workspace = ''").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0] == 3
@@ -326,7 +326,7 @@ def test_v9_repairs_leaked_upload_paths_once(data_dir):
         ("md", "root", "notes/c", {"original_filename": "notes/c.md", "markdown_import": True}),
         ("clean", "root", "d.pdf", {"original_filename": "d.pdf", "auto_title": "d.pdf"}),
     ])
-    assert migrations.ensure_current()["applied"] == ["upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats"]
+    assert migrations.ensure_current()["applied"] == ["upload_path_titles", "mirrors", "mirror_cadence", "sync_log_stats", "sync_conflict_base"]
     with closing(sqlite3.connect(str(ws_root / "pages.db"))) as conn:
         rows = {r[0]: (r[1], json.loads(r[2]), r[3]) for r in conn.execute(
             "SELECT id, content, properties, updated_at FROM unified_blocks WHERE parent_id = 'root'")}

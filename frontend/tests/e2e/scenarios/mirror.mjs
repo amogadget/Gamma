@@ -38,8 +38,8 @@ export async function mirrorScenarios(env) {
       await row.waitFor();
       assert((await row.textContent()).includes("My clone"), "the row carries the chosen name");
 
-      // Pull & push runs a round inline; the status line then says when.
-      await row.getByRole("button", { name: "Pull & push", exact: true }).click();
+      // Sync runs a round inline; the status line then says when.
+      await row.getByRole("button", { name: "Sync", exact: true }).click();
       await until(() => row.locator(".aiProvDesc").last().textContent().then((t) => /up to date \d/.test(t)),
         { timeout: 20000, what: "the row reports a sync" });
       const mirrors = await user.api("/api/mirrors");
@@ -61,30 +61,34 @@ export async function mirrorScenarios(env) {
       await until(() => Promise.resolve(new URL(page.url()).searchParams.get("ws") === copy.workspace_id), { what: "the clone is open" });
       await page.waitForSelector(".folderNewBtn", { timeout: 15000 });
       await page.getByText("Mirrored paper", { exact: true }).first().waitFor();
-      // the header's sync pill: state at a glance, the log in the popover
+      // the header's sync pill: the state drawn on the icon, the log in the popover
       const pill = page.getByRole("button", { name: "Sync status", exact: true });
-      await until(() => pill.textContent().then((t) => /up to date/.test(t)), { what: "the pill reports the sync" });
+      await until(() => pill.getAttribute("data-state").then((t) => t === "ok"), { what: "the pill reports the sync" });
+      assertEq(await pill.locator(".mirrorPillDot.ok").count(), 1, "a green dot: up to date");
       await pill.click();
       const pop = page.getByRole("dialog", { name: "Sync status", exact: true });
       await pop.getByText("Log", { exact: true }).waitFor();
       await pop.getByText("Mirrored paper", { exact: true }).waitFor();
       // the row carries its git-style counts: the page came whole with one block
       assertEq(await pop.locator(".mirrorDiff .add").first().textContent(), "+1", "the log row shows +1 block");
-      await pop.getByRole("button", { name: "Pull & push", exact: true }).click();
-      await until(() => pop.textContent().then((t) => /Up to date/.test(t) && !/Syncing/.test(t)), { timeout: 20000, what: "the popover settles after Pull & push" });
+      // and opens to the changes themselves: the block that was added
+      await pop.getByText("Mirrored paper", { exact: true }).click();
+      await pop.locator(".mirrorChange.add", { hasText: "a note to copy" }).waitFor();
+      await pop.getByRole("button", { name: "Sync", exact: true }).click();
+      await until(() => pop.textContent().then((t) => /Up to date/.test(t) && !/Syncing/.test(t)), { timeout: 20000, what: "the popover settles after Sync" });
       // the sync settings live in the popover: cadence, detach, reattach
       await pop.getByRole("button", { name: "Sync settings", exact: true }).click();
       await pop.getByText("Sync settings", { exact: true }).waitFor();
       await pop.getByRole("button", { name: "Manual", exact: true }).click();
       await until(() => user.api(`/api/mirrors/${copy.workspace_id}`).then((m) => m.poll_s === 0), { what: "the cadence is saved" });
       await pop.getByRole("button", { name: "Detach", exact: true }).click();
-      await until(() => pill.textContent().then((t) => /detached/.test(t)), { what: "the pill reads detached" });
+      await until(() => pill.getAttribute("data-state").then((t) => t === "detached"), { what: "the pill reads detached" });
       assertEq((await user.api(`/api/mirrors/${copy.workspace_id}`)).mode, "off");
       await pop.getByRole("button", { name: "Reattach", exact: true }).click();
-      await until(() => pill.textContent().then((t) => /up to date/.test(t)), { timeout: 20000, what: "reattached and synced" });
+      await until(() => pill.getAttribute("data-state").then((t) => t === "ok"), { timeout: 20000, what: "reattached and synced" });
       await pop.getByRole("button", { name: "Back", exact: true }).click();
-      await pop.getByText("Mirrored paper", { exact: true }).click();
-      await page.getByText("a note to copy", { exact: true }).waitFor();
+      await pop.getByRole("button", { name: "Open the page", exact: true }).first().click();
+      await page.getByRole("paragraph").filter({ hasText: "a note to copy" }).first().waitFor();
       assertNoProblems(page);
       // a same-block edit on both sides: the conflict chip on the row resolves it in place
       await user.api(`/api/pages/${paper.id}/ops`, { method: "POST", body: { client: "e2e", ops: [
@@ -99,12 +103,14 @@ export async function mirrorScenarios(env) {
       await page.locator(".mergeChip").click();
       const merge = page.getByRole("dialog", { name: "Merge", exact: true });
       await merge.getByText("Auto-merged", { exact: true }).waitFor();
-      // ours and theirs side by side with what each adds marked, the merged text under them, Keep on the current one
+      // local and remote side by side as what each changed against the base, the merged text under them, Keep on the current one
       assert((await merge.locator("mark.merge-mine").count()) >= 1 && (await merge.locator("mark.merge-theirs").count()) >= 1, "both sides coloured");
-      assertEq(await merge.locator(".mergeVersion").count(), 3, "ours, theirs and the merged text");
+      assertEq(await merge.locator(".mergeVersion").count(), 3, "local, remote and the merged text");
+      assertEq((await merge.locator(".mergeVersion.mine mark.merge-mine").first().textContent()).trim(), "(copy)", "local added '(copy)' at the front");
+      assertEq((await merge.locator(".mergeVersion.theirs mark.merge-theirs").first().textContent()).trim(), "(original)", "remote added '(original)' at the end");
       await merge.getByRole("button", { name: "Keep merged", exact: true }).waitFor();
       assertEq(await merge.locator(".mergeNav").count(), 0, "one conflict: nothing to step through");
-      await merge.getByRole("button", { name: "Use theirs", exact: true }).click();
+      await merge.getByRole("button", { name: "Use remote", exact: true }).click();
       await until(() => page.locator(".mergeChip").count().then((n) => n === 0), { what: "the chip goes once resolved" });
       await page.getByRole("paragraph").filter({ hasText: "a note to copy (original)" }).first().waitFor();
       assertEq((await user.api(`/api/mirrors/${copy.workspace_id}`)).conflicts_open, 0);

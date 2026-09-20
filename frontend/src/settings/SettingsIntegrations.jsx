@@ -119,7 +119,7 @@ export function IntegrationSettings({ workspaceId }) {
               : "Follow your assistant's sign-in prompt. Approve read-only access in Gamma. No token to create or paste."} />
           {isClaude ? <>
             <Step n={3} title="Use the Gamma plugin"
-              hint="In Claude Code, open /plugin to see installed plugins. Start a new session and run /gamma:gamma, then ask about a paper or say “Let me choose a paper”.">
+              hint="In Claude Code, open /plugin to see installed plugins. Start a new session and run /gamma:gamma, then paste a Gamma page or share link with your question.">
               <p className="settingDesc">The plugin provides the Gamma workflow. The MCP connection above gives it access to your library.</p>
               <details>
                 <summary>Install the plugin if it is missing</summary>
@@ -139,7 +139,7 @@ export function IntegrationSettings({ workspaceId }) {
                 For a remote server, use a stable HTTPS hostname and confirm it in Gamma's Settings → Server.</p>
             </details>
           </> : <Step n={3} title="Start a new chat"
-            hint={method === "terminal" ? 'Mention @Gamma PDF and ask about a paper, or say “Let me choose a paper”.' : 'Try asking: “Use Gamma to find my notes about…”'} />}
+            hint={method === "terminal" ? 'Copy the Gamma page URL from your browser and paste it with your question. A share link works too.' : 'Try asking: “Use Gamma to find my notes about…”'} />}
         </> : <>
           <p>Browser sign-in is not available for this Gamma address yet.</p>
           <p>An administrator can enable it by confirming the public server URL in Settings → Server.</p>

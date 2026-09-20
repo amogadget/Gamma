@@ -56,6 +56,7 @@ def _info(mirror: dict) -> dict:
     info = workspaces.get(mirror["workspace_id"])
     return {**mirror, "name": info["name"] if info else "",
             "conflicts_open": sync_engine.open_conflicts(mirror["workspace_id"]),
+            "pending_local": mirror["mode"] == "two-way" and sync_engine.has_local_changes(mirror["workspace_id"]),
             "interval_s": config.sync_interval_s(), "detached": mirror["mode"] == "off"}
 
 

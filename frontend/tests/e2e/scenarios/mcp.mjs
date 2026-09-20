@@ -153,111 +153,44 @@ export async function mcpScenarios(env) {
     } finally { await ctx.close(); }
   });
 
-  await step("mcp: sandboxed paper picker searches, paginates and hands off an exact selection", async () => {
-    const ctx = await alice.context(browser);
-    const credential = await alice.api("/api/integrations/tokens", { method: "POST", body: { name: "Picker browser test" } });
-    const rpc = async (method, params) => {
+  await step("mcp: resolve browser page URLs, block links and share links", async () => {
+    const ctx = await alice.context(browser, { permissions: ["clipboard-read", "clipboard-write"] });
+    const credential = await alice.api("/api/integrations/tokens", { method: "POST", body: { name: "Link browser test" } });
+    const readLink = async (url) => {
       const response = await fetch(`${server.base}/mcp`, { method: "POST", headers: {
         Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream",
-      }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+      }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_gamma_link", arguments: { url } } }) });
       assertEq(response.status, 200);
-      const body = await response.json();
-      assert(!body.error, JSON.stringify(body.error));
-      return body.result;
+      const result = (await response.json()).result;
+      assert(!result.isError, JSON.stringify(result));
+      return result;
     };
     try {
-      for (let i = 0; i < 22; i++) await alice.api("/api/blocks", { method: "POST", body: { parent_id: "root", content: `Picker browser ${i}` } });
-      const title = '<img src=x onerror="alert(1)"> Picker chosen paper';
-      const paper = await alice.api("/api/blocks", { method: "POST", body: { parent_id: "root", content: title } });
-      const initial = await rpc("tools/call", { name: "show_paper_picker", arguments: { query: "Picker" } });
-      const html = (await rpc("resources/read", { uri: "ui://gamma/paper-picker-v1.html" })).contents[0].text;
-      // Simulate only the host bridge; every tool call goes through the real
-      // authenticated MCP endpoint. No credential is passed into the iframe.
-      await ctx.exposeBinding("pickerCall", (_, params) => rpc("tools/call", params));
-      await ctx.route("**/picker-test-host", (route) => route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Picker test host</title><style>body{margin:0}iframe{width:100%;height:650px;border:0}</style>' }));
-      const page = await openPage(ctx, `${server.base}/picker-test-host`);
-      await page.evaluate(({ html, initial }) => {
-        window.messages = [];
-        const frame = document.createElement("iframe"); frame.title = "Gamma paper picker";
-        frame.setAttribute("sandbox", "allow-scripts");
-        window.addEventListener("message", async (event) => {
-          if (event.source !== frame.contentWindow) return;
-          const { id, method, params } = event.data;
-          let result = {};
-          if (method === "ui/initialize") result = { protocolVersion: "2026-01-26", hostCapabilities: { serverTools: {} }, hostContext: { theme: "light" } };
-          else if (method === "ui/notifications/initialized") {
-            frame.contentWindow.postMessage({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: initial }, "*"); return;
-          } else if (method === "tools/call") result = await window.pickerCall(params);
-          else if (method === "ui/message") {
-            // Enforce the real host's content-array contract. An object here
-            // caused the validation failure reported from ChatGPT desktop.
-            if (!Array.isArray(params.content) || params.content.length !== 1 || params.content[0].type !== "text") {
-              frame.contentWindow.postMessage({ jsonrpc: "2.0", id, error: { code: -32602, message: 'Expected array at params.content' } }, "*"); return;
-            }
-            if (window.denyMessage) {
-              frame.contentWindow.postMessage({ jsonrpc: "2.0", id, error: { code: -32000, message: '[{"code":"invalid_type","path":["params","content"]}]' } }, "*"); return;
-            }
-            if (window.messageResultError) result = { isError: true };
-            else
-            window.messages.push(params);
-          }
-          if (id !== undefined) frame.contentWindow.postMessage({ jsonrpc: "2.0", id, result }, "*");
-        });
-        frame.srcdoc = html; document.body.append(frame);
-      }, { html, initial });
-      const picker = page.frameLocator('iframe[title="Gamma paper picker"]');
-      await picker.getByText("1–20 of 23 papers and notes", { exact: true }).waitFor();
-      assertEq(await picker.locator("#results img").count(), 0, "paper titles cannot inject HTML");
-      assert(await picker.getByRole("img", { name: "Gamma", exact: true }).evaluate((img) => img.complete && img.naturalWidth === 512), "Gamma icon loads without a network request");
-      await picker.getByRole("button", { name: "Next", exact: true }).click();
-      await picker.getByText("21–23 of 23 papers and notes", { exact: true }).waitFor();
-      await picker.getByRole("searchbox").fill("absent title");
-      await picker.getByRole("button", { name: "Search", exact: true }).click();
-      await picker.getByText("No matching titles. Try fewer words.").waitFor();
-      await picker.getByRole("searchbox").fill("chosen");
-      await picker.getByRole("button", { name: "Search", exact: true }).click();
-      await picker.getByRole("button", { name: title, exact: false }).click();
-      assert(!(await picker.locator("#pagination").isVisible()), "no pagination for a single result");
-      assert(!(await picker.locator("#results").innerText()).includes(paper.id), "unique titles do not show opaque IDs");
-      await page.evaluate(() => { window.denyMessage = true; });
-      await picker.getByRole("button", { name: "Use this paper" }).click();
-      const fallback = picker.getByRole("textbox", { name: "Selected paper reference" });
-      await fallback.waitFor();
-      assert((await fallback.inputValue()).includes(paper.id));
-      assert(!(await picker.locator("body").innerText()).includes("invalid_type"), "raw host errors stay out of the UI");
-      await page.evaluate(() => { window.denyMessage = false; });
-      await page.evaluate(() => { window.messageResultError = true; });
-      await picker.getByRole("button", { name: "Use this paper" }).click();
-      await picker.getByText("Could not add the paper to chat. Try again, or copy the reference below.").waitFor();
-      assertEq(await page.evaluate(() => window.messages.length), 0, "result-level errors do not confirm a selection");
-      await page.evaluate(() => { window.messageResultError = false; });
-      await picker.getByRole("textbox", { name: "Question about the selected paper" }).fill("What are its main findings?");
-      await picker.getByRole("button", { name: "Ask about this paper", exact: true }).click();
-      await until(() => page.evaluate(() => window.messages.length === 1));
-      const message = await page.evaluate(() => window.messages[0]);
-      assertEq(message.role, "user"); assertEq(message.content[0].type, "text");
-      const text = message.content[0].text;
-      const selection = new URL(text.split("\n")[1]);
-      assertEq(selection.searchParams.get("page"), paper.id); assertEq(selection.searchParams.get("ws"), alice.ws);
-      assert(text.includes(JSON.stringify(title)));
-      assert(text.endsWith("What are its main findings?"));
-      assert(!text.includes(credential.token));
-      await picker.getByRole("button", { name: "Choose another paper" }).waitFor();
-      assert(!(await picker.locator("#chooser").isVisible()), "sent selection collapses the picker");
-      await picker.getByRole("button", { name: "Choose another paper" }).click();
-      assert(await picker.getByRole("searchbox").isVisible(), "picker can reopen after selection");
-      assertEq(await picker.getByRole("textbox", { name: "Question about the selected paper" }).inputValue(), "");
-      if (process.env.GAMMA_MCP_SCREENSHOTS) {
-        fs.mkdirSync(process.env.GAMMA_MCP_SCREENSHOTS, { recursive: true });
-        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "picker-desktop.png") });
-        await page.setViewportSize({ width: 390, height: 844 });
-        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "picker-mobile.png") });
-        assert(await picker.locator("body").evaluate(() => document.documentElement.scrollWidth <= innerWidth), "picker fits mobile width");
-      }
+      const page = await openPage(ctx, server.base);
+      const pageId = await newPageViaUi(page, "Assistant context page");
+      const note = await alice.api("/api/blocks", { method: "POST", body: { parent_id: pageId, content: "The exact note to discuss" } });
+      await page.reload();
+      await until(() => new URL(page.url()).searchParams.get("block") === pageId);
+      const url = new URL(page.url());
+      assertEq(url.searchParams.get("block"), pageId);
+      assertEq(url.searchParams.get("ws"), alice.ws);
+      assert(!url.searchParams.has("share"));
+      assertEq((await alice.api(`/api/share-settings/${pageId}`)).token, null, "reading a browser URL needs no share");
+      const result = await readLink(url.href);
+      assertEq(result.structuredContent.page_id, pageId);
+      assert(result.content[0].text.includes("The exact note to discuss"));
+      await page.locator(`.sortableBlockWrap[data-block-id="${note.id}"] .dragHandle`).first().click();
+      await page.getByText("Copy link to block", { exact: true }).click();
+      const noteUrl = new URL(await page.evaluate(() => navigator.clipboard.readText()));
+      assertEq(noteUrl.searchParams.get("block"), note.id);
+      assertEq((await readLink(noteUrl.href)).structuredContent.block_id, note.id);
+      const share = await alice.api(`/api/share/${pageId}`, { method: "POST" });
+      assertEq((await readLink(`${server.base}/?share=${share.token}`)).structuredContent.page_id, pageId);
       assertNoProblems(page);
     } finally {
       await ctx.close();
       await alice.api(`/api/integrations/tokens/${credential.id}`, { method: "DELETE" });
     }
   });
+
 }

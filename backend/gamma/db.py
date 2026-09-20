@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 class SchemaOutdated(RuntimeError):
@@ -261,6 +261,7 @@ PAGES_SCHEMA = [
         mine TEXT NOT NULL DEFAULT '',
         theirs TEXT NOT NULL DEFAULT '',
         result TEXT NOT NULL DEFAULT '',
+        base TEXT NOT NULL DEFAULT '',
         at TEXT NOT NULL,
         resolved INTEGER NOT NULL DEFAULT 0
     )""",
