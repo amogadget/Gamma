@@ -174,6 +174,11 @@ naming conventions.
 
 **Tests**
 
+For local changes, run tests for the affected modules and their direct consumers;
+see the [test selection policy](docs/dev/debugging.md#local-changes-test-the-affected-modules)
+for targeted backend, frontend, and browser commands. The commands below run
+full suites, which also run in PR CI.
+
 ```bash
 cd backend
 pip install -r requirements-dev.txt

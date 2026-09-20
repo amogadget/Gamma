@@ -112,7 +112,7 @@ def test_consent_requires_matching_browser_session_and_membership(browser):
     with TestClient(app, base_url=BASE) as second:
         second.post("/api/login", json={"username": "oauth-reader", "password": "pw"})
         assert second.post("/api/integrations/oauth/consent", json=payload).status_code == 403
-    assert c.post("/api/integrations/oauth/consent", json=payload).status_code == 200
+    assert c.post("/api/integrations/oauth/consent", json=payload, headers={"Origin": BASE}).status_code == 200
     assert c.post("/api/integrations/oauth/consent", json=payload).status_code in (400, 403)
 
 
@@ -123,6 +123,51 @@ def test_cancellation_does_not_create_token(browser):
     result = c.post("/api/integrations/oauth/consent", json={**value, "approve": False})
     assert parse_qs(urlsplit(result.json()["redirect_url"]).query)["error"] == ["access_denied"]
     assert c.get("/api/integrations/tokens").json()["tokens"] == before
+
+
+@pytest.mark.parametrize("configured_by", ["saved", "environment"])
+@pytest.mark.parametrize("approve_request", [True, False])
+def test_consent_behind_https_proxy(browser, monkeypatch, configured_by, approve_request):
+    from gamma.app import app
+    from gamma import server_settings
+
+    _, ws = browser
+    public = "https://gamma.example"
+    monkeypatch.delenv("GAMMA_PUBLIC_URL", raising=False)
+    if configured_by == "environment":
+        monkeypatch.setenv("GAMMA_PUBLIC_URL", public)
+    else:
+        server_settings.set_public_url(public)
+    try:
+        # The proxy preserves Host but its connection to Gamma uses HTTP.
+        with TestClient(app, base_url="http://gamma.example") as c:
+            assert c.post("/api/login", json={"username": "oauth-reader", "password": "pw"}).status_code == 200
+            client_id, response = start(c, resource=public + "/mcp")
+            assert response.status_code == 302, response.text
+            request_id = parse_qs(urlsplit(response.headers["location"]).query)["gamma_oauth"][0]
+            details = c.get("/api/integrations/oauth/request", params={"request_id": request_id},
+                            headers={"Origin": public})
+            assert details.status_code == 200, details.text
+            payload = {"request_id": request_id, "csrf": details.json()["csrf"],
+                       "workspace_id": ws, "approve": approve_request}
+            for origin in ("https://evil.example", "http://gamma.example", "https://gamma.example:444", "null"):
+                denied = c.post("/api/integrations/oauth/consent", json=payload,
+                                headers={"Origin": origin, "X-Forwarded-Host": "evil.example",
+                                         "X-Forwarded-Proto": "https"})
+                assert denied.status_code == 403, denied.text
+            result = c.post("/api/integrations/oauth/consent", json=payload, headers={"Origin": public})
+            assert result.status_code == 200, result.text
+            query = parse_qs(urlsplit(result.json()["redirect_url"]).query)
+            assert query["state"] == ["test-state"]
+            if approve_request:
+                tokens = exchange(c, client_id, query["code"][0], resource=public + "/mcp")
+                assert tokens.status_code == 200, tokens.text
+                assert resolve_token(tokens.json()["access_token"], public + "/mcp") == ("oauth-reader", ws)
+            else:
+                assert query["error"] == ["access_denied"]
+    finally:
+        if configured_by == "saved":
+            server_settings.set_public_url("")
 
 
 @pytest.mark.parametrize("uri", ["javascript:alert(1)", "http://evil.example/callback", "https://good.example/#fragment", "https://user:pass@example.com/cb"])

@@ -137,6 +137,7 @@ window.fetch = function (input, options) {
       window.dispatchEvent(new CustomEvent("gamma-api-log", {
         detail: {
           message: `API ${method} ${path} → ${r.status} in ${timing}${explanation ? ` — ${explanation}` : ""}`,
+          tone: r.status >= 500 ? "error" : r.status >= 400 ? "warn" : "",
         },
       }));
     };
@@ -153,6 +154,7 @@ window.fetch = function (input, options) {
     window.dispatchEvent(new CustomEvent("gamma-api-log", {
       detail: {
         message: `API ${method} ${path} failed after ${elapsed} ms — ${error?.message || "network error"}`,
+        tone: "error",
       },
     }));
   });

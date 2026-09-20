@@ -305,7 +305,7 @@ state in App instead of the tree.
 - Queued edits live in memory, not in durable offline storage. Keepalive
   saves on tab close are best effort and subject to browser limits; a network
   outage followed by closing the tab can lose unsaved work.
-- Same-block simultaneous typing merges by span (three-way merge above);
+- Same-block simultaneous typing merges by span (three-way merge above); a set whose content already is the block's text (the same edit sent twice, a retried batch, a clone pushing what it already pulled) merges nothing — patching it in again would double the change;
   two people changing the *same* characters within one save window still
   resolve by server order for that span. If character-exact convergence
   ever matters, the upgrade path is CodeMirror's collab rebase on just the

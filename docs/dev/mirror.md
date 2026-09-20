@@ -82,11 +82,36 @@ diff to nothing on the next round.
 | deleted here, edited there | re-created here from the remote (`page_restored_from_remote`) |
 
 Inside a page the same rule holds at block level, **an edit beats a
-delete**: a subtree the remote deleted stays when something in it was
+delete** (a move counts as an edit): a subtree the remote deleted stays when something in it was
 edited here (the push re-inserts it there), and a subtree deleted here
 comes back whole when the remote edited inside it. Same-block text edits
 merge by span through `gamma/textmerge.py` on whichever server applies the
 op; two edits to the same characters resolve by the remote's order.
+
+Three more rules keep the two trees identical in the odd cases
+(`tests/test_mirror_edges.py` pins each):
+
+- **Positions.** The server re-keys a block that lands on a taken key, so
+  when the remote's answer moves two siblings past each other, applying
+  those moves here in order would re-key one of them and leave this side's
+  keys off the remote's — and every later round would push the difference
+  again. `_parked` (in `_apply_local`) moves the block that holds a
+  target key to a fresh key at the end first, so every move lands where it
+  says and one round settles it.
+- **Cross-page moves.** A block id lives in one page. When the remote's ops
+  insert a block that lives in another page here (moved there on the
+  remote, or edited here after the remote moved it), `_relocated` deletes
+  it from that page first and inserts it with the text it has *here*, which
+  the push then sends on; the page it left is reconciled at its own turn
+  (both sides deleted it there). The other way round — this copy still
+  holds the block in a page the remote moved it out of — the remote refuses
+  the push (`403 … outside this page`) and the page is deferred
+  (`PageDeferred`: kept on the retry list, not an error) while the
+  receiving page's round moves it over; the next round finds nothing left
+  to push.
+- **The same edit made on both sides** (or a retried batch) is one edit: an
+  op whose content already is the block's text merges nothing (`ops.py`,
+  `textmerge.merge`), where patching the change in again used to double it.
 
 Every decision the engine takes on its own is a row of `sync_conflicts`
 (`merged`, `kept_local_edit`, `restored_remote_edit`, `page_restored`,
@@ -94,7 +119,9 @@ Every decision the engine takes on its own is a row of `sync_conflicts`
 also `base`, the text before either side edited it, so the resolver can
 show what each side changed. Sync never blocks on one: the person looks at
 the list and, for a merge, can put back "mine" or "theirs" — an ordinary
-edit that the next round pushes.
+edit that the next round pushes, written from the text the conflict
+recorded as its `base`, so words typed into the block since the merge are
+kept over the chosen version rather than lost.
 
 Pull-only mirrors (a read token, or a viewer's, or the *Receive only*
 direction) apply the remote's changes and never push; local edits stay
@@ -343,7 +370,14 @@ fill, edits both ways, different-block and same-span merges with the
 conflict rows and their resolution, edit-versus-delete both ways, pages
 created and deleted on either side, files by hash, pull-only, stopping.
 `test_sync_tree.py` pins the diff; `test_token_api.py` the bearer rules;
-`test_sync_feed.py` the feed. The progress reports, the interrupted-flag
+`test_sync_feed.py` the feed. `test_mirror_edges.py` is the odd cases:
+typing while a round is in flight, two clones of one remote editing the
+same blocks, a move against a delete, a child added inside a subtree
+deleted here, a subtree deleted on both sides, the same position taken on
+both sides, the title renamed on both sides, props against text, the same
+edit on both sides, a round cut short after its push, resolving a conflict
+after more typing, a block moved to another page while edited here, edits
+made while the remote is unreachable — each ending with both sides equal. The progress reports, the interrupted-flag
 reset, the retry of a page that failed, detach + re-link, linking an
 existing workspace, the force in both directions, the cadence and the
 sync-on-change trigger are in `test_mirror.py` too; the browser scenario

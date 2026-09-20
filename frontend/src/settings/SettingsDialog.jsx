@@ -883,6 +883,10 @@ function AdvancedAiSettings({ value, ai, papers }) {
 // --- Advanced: logs ---------------------------------------------------------
 
 function AdvancedSettings({ value }) {
+  const [level, setLevel] = React.useState("all");
+  const entries = value.sysLog
+    .map((entry, index) => ({ key: index, timeMs: entry.t, text: entry.msg, tone: entry.tone }))
+    .filter((entry) => level === "all" || (level === "warn" ? !!entry.tone : entry.tone === "error"));
   return (
     <>
       <PaneHead icon={ActivityIcon} title="Diagnostics" />
@@ -901,10 +905,13 @@ function AdvancedSettings({ value }) {
           icon={TerminalIcon}
           label="System log"
           description="Application events from this browser session"
-          entries={value.sysLog.map((entry, index) => ({ key: index, timeMs: entry.t, text: entry.msg }))}
-          emptyText="Nothing logged yet this session."
+          entries={entries}
+          emptyText={level === "all" ? "Nothing logged yet this session."
+            : `No ${level === "warn" ? "warnings or errors" : "errors"} logged this session.`}
           copyStatus="Log copied."
           setStatus={value.setStatus}
+          extra={<Segmented value={level} onChange={setLevel}
+            options={[["all", "All"], ["warn", "Warnings", null, "Warnings and errors"], ["error", "Errors"]]} />}
         />
       </Section>
     </>

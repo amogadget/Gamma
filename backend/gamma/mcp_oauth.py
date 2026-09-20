@@ -167,10 +167,12 @@ async def token(request: Request):
     return await TokenHandler(provider, ClientAuthenticator(provider)).handle(request)
 
 
-def consent_user(request):
+def consent_user(request, base):
     user = require_personal_user(request, "Sign in with a personal account to connect an assistant.")
     origin = request.headers.get("origin")
-    if origin and origin.rstrip("/") != f"{request.url.scheme}://{request.url.netloc}":
+    # public_base validates the configured public origin and request Host.
+    # A TLS-terminating proxy may reach this backend over plain HTTP.
+    if origin and origin.rstrip("/") != base:
         raise HTTPException(403, "Cross-origin consent is not allowed.")
     return user
 
@@ -179,7 +181,8 @@ def consent_user(request):
 async def consent_details(request: Request, request_id: str):
     from .mcp_oauth_provider import Provider
 
-    base, user = public_base(request), consent_user(request)
+    base = public_base(request)
+    user = consent_user(request, base)
     pending = load("request", base, request_id)
     client = await Provider(base).get_client(pending["client_id"]) if pending else None
     if not pending or not client:
@@ -204,7 +207,8 @@ async def consent(payload: Consent, request: Request):
     from mcp.server.auth.provider import AuthorizationParams, construct_redirect_uri
     from .mcp_oauth_provider import GammaCode
 
-    base, user = public_base(request), consent_user(request)
+    base = public_base(request)
+    user = consent_user(request, base)
     binding = load("consent", base, payload.csrf)
     if (not binding or binding["request_id"] != payload.request_id or binding["user"] != user or
             binding["session"] != token_digest(request.cookies.get(SESSION_COOKIE, ""))):

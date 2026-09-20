@@ -1561,14 +1561,14 @@ function LibraryApp() {
   const [status, setStatusRaw] = useState("Ready.");
   // System log (Settings → Diagnostics): status messages, PDF load activity,
   // and uncaught errors from this session. In-memory only.
-  const [sysLog, setSysLog] = useState([]); // [{t, msg}], capped
-  const logSys = useCallback((msg) => {
-    setSysLog((prev) => [...prev.slice(-499), { t: Date.now(), msg: String(msg) }]);
+  const [sysLog, setSysLog] = useState([]); // [{t, msg, tone}], capped
+  const logSys = useCallback((msg, tone = "") => {
+    setSysLog((prev) => [...prev.slice(-499), { t: Date.now(), msg: String(msg), tone }]);
   }, []);
   useEffect(() => {
-    const onErr = (e) => logSys(`error: ${e.message || "unknown"}${e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : ""}`);
-    const onRej = (e) => logSys(`unhandled rejection: ${e.reason?.message || e.reason || "unknown"}`);
-    const onApi = (e) => { if (e.detail?.message) logSys(e.detail.message); };
+    const onErr = (e) => logSys(`error: ${e.message || "unknown"}${e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : ""}`, "error");
+    const onRej = (e) => logSys(`unhandled rejection: ${e.reason?.message || e.reason || "unknown"}`, "error");
+    const onApi = (e) => { if (e.detail?.message) logSys(e.detail.message, e.detail.tone); };
     window.addEventListener("error", onErr);
     window.addEventListener("unhandledrejection", onRej);
     window.addEventListener("gamma-api-log", onApi);
@@ -2200,7 +2200,7 @@ function LibraryApp() {
     if (st.phase !== "progress" && st.phase !== "measuring") {
       try { performance.mark(`pdf-${st.phase}`, { detail: { url, ms } }); } catch {}
       const shortUrl = url.length > 100 ? url.slice(0, 100) + "…" : url;
-      logSys(`pdf ${st.phase} +${ms} ms${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
+      logSys(`pdf ${st.phase} +${ms} ms${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`, st.phase === "error" ? "error" : "");
     }
     // Feed the shared status pill — one channel for the whole load lifecycle,
     // so load progress and status messages can never stack.
