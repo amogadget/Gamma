@@ -7,21 +7,16 @@ import json
 import re
 import secrets
 import time
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from mcp.server.auth.handlers.authorize import AuthorizationHandler
-from mcp.server.auth.handlers.token import TokenHandler
-from mcp.server.auth.middleware.client_auth import ClientAuthenticator
-from mcp.server.auth.provider import AuthorizationCode, AuthorizationParams, AuthorizeError, TokenError, construct_redirect_uri
-from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 from pydantic import BaseModel, Field, ValidationError
 
 from . import ratelimit, workspaces
 from .auth import SESSION_COOKIE, read_body, require_personal_user
 from .db import connect_users_db
-from .integrations import create_token, token_digest
+from .integrations import token_digest
 from .server_settings import LOOPBACK_HOSTS, mcp_allowed_hosts, public_url_settings, validate_public_url
 
 router = APIRouter()
@@ -76,60 +71,6 @@ def load(kind, base, identifier, *, consume=False):
     return json.loads(row[0]) if row else None
 
 
-class GammaCode(AuthorizationCode):
-    username: str
-    workspace_id: str
-    session_hash: str
-
-
-class Provider:
-    def __init__(self, base):
-        self.base = base
-        self.resource = base + "/mcp"
-
-    async def get_client(self, client_id):
-        value = load("client", self.base, client_id)
-        return OAuthClientInformationFull.model_validate(value) if value else None
-
-    async def authorize(self, client, params: AuthorizationParams):
-        if params.resource != self.resource:
-            raise AuthorizeError("invalid_request", "The resource must be this Gamma MCP URL.")
-        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", params.code_challenge):
-            raise AuthorizeError("invalid_request", "A valid S256 PKCE challenge is required.")
-        if params.scopes is not None and params.scopes != [SCOPE]:
-            raise AuthorizeError("invalid_scope", "Only gamma:read is supported.")
-        request_id = secrets.token_urlsafe(32)
-        store("request", self.base, request_id,
-              {"client_id": client.client_id, "params": params.model_dump(mode="json")}, 600)
-        return self.base + "/?" + urlencode({"gamma_oauth": request_id})
-
-    async def load_authorization_code(self, client, authorization_code):
-        value = load("code", self.base, authorization_code)
-        return GammaCode(code=authorization_code, **value) if value else None
-
-    async def exchange_authorization_code(self, client, authorization_code: GammaCode):
-        # Atomic consumption prevents parallel exchanges of a valid code.
-        value = load("code", self.base, authorization_code.code, consume=True)
-        if not value or value["client_id"] != client.client_id or value["resource"] != self.resource:
-            raise TokenError("invalid_grant", "The authorization code is no longer valid.")
-        with connect_users_db() as conn:
-            user = conn.execute("SELECT is_guest FROM users WHERE username = ?", (value["username"],)).fetchone()
-            sessions = conn.execute("SELECT token FROM sessions WHERE username = ?", (value["username"],)).fetchall()
-        if (not user or user[0] or not any(token_digest(s[0]) == value["session_hash"] for s in sessions)
-                or not workspaces.role_of(value["workspace_id"], value["username"])):
-            raise TokenError("invalid_grant", "Workspace access is no longer available.")
-        try:
-            issued = create_token(value["username"], value["workspace_id"],
-                                  (client.client_name or "MCP assistant")[:65] + " (OAuth)", 90,
-                                  oauth_resource=self.resource)
-        except HTTPException as exc:
-            raise TokenError("invalid_grant", str(exc.detail)) from exc
-        return OAuthToken(access_token=issued["token"], expires_in=TTL, scope=SCOPE)
-
-    async def load_refresh_token(self, client, refresh_token):
-        return None
-
-
 def _no_store(value, status=200):
     return JSONResponse(value, status_code=status, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
@@ -152,17 +93,27 @@ def authorization_metadata(request: Request):
             "scopes_supported": [SCOPE]}
 
 
-async def body(request):
-    # The SDK handlers read the request again; hand them the capped body
-    # through Starlette's private cache (checked against Starlette 1.3).
-    request._body = await read_body(request, 16384, "OAuth request is too large.")
+async def bounded_request(request: Request) -> Request:
+    """Replay a capped body through the public ASGI receive interface."""
+    content = await read_body(request, 16384, "OAuth request is too large.")
+
+    async def receive():
+        return {"type": "http.request", "body": content, "more_body": False}
+
+    replay = Request(request.scope, receive)
+    # Populate the public body cache before form parsing so the SDK can
+    # read either representation again without consuming the original stream.
+    await replay.body()
+    return replay
 
 
 @router.post("/oauth/register")
 async def register(request: Request):
+    from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata
+
     base = public_base(request)
     ratelimit.check("mcp-register:" + ratelimit.client_ip(request), 30, 3600)
-    await body(request)
+    request = await bounded_request(request)
     try:
         metadata = OAuthClientMetadata.model_validate(await request.json())
         if metadata.token_endpoint_auth_method not in (None, "none") or not metadata.redirect_uris or len(metadata.redirect_uris) > 10:
@@ -186,6 +137,9 @@ async def register(request: Request):
 
 @router.get("/oauth/authorize")
 async def authorize(request: Request):
+    from mcp.server.auth.handlers.authorize import AuthorizationHandler
+    from .mcp_oauth_provider import Provider
+
     base = public_base(request)
     ratelimit.check("mcp-authorize:" + ratelimit.client_ip(request), 60, 600)
     if len(str(request.url)) > 8192:
@@ -197,9 +151,13 @@ async def authorize(request: Request):
 
 @router.post("/oauth/token")
 async def token(request: Request):
+    from mcp.server.auth.handlers.token import TokenHandler
+    from mcp.server.auth.middleware.client_auth import ClientAuthenticator
+    from .mcp_oauth_provider import Provider
+
     base = public_base(request)
     ratelimit.check("mcp-token:" + ratelimit.client_ip(request), 120, 600)
-    await body(request)
+    request = await bounded_request(request)
     form = await request.form()
     if form.get("resource") != base + "/mcp":
         return _no_store({"error": "invalid_target"}, 400)
@@ -219,6 +177,8 @@ def consent_user(request):
 
 @router.get("/api/integrations/oauth/request")
 async def consent_details(request: Request, request_id: str):
+    from .mcp_oauth_provider import Provider
+
     base, user = public_base(request), consent_user(request)
     pending = load("request", base, request_id)
     client = await Provider(base).get_client(pending["client_id"]) if pending else None
@@ -241,6 +201,9 @@ class Consent(BaseModel):
 
 @router.post("/api/integrations/oauth/consent")
 async def consent(payload: Consent, request: Request):
+    from mcp.server.auth.provider import AuthorizationParams, construct_redirect_uri
+    from .mcp_oauth_provider import GammaCode
+
     base, user = public_base(request), consent_user(request)
     binding = load("consent", base, payload.csrf)
     if (not binding or binding["request_id"] != payload.request_id or binding["user"] != user or

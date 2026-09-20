@@ -88,7 +88,7 @@ geometry). A module is testable there when its relative imports carry the
 `.js` extension (node resolves nothing else); modules that import React can
 still be imported for their pure exports. Actual React rendering and
 interactions are exercised by the browser suite below, plus one standalone
-browser regression: `node tests/e2e/latexEditor.mjs` bundles the block
+browser regression: `npm run e2e:latex` bundles the block
 editor with esbuild over an in-memory fixture ([latex_editing.md](latex_editing.md)).
 
 ### Browser end-to-end suite
@@ -131,6 +131,10 @@ The scenarios live in `tests/e2e/scenarios/`:
 - `chatNavigation.mjs`: a library or PDF chat reply keeps streaming and is
   saved while the user navigates away and back, before or after it finishes.
   `--only "chat navigation"`.
+- `mirror.mjs`: Settings → Workspaces → Offline copies — the server mirrors
+  one of its own workspaces through the dialog with a write token made via
+  the API, Sync now, the empty merges list, opening the copy, stopping it
+  ([mirror.md](mirror.md)). `--only mirror`.
 
 - `notes.mjs`: New page → title → first block (the seed-block insert),
   Shift+Enter / Tab / Shift+Tab / Backspace, Enter as a line break vs the
@@ -159,6 +163,16 @@ The scenarios live in `tests/e2e/scenarios/`:
   placement on a small screen, view/edit shares. Native Chromium touch/pen,
   asserting on the persisted stroke files. `--only "ink edit:"`; `--only
   ink` runs both files.
+- `guide.mjs`: the first-run guide ([onboarding.md](onboarding.md)) — `?guide=`
+  starts a tour and is consumed from the URL, every registered home-view anchor
+  is present once, the demo step adds a paper by itself (pointed at an
+  uploaded PDF through `gamma-guide-vars`, so no network), the user's
+  highlight checks the next step off, Esc leaves and records the dismissal,
+  the account menu's "Take the tour" restarts it.
+- `ipad.mjs`: the installed web app ([ipad.md](ipad.md)) — the manifest
+  and its icons, `theme-color` following the theme, the standalone-mode
+  block in the bundled stylesheet (`display-mode` cannot be emulated in
+  Chromium). `--only ipad`.
 - `pdfTouch.mjs`: 400% rendering under an emulated canvas limit, distant-page
   release/repaint, live ink, native touch swipes ([pdf_loading.md](pdf_loading.md)).
   `--only "pdf touch"`.
@@ -200,17 +214,28 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
 ## Debugging surfaces
 
 - **Server log** — Settings → Server → "Server log" (admin only): the
-  in-memory ring buffer behind `GET /api/admin/logs`. Backend code must log
-  through `gamma/logbuf.py`'s `log` (never `print()`); secrets are masked at
-  insert time. Gone on restart.
+  in-memory ring buffer behind `GET /api/admin/logs`, filterable to
+  warnings / errors; the Dashboard above it counts them since startup and
+  shows the build and the update check. Backend code must log through
+  `gamma/logbuf.py`'s `log` (never `print()`); use `log.warning` for what an
+  admin should notice. Secrets are masked at insert time. Gone on restart.
 - **Session log + debug tracing** — Settings → Advanced: browser-side event
   log; the "Debug logging" toggle traces reading-position/restore/sync
   events into it and the console. Every PDF load phase lands here as
   `pdf <phase> +<ms>` (ms since the viewer started opening that url) and as
   a `performance.mark("pdf-<phase>")` for devtools' Performance panel — the
   phases and what a healthy open looks like: [pdf_loading.md](pdf_loading.md).
-- **Background tasks** — the tasks popover (`GET /api/tasks`) shows indexing
-  and download progress. The client polls it every 2 s only while the popover
+- **Background tasks** — the tasks popover shows every client-side job
+  (downloads, uploads, imports, metadata / citation / title / translation AI
+  jobs) and the server's indexing (`GET /api/tasks`). A row carries a
+  progress bar while the work can measure itself (bytes, translated pages,
+  indexed papers) and a stop button (hover) while it can be stopped: the
+  viewer's download and the export download abort their fetch, uploads abort
+  their XHR, the AI jobs and zip imports abort their request, translation
+  halts the engine, indexing asks the server (`DELETE /api/tasks/indexing`,
+  which finishes the current paper and skips the rest). A stopped row reads
+  "stopped" and ignores the job's own late reports (`cancelledTransfersRef`
+  in App.jsx). The client polls `/api/tasks` every 2 s only while the popover
   is open or indexing is known to run; otherwise a 60 s heartbeat, and
   nothing at all while the tab is hidden (one refresh when it comes back).
   Anything that starts indexing (the search panel's library query, the

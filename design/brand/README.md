@@ -59,8 +59,9 @@ It normalizes text line endings for Windows/Linux checkouts. It verifies the
 recorded generation state, not pixel reproducibility across operating systems;
 review regenerated images before committing renderer or font updates.
 
-Published paths stay unchanged: `docs/assets/branding/`, the frontend favicon
-and mask, desktop resources, extension icons, backend MCP icon and plugin icon.
+Published paths stay unchanged: `docs/assets/branding/`, the frontend favicon,
+mask and home-screen icons (full-bleed plates through the `bleed` option,
+[docs/dev/ipad.md](../../docs/dev/ipad.md)), desktop resources, extension icons, backend MCP icon and plugin icon.
 They are generated copies because each package must remain self-contained.
 Use this pipeline to supply brand assets to a future `site/` directory too.
 

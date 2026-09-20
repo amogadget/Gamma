@@ -71,5 +71,54 @@ def test_edit_block_append_prepend_replace(page):
     # The armed spec offers the mode with its choices.
     from gamma.ai_tools import agent_tools
     spec = next(t for t in agent_tools("page", {}) if t["name"] == "edit_block")
-    assert spec["parameters"]["properties"]["mode"]["enum"] == ["replace", "append", "prepend"]
-    assert list(spec["parameters"]["properties"]) == ["block_id", "mode", "content"]
+    assert spec["parameters"]["properties"]["mode"]["enum"] == ["replace", "append", "prepend", "patch"]
+    assert list(spec["parameters"]["properties"]) == ["block_id", "mode", "find", "content"]
+
+
+def test_patch_block_text_rules():
+    from gamma.ai_tools import patch_block_text
+    assert patch_block_text("a b c", "b", "B") == ("a B c", None)
+    assert patch_block_text("a b c", "b ", "") == ("a c", None)          # cut
+    # Whitespace-relaxed fallback: a wrapped quote still hits once.
+    assert patch_block_text("one two\nthree", "two three", "2 3") == ("one 2 3", None)
+    text, err = patch_block_text("a b a", "a", "x")
+    assert text is None and err.startswith("error: `find` matches 2 places")
+    text, err = patch_block_text("a b c", "zzz", "x")
+    assert text is None and err.startswith("error: `find` text not found")
+    text, err = patch_block_text("a b c", "", "x")
+    assert text is None and err.startswith("error: patch needs `find`")
+
+
+def test_edit_block_patch_cuts_and_replaces_a_passage(page):
+    c, page_id = page
+    scope = {"type": "page", "page_id": page_id}
+    body = "Setup: 20 mK.\n\nResult: T1 = 300 us, measured twice.\n\nOutlook: retry at 10 mK."
+    block = c.post("/api/blocks", json={"parent_id": page_id, "content": body}).json()["id"]
+    # Replace one passage; everything around it is untouched.
+    text, action = run_agent_tool(workspace_of(USER), scope, "edit_block",
+                                  {"block_id": block, "mode": "patch",
+                                   "find": "T1 = 300 us", "content": "T1 = 310 us"})
+    assert text.startswith("ok") and "(patch)" in text, text
+    assert action["mode"] == "patch" and action["summary"].startswith("Edited part of a note")
+    assert _content(c, block) == body.replace("300", "310")
+    # An empty content cuts the passage.
+    text, _ = run_agent_tool(workspace_of(USER), scope, "edit_block",
+                             {"block_id": block, "mode": "patch",
+                              "find": "\n\nOutlook: retry at 10 mK.", "content": ""})
+    assert text.startswith("ok"), text
+    assert _content(c, block) == "Setup: 20 mK.\n\nResult: T1 = 310 us, measured twice."
+    # Guards leave the block alone: missing find, ambiguous find, no match.
+    text, _ = run_agent_tool(workspace_of(USER), scope, "edit_block",
+                             {"block_id": block, "mode": "patch", "content": "x"})
+    assert text.startswith("error: patch needs `find`")
+    text, _ = run_agent_tool(workspace_of(USER), scope, "edit_block",
+                             {"block_id": block, "mode": "patch", "find": ": ", "content": " - "})
+    assert text.startswith("error: `find` matches 2 places")
+    text, _ = run_agent_tool(workspace_of(USER), scope, "edit_block",
+                             {"block_id": block, "mode": "patch", "find": "nowhere", "content": ""})
+    assert text.startswith("error: `find` text not found")
+    assert _content(c, block) == "Setup: 20 mK.\n\nResult: T1 = 310 us, measured twice."
+    from gamma.ai_tools import agent_tools
+    spec = next(t for t in agent_tools("page", {}) if t["name"] == "edit_block")
+    assert spec["parameters"]["properties"]["mode"]["enum"] == ["replace", "append", "prepend", "patch"]
+    assert "find" in spec["parameters"]["properties"]

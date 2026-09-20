@@ -72,17 +72,17 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-connections-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-connections-light.svg">
-  <img alt="Gamma connects your research: import and export Obsidian vaults and Zotero libraries, import Notion notes, save papers with Gamma Connector, and search and read your library with Codex" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
+  <img alt="Gamma connects three groups: ChatGPT and Claude plugins on the left, Gamma Connector below, and Obsidian, Notion, and Zotero notes and knowledge-base apps on the right" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
 </picture>
 
 The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.
 
-The **[Gamma PDF plugin for Codex](./plugins/gamma/)** lets Codex search and read your papers, notes, highlights, and PDF text with read-only access to a workspace you approve. Open **Settings → AI → External assistants → Codex CLI**, copy the setup command for your operating system, and run it on the computer where you use Codex. It installs the plugin from a published Gamma release and opens Gamma sign-in. Approve a workspace, then start a new Codex chat and ask, “Use Gamma to find my notes about…” Requires the Codex CLI and a running, reachable Gamma server. Other MCP assistants can connect using the server URL in the same panel; see the [connection guide](./docs/dev/mcp.md).
+The **[Gamma PDF plugin for Codex and Claude Code](./plugins/gamma/)** lets either assistant search and read your papers, notes, highlights, and PDF text with read-only access to a workspace you approve. For Codex, open **Settings → Integrations → Codex CLI**, copy the setup command for your operating system, and run it on the computer where you use Codex. It installs the plugin from a published Gamma release and opens Gamma sign-in. For Claude Code, follow the [plugin setup](./plugins/gamma/README.md#claude-code) to install the workflow and connect the same MCP endpoint, then sign in through `/mcp` and invoke `/gamma:gamma`. Both require a running, reachable Gamma server. Other MCP assistants can connect using the server URL in the same panel; see the [connection guide](./docs/dev/mcp.md).
 
 For a remotely hosted Gamma, an administrator can enable assistant sign-in in
-**Settings → Administration → Server → Public server URL**. Confirm the suggested
+**Settings → Server → Public server URL**. Confirm the suggested
 HTTPS address once; Gamma saves it and applies it immediately, without environment
-variables or a server restart. Then connect from **AI → External assistants**.
+variables or a server restart. Then connect from **Settings → Integrations**.
 
 ## Share, sync and move your data
 
@@ -109,6 +109,7 @@ variables or a server restart. Then connect from **AI → External assistants**.
 Get the Windows app from the [**Microsoft Store**](https://apps.microsoft.com/detail/9N8WGWR2J2MV), or download standalone installers from [**GitHub Releases**](https://github.com/tim4431/Gamma/releases/latest).
 
 - **Desktop app** (Windows installer, macOS dmg, Debian/Ubuntu deb) — a self-contained Gamma with local libraries on your disk, no Docker, Python, or Node. It also opens any Gamma server you host (the NAS, a VPS) as another workspace and switches between them from the toolbar. Details: [desktop/](./desktop/). Builds are not notarized: Windows SmartScreen → *More info → Run anyway*; macOS says *Apple could not verify Gamma* on first launch → *System Settings → Privacy & Security → Open Anyway* (once); Linux: `sudo apt install ./Gamma-<version>-linux-amd64.deb`. Windows and Linux apps update themselves.
+- **iPad** — open your server in Safari, Share → *Add to Home Screen*: Gamma runs full screen from the icon, and the Apple Pencil writes on papers with pressure while fingers scroll. Chrome and Edge offer *Install Gamma* for the same on other tablets and desktops. Details: [docs/dev/ipad.md](./docs/dev/ipad.md).
 - **Gamma Connector** browser extension (`gamma-connector-<version>.zip`, in its own `extension-v<version>` release) — unzip, then `chrome://extensions` → *Developer mode* → *Load unpacked*.
 - **Server** — the Docker image below, built from `main` on every merge.
 
@@ -225,3 +226,8 @@ ghcr.io/tim4431/gamma
 Multi-stage build: a Node stage compiles the frontend, the final Python image runs FastAPI serving both the API and the SPA on port 9001. See [Dockerfile](./Dockerfile) and [.github/workflows/docker.yml](./.github/workflows/docker.yml).
 
 </details>
+
+## License
+
+Gamma is licensed under the [GNU Affero General Public License v3.0 only](LICENSE)
+(`AGPL-3.0-only`). Third-party components and assets retain their respective licenses.

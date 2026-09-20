@@ -1,4 +1,4 @@
-# Gamma MCP and Codex
+# Gamma MCP, Codex, and Claude Code
 
 Gamma exposes a read-only Streamable HTTP MCP endpoint at `/mcp`, on the same
 server as the app. Gamma's chat and MCP adapter share `gamma/ai_tools.py`:
@@ -8,19 +8,19 @@ servers, and connecting Codex does not invoke Gamma's AI provider.
 
 | File | Owns |
 |---|---|
-| `gamma/mcp_server.py` | the `/mcp` transport (official Python MCP SDK), the four read tools plus the two picker tools |
+| `gamma/mcp_server.py` | the `/mcp` transport (official Python MCP SDK), the four library read tools plus link reading |
 | `gamma/mcp_oauth.py` | discovery, dynamic registration, PKCE authorization and token exchange, the consent API (`/api/integrations/oauth/*`), `public_base` |
-| `gamma/mcp_picker.py` + `mcp_paper_picker.html` | the sandboxed MCP-Apps paper picker and its text fallback |
+| `gamma/mcp_links.py` | local page/block/share link resolution within the connected workspace |
 | `gamma/integrations.py` | integration tokens (`integration_tokens` table, hashes only) and their resolution |
 | `gamma/server_settings.py` | the admin-confirmed public URL and the MCP host allowlist |
 | `gamma/routers/integrations.py` | the session-only token management API |
 | `users.db` tables `integration_tokens`, `mcp_oauth` | migrations 6 and 7 ([migrations.md](migrations.md)) |
-| `frontend/src/settings/SettingsIntegrations.jsx`, `frontend/src/auth/McpConsent.jsx` | the External assistants pane, the consent screen |
-| `plugins/gamma/`, `tools/*codex*`, `.github/workflows/codex-plugin.yml` | the Codex plugin and its packaging |
+| `frontend/src/settings/SettingsIntegrations.jsx`, `frontend/src/auth/McpConsent.jsx` | the Integrations pane, the consent screen |
+| `plugins/gamma/`, `tools/package_plugins.py`, `tools/release_plugins.py`, `.github/workflows/codex-plugin.yml` | the shared Codex / Claude Code plugin and its packaging |
 
 ## Connect
 
-Open Gamma in your browser and go to **Settings → AI → External assistants**.
+Open Gamma in your browser and go to **Settings → Integrations**.
 Copy its server URL into your assistant's MCP settings and choose its sign-in
 option. Select **Codex CLI** in the panel for commands using your actual URL:
 
@@ -40,6 +40,47 @@ header must be removed (`codex mcp remove gamma`) and added again with just the
 URL before signing in. Installing the optional plugin does not install this
 per-user connection. A browser cannot directly edit Codex's configuration on
 your computer.
+
+### Claude Code
+
+Open **Settings → Integrations → Claude Code**. The connection command uses this
+Gamma server's MCP URL, with quoting for the selected terminal platform:
+
+```text
+claude mcp add --transport http --scope user gamma https://gamma.example.com/mcp
+```
+
+The same tab explains where the plugin appears (`/plugin`), how to invoke it
+(`/gamma:gamma`), and how to install it from an extracted release. Expand
+**Changed the server address?** for commands that replace the user-scoped MCP
+connection without reinstalling the plugin. Confirm a changed remote public URL
+in **Settings → Server** first, then reopen the setup tab and sign in again.
+Frontend command generation lives in `frontend/src/settings/assistantSetup.js`;
+both clients share shell-literal quoting, with `codexSetup.js` retained as an alias.
+
+Start Claude Code and open `/mcp`. Select `gamma` and authenticate in your browser;
+sign in to Gamma and approve the workspace. Start a new session. Check `/mcp` or
+`claude mcp get gamma` if tools are unavailable. Each assistant maintains its own
+connection and authorization; an existing Codex login does not connect Claude Code.
+See the [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+For the optional Gamma workflow, extract `gamma-claude-code-plugin-X.Y.Z.zip`
+from a Gamma release into a permanent directory, then run:
+
+```text
+claude plugin marketplace add <permanent-directory>/gamma-marketplace
+claude plugin install gamma@gamma-local --scope user
+```
+
+Start a new session and use `/gamma:gamma`, or ask about your Gamma library.
+The plugin uses the separately configured connection. To update after refreshing
+your extracted package or published marketplace, run
+`claude plugin marketplace update gamma-local` and
+`claude plugin update gamma@gamma-local`. Restart the session.
+
+For local development from this checkout, use `claude --plugin-dir ./plugins/gamma`.
+This loads the shared workflow without creating a marketplace; connect MCP separately.
+See the [plugin README](../../plugins/gamma/README.md) for both clients' setup.
 
 ### Manual tokens (advanced)
 
@@ -67,56 +108,35 @@ Ask Codex to find a page, search a topic, or summarize notes. Tools available:
 | `search_library` | Full-text note and PDF matches, with source locations |
 | `read_page` | Notes, highlights, properties, and windowed PDF text |
 | `read_block` | One block/subtree or a page's nested note outline |
-| `show_paper_picker` | Interactive title search and paper selection, with a text fallback |
-| `search_paper_choices` | Picker pagination/search through the host bridge (app visibility) |
+| `read_gamma_link` | Resolve and read a page, block, or share URL, including PDF page context |
 
-### Choose a paper inside ChatGPT
+### Send a page to either assistant
 
-Install the Gamma PDF plugin, keep its MCP connection enabled, and start a new
-chat. Mention the plugin with `@` and ask **"Let me choose a paper"**. The
-`show_paper_picker` tool opens a searchable list in clients that render MCP Apps.
-Select a paper, optionally type a question, then click **Use this paper** or
-**Ask about this paper**. This sends a short message containing the title and
-Gamma URL (with exact page/workspace IDs), plus your question if provided.
-The picker collapses after sending; **Choose another paper** reopens it.
-The assistant reads the selected page through `read_page`. If you already know
-the title, simply ask **"Use Gamma to explain [paper title]"** to skip the picker.
+Paste a Gamma page, block, or share URL with your question. `read_gamma_link`
+validates the server and workspace, resolves the reference locally, and reads the
+page through the same dispatcher as the other read tools. A block link also reads
+that block; `pdf_page` starts the PDF excerpt at that physical page. A URL's
+optional `quote` is returned as selected context, not treated as an instruction.
+The response includes stable IDs and a canonical URL for subsequent reads.
 
-The picker searches titles (including notes pages), shows 20 results at a time,
-and stays inside the connection's authorized workspace. Choosing a paper does
-not change Gamma's current workspace or grant additional access. Duplicate
-titles are distinguished by page ID. This is an in-conversation picker, not
-individual-paper autocomplete in ChatGPT's native `@` menu.
+Copy the page URL directly from the browser's address bar, or use an existing
+block or share link. The assistant keeps that reference as context until another
+is supplied; it does not track the user's active tab or PDF scroll position.
 
-The server supplies `ui://gamma/paper-picker-v1.html` as an authenticated MCP
-resource with MIME type `text/html;profile=mcp-app`. It is a self-contained,
-sandboxed component with no external scripts or network access. Search uses
-host-proxied `tools/call`; selection uses `ui/message` with a content-block array.
-Gamma's existing icon is bundled with the plugin, MCP metadata, and picker;
-whether the tool card displays the supplied icon depends on the host.
-Tokens are never embedded
-in the HTML. The UI is served by Gamma, so updating the skills-only plugin does
-not replace the server's picker code.
+Links never grant extra MCP access. Share tokens resolve only inside the already
+authorized workspace, including restricted shares whose workspace the user can
+already read. Revoked, unknown, mismatched, or cross-workspace references fail
+without disclosing the target. URLs are never fetched; foreign origins are
+rejected. Localhost, 127.0.0.1 and ::1 are equivalent only at the same scheme and
+port. A new server address requires the corresponding connection and link.
 
-If the client does not render MCP Apps, the tool also returns text choices with
-titles and page links. Choose one in a reply. The assistant is
-instructed not to duplicate the list beneath a working picker.
-If the host rejects the selection message, the
-picker shows a copyable reference. A connected MCP server by itself does not
-guarantee UI support; check your client's support when no picker appears.
-
-Implementation references: [OpenAI MCP Apps UI](https://developers.openai.com/plugins/build/chatgpt-ui)
-and [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview).
-
-Results include an absolute page URL or URL template carrying the workspace ID.
-PDF page numbers are physical 1-based page numbers. Existing read budgets and
-indexing/incomplete-result notices still apply. The tools read text only: no
-rendered PDF figures, no handwriting recognition.
+`read_page`, `read_block`, `list_pages`, and `search_library` remain available for
+follow-up reading and requests naming a page or topic without a URL.
 
 ## Self-hosted and remote connections
 
 Open Gamma at its public HTTPS address, then sign in as an administrator and
-open **Settings → Administration → Server → Public server URL**. The field
+open **Settings → Server → Public server URL**. The field
 suggests the browser's origin. Check it and click **Confirm address** once.
 Gamma stores the address in `users.db` and immediately uses it for OAuth,
 MCP links, and the MCP hostname allowlist. No environment variables or restart
@@ -168,11 +188,11 @@ Clients use `token_endpoint_auth_method=none`. Dynamic client registrations expi
 after 90 days; sign-in requests expire after 10 minutes and authorization codes
 after two minutes. Access tokens last 90 days. Refresh tokens are not issued;
 sign in again after expiration or revocation. OAuth connections appear alongside
-manual tokens in **External assistants**, where users can revoke them.
+manual tokens in **Integrations**, where users can revoke them.
 
 ## Permissions and credentials
 
-- Integration tokens grant reading access to exactly one workspace. Tool arguments,
+- Integration tokens grant access to exactly one workspace: `read` (the default; the MCP endpoint and the HTTP API's reads) or `write` (a mirror's push credential, [mirror.md](mirror.md); refused to viewers). On the HTTP API a manual token is a bearer credential — the account behind it, confined to its workspace, never an admin ([api.md](api.md) "Integrations"). Tool arguments,
   `?ws=`, and `X-Gamma-Workspace` cannot select another workspace.
 - Only token SHA-256 hashes are stored in `users.db`. Tokens contain 256 random bits.
 - Tokens expire after 90 days by default (API range: 1–365 days); accounts may
@@ -181,7 +201,8 @@ manual tokens in **External assistants**, where users can revoke them.
   Removing access, expiration, or revocation denies subsequent requests. A request
   already running may finish. Public workspace access follows Gamma's existing rules.
 - Account/workspace deletion removes the associated tokens. Account rename preserves
-  them; password changes through the admin API revoke them along with sessions.
+  them; password changes through the admin API or `manage.py set-password`
+  revoke them along with sessions.
 - MCP always disables writes and external web tools. The allowlist is enforced on
   every dispatch, independent of which tools the client was offered. Deprecated chat
   aliases are not accepted by the MCP transport.
@@ -200,7 +221,7 @@ DELETE /api/integrations/tokens/{id}
 
 ### Install from a Gamma release
 
-Open **Settings → AI → External assistants → Codex CLI** in browser or self-hosted
+Open **Settings → Integrations → Codex CLI** in browser or self-hosted
 Gamma (the same walkthrough ships in `plugins/gamma/README.md`). Select **Windows PowerShell** or **macOS / Linux**, copy the setup command,
 and run it on the computer where you use Codex. The Codex CLI must already be
 installed. Setup installs **Gamma PDF**, adds this server's MCP URL, and opens
@@ -222,10 +243,17 @@ Setup does not remove existing marketplaces or plugins.
 
 ### Build and publish
 
-`plugins/gamma` is a skills-based Codex plugin. Its workflow uses the separately
-configured Gamma MCP server; this keeps per-installation addresses and credentials
+`plugins/gamma` is one skills-based plugin for Codex and Claude Code. Its workflow
+uses the separately configured Gamma MCP server; this keeps per-installation addresses and credentials
 out of a distributable package. A direct MCP connection also works without the
 plugin, including in the Codex IDE extension.
+
+Both native manifests point to the same `skills/gamma/SKILL.md`. Keep client UI
+metadata in its own manifest or `agents/openai.yaml`; keep library behavior in
+the shared skill and server. The builder rejects mismatched shared manifest
+metadata, and releases stamp both versions together. It copies only allowlisted
+files and writes each client's catalog around the same plugin directory, without
+symlinks or references outside the installed plugin. No second MCP backend is needed.
 
 From a Gamma checkout, build into a directory you will keep. Codex registers
 the source path and continues reading its catalog after installation; deleting
@@ -233,7 +261,7 @@ it breaks marketplace discovery even when the plugin remains cached. For
 example, in Windows PowerShell:
 
 ```powershell
-python tools/package_codex_plugin.py --output "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace" --archive
+python tools/package_plugins.py --output "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace" --archive
 codex plugin marketplace add "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace"
 ```
 
@@ -254,16 +282,19 @@ the generated instructions, pass `--github-repo OWNER/REPO`. This only formats
 the instructions; it does not create a repository or push files.
 
 For GitHub distribution, commit the **contents of the generated directory** at
-the root of a separate marketplace repository. Include `.agents/` and
-`plugins/gamma/.codex-plugin/`. After publication, users run:
+the root of a separate marketplace repository. Include `.agents/`,
+`.claude-plugin/`, `plugins/gamma/.codex-plugin/`, and
+`plugins/gamma/.claude-plugin/`. After publication, users run the command for their client:
 
 ```text
 codex plugin marketplace add OWNER/REPO
+claude plugin marketplace add OWNER/REPO
 ```
 
 They then install Gamma PDF from that marketplace in the plugin browser and
 connect their own library. The main Gamma repository itself is not a marketplace
-root. The `Codex plugin package` workflow checks the package and installers on
+root. The `Assistant plugin package` workflow checks both catalogs, shared files,
+release versions, checksums, and the Codex installers on
 Windows, macOS, and Linux and uploads preview assets.
 
 The existing `desktop.yml` Gamma release workflow also builds the plugin with
@@ -272,16 +303,23 @@ the computed release version and publishes these assets on the same `vX.Y.Z` rel
 - `gamma-codex-plugin-X.Y.Z.zip`
 - `install-gamma-codex.ps1` and `install-gamma-codex.sh`
 - `gamma-codex-SHA256SUMS.txt`
+- `gamma-claude-code-plugin-X.Y.Z.zip`
+- `gamma-claude-code-SHA256SUMS.txt`
+
+Both ZIPs contain identical bytes; separate names make the client downloads easy
+to find while keeping one build. The Codex installers retain their published names
+and behavior. The old `package_codex_plugin.py` entry point still builds the shared
+package; `release_codex_plugin.py` still emits only the original Codex asset names.
 
 Build-only runs keep them as CI artifacts. Keeping them on the existing
 release preserves the desktop updater's latest-release convention. Preview the
 assets locally with:
 
 ```text
-python tools/release_codex_plugin.py --output tmp/gamma-plugin-release --version 1.2.3
+python tools/release_plugins.py --output tmp/gamma-plugin-release --version 1.2.3
 ```
 
-The packager sets the version only in the exported manifest; it does not tag
+The packager sets the version only in the exported manifests; it does not tag
 or publish. Nothing here submits a public directory listing, which needs a
 stable public HTTPS endpoint and a review.
 
@@ -304,7 +342,7 @@ Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/ex
   confirm the Codex process inherited the variable. Account/workspace access must
   still exist. OAuth tokens are bound to the exact server URL used when signing in.
 - **421:** the request's host is neither loopback nor the confirmed public
-  server URL (Settings → Administration → Server); confirm the address first.
+  server URL (Settings → Server); confirm the address first.
 - **503:** the ASGI lifespan is not running.
 - **Connection refused:** Gamma is stopped, the desktop port changed, or the MCP
   client is running on a different machine where localhost means that machine.
@@ -317,6 +355,10 @@ Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/ex
 `backend/tests/test_mcp.py` exercises the SDK endpoint, real tool reads, input
 validation, workspace isolation, permissions, expiration, and revocation.
 `test_mcp_oauth.py` covers discovery, approval, PKCE, resource/client/redirect
-binding, expiration, replay prevention, and revocation. `test_migrations.py` covers
+binding, expiration, replay prevention, revocation, and streamed body limits.
+`test_integration_lifecycle.py` covers manual and OAuth tokens across account
+rename, password changes through the admin API and CLI, workspace deletion,
+and account deletion through the admin API and `manage.py delete-user`.
+`test_migrations.py` covers
 schema upgrades. Browser scenarios cover sign-in, approval, cancellation, and MCP
 reads as well as manual-token creation and revocation.

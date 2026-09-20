@@ -3,7 +3,7 @@
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..auth import require_ws, require_ws_writer, resolve_ws, share_scope_page
+from ..auth import link_ratelimit, require_ws, require_ws_writer, resolve_ws, share_scope_page
 from ..blocks_store import fetch_subtree
 from .. import pdf_meta
 from ..db import connect_pages_db, ws_uploads_dir
@@ -22,6 +22,10 @@ from ..storage import (
     upload_extension,
     upload_media_type,
 )
+
+# Link visitors (anyone-with-the-link edit shares) may paste images and files
+# like any editor, within the page's workspace quota, but only so many per IP.
+LINK_UPLOADS_PER_5_MIN = 60
 
 router = APIRouter(prefix="/api", tags=["uploads"])
 
@@ -56,6 +60,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     # Share editors' images land in the page's workspace (and count against
     # its billing account) — they are referenced from that workspace's page.
     ws = require_ws_writer(request)
+    link_ratelimit(request, "upload", LINK_UPLOADS_PER_5_MIN, 300)
     uploads = ws_uploads_dir(ws)
     uploads.mkdir(parents=True, exist_ok=True)
     if file.content_type not in ALLOWED_IMAGE_TYPES:
@@ -86,6 +91,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     opened as a document page without a second upload (``POST
     /blocks/by-doc/{hash}``). → ``{url, name, size, already_existed}``."""
     ws = require_ws_writer(request)
+    link_ratelimit(request, "upload", LINK_UPLOADS_PER_5_MIN, 300)
     name = display_filename(file.filename, "file")
     if file.content_type in ALLOWED_IMAGE_TYPES:
         ext = IMAGE_EXTENSIONS[file.content_type]

@@ -68,7 +68,6 @@ export function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCance
     firstTitle="Choose a format" secondTitle={definition.label} needsReview={needsReview} onContinue={() => advance()}
     onCancel={onCancel} actionLabel="Export" action={() => onExport(payload)}>
     {step === 0 ? <>
-      <p className="reportModalHint">{needsReview ? "Select a format. Double-click to continue." : "Ready to export."}</p>
       <FormatChoices label="Export format" value={format} onChange={(format) => set({ format })} onConfirm={advance} options={formats} />
       {!needsReview ? <p className="reportModalHint">{summary}</p> : null}
     </> : <>
@@ -125,7 +124,6 @@ export function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport })
     firstTitle="Choose a source" secondTitle={definition.label} needsReview={needsReview} onContinue={() => advance()}
     actionLabel={definition.actionLabel} action={() => onImport(payload)}>
     {step === 0 ? <>
-      <p className="reportModalHint">Choose a source. Double-click to continue, or use the button below.</p>
       <FormatChoices label="Import from" value={src} onChange={setSource} onConfirm={advance} options={formats} />
       {!needsReview ? <p className="reportModalHint">{definition.instructions}</p> : null}
     </> : <>

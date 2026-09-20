@@ -31,7 +31,42 @@ MAX_PAGES = 5000
 # context builder would otherwise hand the model "(PDF text extraction failed)"
 # and it would answer from memory. Callers of iter_page_texts must hold it —
 # extract_pages/extract_text/page_count do.
+#
+# The lock alone is not enough. pypdfium2 closes a page or document it still
+# owns from a weakref finalizer, and its objects sit in reference cycles, so
+# a page that was merely dropped is closed by the CYCLIC GC — later, on
+# whatever thread happens to allocate (a sync round parsing JSON, a request
+# handler), outside this lock, while another thread is inside pdfium. That
+# is a native crash of the whole server (Windows exit 0x80000003), seen when
+# an offline copy pulled a library of PDFs and their manifests were walked
+# in the background. Two rules follow: every page/textpage/document made
+# here is closed EXPLICITLY, inside the lock, as soon as it is done with
+# (a closed object's finalizer is dead, the GC never touches pdfium for it);
+# and, as a net under any object that still reaches a finalizer,
+# pypdfium2's finalizer template is wrapped at import to take the same lock
+# (_serialize_finalizers) — a finalizer on the walking thread re-enters the
+# RLock, one on any other thread waits its turn.
 _lock = threading.RLock()
+
+
+def _serialize_finalizers() -> None:
+    try:
+        import pypdfium2.internal.bases as bases
+    except Exception:  # noqa: BLE001 — pypdfium2 missing or reshaped: nothing to wrap
+        return
+    inner = getattr(bases, "_close_template", None)
+    if inner is None or getattr(inner, "_gamma_locked", False):
+        return
+
+    def locked_close(*args, **kwargs):
+        with _lock:
+            return inner(*args, **kwargs)
+
+    locked_close._gamma_locked = True
+    bases._close_template = locked_close
+
+
+_serialize_finalizers()
 
 
 def _open(src):
@@ -148,7 +183,14 @@ def page_sizes(src) -> list[tuple[float, float]]:
                     out.append((w, h))
                 return out
             try:
-                return [tuple(pdf[i].get_size()) for i in range(len(pdf))]
+                out = []
+                for i in range(len(pdf)):
+                    page = pdf[i]
+                    try:
+                        out.append(tuple(page.get_size()))
+                    finally:
+                        page.close()
+                return out
             finally:
                 pdf.close()
         except Exception as e:

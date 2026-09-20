@@ -187,4 +187,29 @@ export async function fileScenarios({ server, browser, alice, makePdf, step, unt
     assertEq(exe.status, 400, "executables are refused");
     assert(/executable/.test(exe.data?.detail || ""), `refusal names the reason: ${exe.data?.detail}`);
   });
+
+  await step("tasks: a slow upload shows its progress bar and stops from the popover", async () => {
+    const ctx = await alice.context(browser);
+    const page = await openPage(ctx, `${server.base}/?ws=${alice.ws}`);
+    await page.waitForSelector(".folderNewBtn", { timeout: 15000 });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 10, downloadThroughput: -1, uploadThroughput: (512 * 1024) / 8 });
+    const big = makePdf([["Slow upload"]], { padBytes: 3 * 1024 * 1024 });
+    await page.click("button[aria-label='Add']");
+    const chooser = page.waitForEvent("filechooser");
+    await page.locator(".addPopover .popoverItem", { hasText: "Upload files" }).click();
+    await (await chooser).setFiles([{ name: "slow-upload.pdf", mimeType: "application/pdf", buffer: Buffer.from(big) }]);
+    await page.click("button[aria-label='Background tasks']");
+    const row = page.locator(".transferRow", { hasText: "slow-upload.pdf" });
+    await row.locator(".transferBar").waitFor({ timeout: 10000 });
+    await until(async () => /\d+(\.\d+)? [KM]B \/ /.test(await row.innerText()), { what: "byte progress on the row" });
+    await row.hover();
+    await row.locator(".transferStop").click();
+    await until(async () => (await row.innerText()).includes("stopped"), { what: "the row reads stopped" });
+    assertEq(await row.locator(".transferBar").count(), 0, "a stopped row has no bar");
+    await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    await sleep(500);
+    assertNoProblems(page);
+    await ctx.close();
+  });
 }

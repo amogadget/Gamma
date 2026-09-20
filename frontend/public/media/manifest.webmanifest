@@ -1,0 +1,17 @@
+{
+  "name": "Gamma",
+  "short_name": "Gamma",
+  "description": "Annotate PDFs, write notes and handwrite on papers in your Gamma library.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1b1b1a",
+  "theme_color": "#1b1b1a",
+  "icons": [
+    { "src": "/media/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/media/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/media/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -320,7 +320,7 @@ def clip(payload: ClipRequest, request: Request):
     with connect_pages_db(ws) as conn:
         # No tab title: the page is named after the URL's file name, else the
         # doc id (attachment_props), marked auto_title for the metadata lookup.
-        block = get_or_create_doc_page(conn, doc_id, title, page_source)
+        block = get_or_create_doc_page(conn, doc_id, title, page_source, ws=ws, actor=actor)
         props = dict(block.get("properties") or {})
         if source_url and not props.get("web_url") and source_url != page_source:
             props["web_url"] = source_url

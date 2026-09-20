@@ -23,6 +23,31 @@ BACKUPS_DIR = DATA_DIR / "backups"
 # serves it as an SPA — no separate static file server or reverse proxy needed.
 STATIC_DIR = os.environ.get("GAMMA_STATIC_DIR", "")
 
+
+# Keep these reads lazy, as before: server settings and publisher sessions
+# resolve their environment overrides when used, not at module import.
+def public_url_override() -> str:
+    return os.environ.get("GAMMA_PUBLIC_URL", "").strip()
+
+
+def mcp_extra_hosts() -> list[str]:
+    return [host.strip().lower() for host in os.environ.get("GAMMA_MCP_ALLOWED_HOSTS", "").split(",")
+            if host.strip()]
+
+
+def publisher_session_key() -> str:
+    return os.environ.get("GAMMA_PUBLISHER_SESSION_KEY", "")
+
+
+def sync_interval_s() -> int:
+    """Seconds between mirror sync rounds (gamma/sync_engine.py); 0 turns
+    the background loop off (the API's "sync now" still works)."""
+    try:
+        return max(0, int(os.environ.get("GAMMA_SYNC_INTERVAL", "30") or 0))
+    except ValueError:
+        return 30
+
+
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # --- AI chat -----------------------------------------------------------------

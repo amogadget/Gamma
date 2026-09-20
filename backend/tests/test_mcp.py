@@ -1,6 +1,5 @@
 """Exercise the real SDK transport, scoped credentials, and shared dispatch."""
 
-import json
 import time
 
 import pytest
@@ -45,7 +44,7 @@ def test_initialize_and_read_tools(client, connection):
     assert init.json()["result"]["serverInfo"]["icons"][0]["src"].startswith("data:image/png;base64,")
     assert rpc(client, item["token"], "notifications/initialized", notification=True).status_code == 202
     tools = rpc(client, item["token"], "tools/list").json()["result"]["tools"]
-    assert {t["name"] for t in tools} == {"list_pages", "read_page", "read_block", "search_library", "show_paper_picker", "search_paper_choices"}
+    assert {t["name"] for t in tools} == {"list_pages", "read_page", "read_block", "search_library", "read_gamma_link"}
     assert all(t["annotations"]["readOnlyHint"] for t in tools)
     assert all(t["icons"] == init.json()["result"]["serverInfo"]["icons"] for t in tools)
     for name, arguments, expected in [
@@ -92,56 +91,7 @@ def test_no_cross_workspace_reads(client, connection):
     other.close()
 
 
-def test_paper_picker_resource_search_pagination_and_scope(client, connection):
-    from gamma.mcp_picker import PICKER_URI, PICKER_MIME
-    c, ws, item = connection
-    pages = [make_page(c, f"Picker paper {i:02d}") for i in range(23)]
-    special = make_page(c, '<img src=x onerror="alert(1)"> Picker STRASSE')
-    other_ws = make_user("picker-other", "pw")
-    other = login("picker-other", "pw")
-    make_page(other, "Picker private paper")
-    other.close()
-    def pick(args, name="show_paper_picker"):
-        return rpc(client, item["token"], "tools/call", {"name": name, "arguments": args}).json()["result"]
-    result = pick({"query": "Picker"})
-    data = result["structuredContent"]
-    assert not result.get("isError")
-    assert data["workspace"]["id"] == ws
-    assert data["total"] == 24 and len(data["pages"]) == 20 and data["next_offset"] == 20
-    # Text-only clients get usable choices even if structuredContent is omitted.
-    fallback = result["content"][0]["text"]
-    assert json.dumps(data["pages"][0]["title"], ensure_ascii=False) in fallback
-    assert data["pages"][0]["url"] in fallback
-    assert "offset=20" in fallback
-    assert "Picker private paper" not in str(result)
-    second = pick({"query": "Picker", "offset": 20}, "search_paper_choices")["structuredContent"]
-    assert second["next_offset"] is None
-    assert {p["id"] for p in data["pages"] + second["pages"]} == {p["id"] for p in pages + [special]}
-    match = pick({"query": "straße"})["structuredContent"]["pages"]
-    assert len(match) == 1 and match[0]["id"] == special["id"]
-    assert f"ws={ws}&page={special['id']}" in match[0]["url"]
-    assert pick({"query": "absent"})["structuredContent"]["pages"] == []
-    assert "No papers" in pick({"query": "absent"})["content"][0]["text"]
-    assert pick({"query": "Picker", "offset": 100})["structuredContent"]["total"] == 24
-    literal = make_page(c, "Literal 100%_match")
-    assert [p["id"] for p in pick({"query": "%_"})["structuredContent"]["pages"]] == [literal["id"]]
-    for args in ({"workspace_id": other_ws}, {"offset": -1}, {"query": "x" * 201}):
-        assert pick(args)["isError"]
-    tools = rpc(client, item["token"], "tools/list").json()["result"]["tools"]
-    assert next(t for t in tools if t["name"] == "show_paper_picker")["_meta"]["ui"]["resourceUri"] == PICKER_URI
-    resources = rpc(client, item["token"], "resources/list").json()["result"]["resources"]
-    assert resources[0]["uri"] == PICKER_URI
-    resource = rpc(client, item["token"], "resources/read", {"uri": PICKER_URI}).json()["result"]["contents"][0]
-    assert resource["mimeType"] == PICKER_MIME
-    assert "Use this paper" in resource["text"]
-    assert item["token"] not in resource["text"] and special["id"] not in resource["text"]
-    assert resource["_meta"]["ui"]["csp"]["connectDomains"] == []
-    assert "error" in rpc(client, item["token"], "resources/read", {"uri": "file:///users.db"}).json()
-    c.delete(f"/api/integrations/tokens/{item['id']}")
-    assert rpc(client, item["token"], "resources/read", {"uri": PICKER_URI}).status_code == 401
-
-
-def test_read_links_and_picker_use_canonical_origin(client, connection, monkeypatch):
+def test_read_links_use_canonical_origin(client, connection, monkeypatch):
     c, ws, item = connection
     page = make_page(c, "Canonical origin paper")
     monkeypatch.setenv("GAMMA_PUBLIC_URL", "https://localhost")
@@ -151,9 +101,6 @@ def test_read_links_and_picker_use_canonical_origin(client, connection, monkeypa
         assert not result["isError"]
         assert f"https://localhost/?ws={ws}&page=" in result["content"][0]["text"]
         assert "http://localhost/" not in result["content"][0]["text"]
-    result = rpc(client, item["token"], "tools/call", {
-        "name": "show_paper_picker", "arguments": {"query": "Canonical origin paper"}}).json()["result"]
-    assert result["structuredContent"]["pages"][0]["url"] == f"https://localhost/?ws={ws}&page={page['id']}"
 
 
 def test_tokens_are_hashed_private_and_revocable(client, connection):
@@ -217,7 +164,8 @@ def test_token_management_requires_owner_session(anon, connection):
     c, ws, item = connection
     assert anon.get("/api/integrations/tokens").status_code == 401
     assert anon.post("/api/integrations/tokens", json={}).status_code == 401
-    assert anon.get("/api/integrations/tokens", headers={"Authorization": "Bearer " + item["token"]}).status_code == 401
+    # a token is an identity on the HTTP API (auth.py) but never a session that manages tokens
+    assert anon.get("/api/integrations/tokens", headers={"Authorization": "Bearer " + item["token"]}).status_code == 403
     anon.post("/api/login-guest")
     assert anon.post("/api/integrations/tokens", json={}).status_code == 403
     assert c.post("/api/integrations/tokens", json={}, headers={"Origin": "https://attacker.example"}).status_code == 403

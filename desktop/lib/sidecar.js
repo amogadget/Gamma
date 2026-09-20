@@ -98,7 +98,9 @@ async function start(ws, settings, appInfo) {
   const url = `http://127.0.0.1:${port}`;
   fs.mkdirSync(ws.dataDir, { recursive: true });
 
-  const env = { ...process.env, GAMMA_DATA_DIR: ws.dataDir };
+  // GAMMA_VERSION: the shell's own version, so the server's admin dashboard
+  // (gamma/version.py) reports the app it ships in.
+  const env = { ...process.env, GAMMA_DATA_DIR: ws.dataDir, GAMMA_VERSION: appInfo?.version || '' };
   // Fresh data dir: hand the server its first-admin credentials so the
   // one-time seed matches what the registry remembers.
   if (!fs.existsSync(path.join(ws.dataDir, 'users.db')) && ws.adminUser) {

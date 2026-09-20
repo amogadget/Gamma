@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from ..auth import require_personal_user, require_ws
+from ..auth import require_personal_user, require_ws, ws_role
 from ..db import connect_users_db
 from ..integrations import create_token
 from ..mcp_oauth import public_base
@@ -24,6 +24,7 @@ def _owner(request: Request) -> tuple[str, str]:
 class TokenCreate(BaseModel):
     name: str = Field(default="Codex", min_length=1, max_length=80)
     expires_in_days: int = Field(default=90, ge=1, le=365)
+    scope: str = Field(default="read", pattern="^(read|write)$")  # write: a mirror's push credential
 
 
 @router.get("/tokens")
@@ -37,9 +38,9 @@ def list_tokens(request: Request, response: Response):
         base = str(request.base_url).rstrip("/")
         oauth_error = str(exc.detail)
     with connect_users_db() as conn:
-        rows = conn.execute("SELECT id, name, created_at, expires_at FROM integration_tokens "
+        rows = conn.execute("SELECT id, name, created_at, expires_at, scope FROM integration_tokens "
                             "WHERE username = ? AND workspace_id = ? ORDER BY created_at DESC", (username, ws))
-        return {"tokens": [dict(zip(("id", "name", "created_at", "expires_at"), r)) for r in rows],
+        return {"tokens": [dict(zip(("id", "name", "created_at", "expires_at", "scope"), r)) for r in rows],
                 "workspace_id": ws, "mcp_url": base + "/mcp", "oauth_available": oauth_error is None,
                 "oauth_error": oauth_error}
 
@@ -51,7 +52,9 @@ def new_token(payload: TokenCreate, request: Request, response: Response):
     if not name:
         raise HTTPException(422, "Give the connection a name.")
     response.headers["Cache-Control"] = "no-store"
-    return create_token(username, ws, name, payload.expires_in_days)
+    if payload.scope == "write" and ws_role(request) == "viewer":
+        raise HTTPException(403, "You can only view this workspace, so a write token cannot be made for it.")
+    return create_token(username, ws, name, payload.expires_in_days, scope=payload.scope)
 
 
 @router.delete("/tokens/{token_id}")

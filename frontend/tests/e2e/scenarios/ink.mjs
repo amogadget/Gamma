@@ -31,6 +31,9 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
     await page.waitForSelector(".pdfInkBar");
     assert(await page.$(".pdfInkBar .inkToolBtn.modeActive .inkToolInk"), "a pen preset is armed when the strip opens");
     assertEq((await page.$$(".pdfInkBar .inkToolInk")).length, 7, "the default presets: four pens, three highlighters");
+    const buttons = await page.locator(".pdfInkRow button").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    assertEq(JSON.stringify(buttons.slice(-2)), JSON.stringify(["Undo ink", "Redo ink"]), "history controls are last");
+    assertEq(await page.locator(".pdfInkBar button[title^='Start a new']").count(), 0, "new-note plus button removed");
     box = await page.locator('[data-page="1"]').boundingBox();
     await drawLine(page, [box.x + 100, box.y + 150], [box.x + 250, box.y + 170]);
     await drawLine(page, [box.x + 100, box.y + 250], [box.x + 250, box.y + 280]);
@@ -47,6 +50,12 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
     assertEq(ink.format, "gamma-ink", "file format");
     assertEq(ink.strokes.length, 2, "strokes in the file");
     assert(ink.strokes.every((s) => s.pen === false && s.ch === "xyt"), "mouse strokes carry no pressure channel");
+    await page.getByRole("button", { name: "Undo ink", exact: true }).click();
+    await page.getByRole("button", { name: "Redo ink", exact: true }).click();
+    await page.waitForSelector(".statusPill");
+    const toolbar = await page.locator(".pdfInkBar").boundingBox();
+    const message = await page.locator(".statusPill").boundingBox();
+    assert(message.y >= toolbar.y + toolbar.height, "undo/redo feedback stays below the toolbar");
     if (flags.keep) await page.screenshot({ path: `${server.dir}/ink-drawn.png` });
     assertNoProblems(page);
   });
@@ -182,9 +191,11 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
   });
 
   await step("ink: erasing the last stroke stays erased while block deletion is pending", async () => {
+    // Reopening the page starts a fresh handwriting group.
+    await page.reload();
+    await waitForPdf(page, 1);
     await page.click("button[aria-label='Handwriting tools']");
     await page.keyboard.press("p");
-    await page.click(".pdfInkBar button[title^='Start a new']");
     const paths = '[data-page="1"] .inkLayer path';
     const count = await page.locator(paths).count();
     const before = await account.api(`/api/blocks/${pageId}/subtree`);
@@ -281,9 +292,10 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
       const d = await account.api(`/api/blocks/${pageId}/subtree`);
       return d.block.children.reduce((n, b) => n + (b.properties?.ink_strokes || 0), 0) === visibleCount;
     }, { what: "previous Pencil stroke persisted before starting a separate group" });
+    await page.reload();
+    await waitForPdf(page, 1);
     await page.click("button[aria-label='Handwriting tools']");
     await page.keyboard.press("p");
-    await page.click(".pdfInkBar button[title^='Start a new']");
     const before = await account.api(`/api/blocks/${pageId}/subtree`);
     const ids = new Set(before.block.children.map((b) => b.id));
     const result = await page.locator('[data-page="1"]').evaluate(async (el) => {

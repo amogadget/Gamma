@@ -1,6 +1,4 @@
 archive/
-!/docs/archive/
-!/docs/archive/**
 example/
 HANDOFF.md
 STATUS.md
@@ -28,6 +26,7 @@ run-local.bat
 
 # Disposable scratch
 /tmp
+/todos
 
 # Local source recordings, workspace exports, debugging inputs and render output.
 /artifacts/*

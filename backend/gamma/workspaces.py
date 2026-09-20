@@ -132,15 +132,17 @@ def list_for_user(username: str) -> list[dict]:
     """Every workspace the account can open — its memberships plus, for a
     non-guest account, every public workspace: ``[{id, name, kind, role,
     access, public_role, created_by, created_at, members, personal,
-    default}]``, personal ones first (the default at the top), then by
-    name. ``members`` counts explicit members."""
+    default, mirror_of}]``, personal ones first (the default at the top),
+    then by name. ``members`` counts explicit members; ``mirror_of`` names
+    the remote workspace a mirror follows ("" otherwise)."""
     with connect_users_db() as conn:
         me = conn.execute(
             "SELECT default_workspace, is_guest FROM users WHERE username = ?", (username,)).fetchone()
         rows = conn.execute(
             f"SELECT {_COLS}, "
             "(SELECT role FROM workspace_members m WHERE m.workspace_id = w.id AND m.username = ?), "
-            "(SELECT COUNT(*) FROM workspace_members x WHERE x.workspace_id = w.id) "
+            "(SELECT COUNT(*) FROM workspace_members x WHERE x.workspace_id = w.id), "
+            "(SELECT remote_name FROM mirrors mi WHERE mi.workspace_id = w.id AND mi.mode != 'off') "
             "FROM workspaces w WHERE w.access = 'public' "
             "OR EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.username = ?)",
             (username, username)).fetchall()
@@ -152,7 +154,7 @@ def list_for_user(username: str) -> list[dict]:
         if not role:
             continue
         out.append({**info, "role": role, "members": r[9], "personal": info["kind"] == "personal",
-                    "default": info["id"] == default})
+                    "default": info["id"] == default, "mirror_of": r[10] or ""})
     out.sort(key=lambda w: (not w["personal"], not w["default"], w["name"].lower()))
     return out
 

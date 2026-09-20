@@ -11,6 +11,34 @@
   },
   {
     "source": "marks/favicon.svg",
+    "destination": "frontend/public/media/icons/apple-touch-icon.png",
+    "kind": "png",
+    "size": 180,
+    "bleed": 0
+  },
+  {
+    "source": "marks/favicon.svg",
+    "destination": "frontend/public/media/icons/icon-192.png",
+    "kind": "png",
+    "size": 192,
+    "bleed": 0
+  },
+  {
+    "source": "marks/favicon.svg",
+    "destination": "frontend/public/media/icons/icon-512.png",
+    "kind": "png",
+    "size": 512,
+    "bleed": 0
+  },
+  {
+    "source": "marks/favicon.svg",
+    "destination": "frontend/public/media/icons/icon-maskable-512.png",
+    "kind": "png",
+    "size": 512,
+    "bleed": 4
+  },
+  {
+    "source": "marks/favicon.svg",
     "destination": "desktop/assets/icon.png",
     "kind": "png",
     "size": 512

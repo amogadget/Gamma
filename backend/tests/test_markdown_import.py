@@ -77,7 +77,12 @@ def test_markdown_upload_strips_directory_from_multipart_filename(guest):
     assert page["properties"]["folder"] == "spectrum_analyzer_data"
 
 
-def test_library_load_repairs_old_automatic_path_title(guest):
+def test_normalizer_repairs_old_automatic_path_title(guest):
+    """An old markdown import whose title kept the leaked directory path is
+    repaired by the content normalizer (a migration step / backup restore,
+    gamma/normalize.py) — a library listing is a pure read."""
+    from gamma.normalize import normalize_pages_db
+
     created = guest.post(
         "/api/import/markdown",
         files={"file": ("CODE_INDEX.md", b"Index body", "text/markdown")},
@@ -95,7 +100,12 @@ def test_library_load_repairs_old_automatic_path_title(guest):
         conn.commit()
 
     children = guest.get("/api/blocks/root/children").json()["children"]
-    repaired = next(page for page in children if page["id"] == created["block_id"])
+    listed = next(page for page in children if page["id"] == created["block_id"])
+    assert listed["content"] == "spectrum_analyzer_data/CODE_INDEX"
+
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
+        assert normalize_pages_db(conn)["upload_path_titles"] == 1
+    repaired = guest.get(f"/api/blocks/{created['block_id']}").json()
     assert repaired["content"] == "CODE_INDEX"
     assert repaired["properties"]["original_filename"] == "CODE_INDEX.md"
 

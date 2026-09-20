@@ -17,9 +17,9 @@ import { MermaidDiagram, mermaidCodeProps } from "./MermaidDiagram";
 // double-click to collapse), the close button right beside it, then the
 // window's own controls. Notes and chat both use this so their behavior
 // can't drift apart.
-function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, collapsed, children }) {
+function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, collapsed, guide, children }) {
   return (
-    <div className={`dockWindow ${collapsed ? "collapsed" : ""}`}>
+    <div className={`dockWindow ${collapsed ? "collapsed" : ""}`} data-guide={guide}>
       <div className="dockWindowHeader">
         <span
           className="dockGrip"

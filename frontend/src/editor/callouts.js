@@ -28,24 +28,40 @@ export function calloutType(name) {
   return CANON[(name || "").toLowerCase()] || "note";
 }
 
+// The marker line: "[!type]" plus Obsidian's fold flag — "-" starts
+// collapsed, "+" starts open, none = a plain callout. Shared with the
+// editor's live callout rendering (BlockCmEditor), which hides it.
+export const CALLOUT_MARKER_RE = /^\[!(\w+)\]([-+]?)[ \t]*/;
+
 function transformBlockquote(bq) {
   const p = bq.children?.[0];
   if (!p || p.type !== "paragraph") return;
   const t = p.children?.[0];
   if (!t || t.type !== "text") return;
-  const m = t.value.match(/^\[!(\w+)\][ \t]*([^\n]*)(?:\n|$)/);
+  const m = t.value.match(/^\[!(\w+)\]([-+]?)[ \t]*([^\n]*)(?:\n|$)/);
   if (!m) return;
   const type = CANON[m[1].toLowerCase()] || "note";
-  const title = m[2].trim();
+  const fold = m[2];
+  const title = m[3].trim();
   t.value = t.value.slice(m[0].length);
   if (!t.value) {
     p.children.shift();
     if (p.children.length === 0) bq.children.shift();
   }
-  bq.data = { ...bq.data, hProperties: { className: ["callout", `callout-${type}`] } };
+  // A foldable callout is a native <details>/<summary>: the toggle needs no
+  // script, works in read-only views, and survives export as HTML Obsidian
+  // and browsers both understand.
+  bq.data = {
+    ...bq.data,
+    ...(fold ? { hName: "details" } : {}),
+    hProperties: {
+      className: ["callout", `callout-${type}`, ...(fold ? ["calloutFold"] : [])],
+      ...(fold === "+" ? { open: true } : {}),
+    },
+  };
   bq.children.unshift({
     type: "paragraph",
-    data: { hProperties: { className: ["calloutTitle"] } },
+    data: { ...(fold ? { hName: "summary" } : {}), hProperties: { className: ["calloutTitle"] } },
     children: [{ type: "text", value: title || type[0].toUpperCase() + type.slice(1) }],
   });
 }

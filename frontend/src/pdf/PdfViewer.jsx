@@ -289,11 +289,12 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
     onLoadState?.(url, { phase: "cached" });
     return disk;
   }
-  onLoadState?.(url, { phase: "start" });
   // Stall watchdog: abort when the connection goes silent — the proxy may sit
   // for a while before its upstream download produces the first byte, but a
-  // connection with no bytes for STALL_MS is dead, not slow.
+  // connection with no bytes for STALL_MS is dead, not slow. The same
+  // controller is the tasks popover's stop button (`cancel`).
   const ctrl = new AbortController();
+  onLoadState?.(url, { phase: "start", cancel: () => ctrl.abort() });
   let loaded = 0, total = 0, lastByteAt = Date.now(), lastReport = 0, stalled = false;
   const watchdog = setInterval(() => {
     if (Date.now() - lastByteAt > STALL_MS) { stalled = true; ctrl.abort(); }
@@ -1600,7 +1601,7 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "") + (transPeek ? " transPeek" : "") + (inkTool ? " inkArmed" : "") + (inkTool && !inkPenOnly ? " inkTouchDraw" : "") + (inkTool?.tool === "select" ? " inkSelect" : "")}
+      <div ref={viewerRef} data-guide="pdf.viewer" className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "") + (transPeek ? " transPeek" : "") + (inkTool ? " inkArmed" : "") + (inkTool && !inkPenOnly ? " inkTouchDraw" : "") + (inkTool?.tool === "select" ? " inkSelect" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
@@ -2063,7 +2064,7 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
     && (transEntry.queued || transEntry.busy?.size > 0);
 
   return (
-    <div ref={wrapRef} data-page={pageNumber} className={"pdfPageWrap" + (transActive ? " transShown" : "")}
+    <div ref={wrapRef} data-page={pageNumber} data-guide="pdf.page" className={"pdfPageWrap" + (transActive ? " transShown" : "")}
       onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
@@ -2127,7 +2128,7 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
           })()}
         </div>
       ) : null}
-      <div ref={textRef} className="textLayer" style={{
+      <div ref={textRef} className="textLayer" data-guide="pdf.textLayer" style={{
         userSelect: readOnly || inkTool ? "none" : "text", WebkitUserSelect: readOnly || inkTool ? "none" : "text",
       }} />
       <PdfCitationOverlay citation={citation} wrapRef={wrapRef}
@@ -2262,6 +2263,7 @@ function PlainTip({ onConfirm, onLink }) {
           <button
             key={c}
             className="colorBtn"
+            data-guide="pdf.highlightColor"
             style={{ background: c }}
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onConfirm("", c); }}
             type="button"

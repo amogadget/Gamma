@@ -98,9 +98,9 @@ if (check) {
   try {
     const rendered = new Map();
     for (const entry of manifest.filter(entry => entry.kind === 'png')) {
-      const svg = markSvg(entry.size, { disabled: entry.disabled });
-      if (!rendered.has(svg)) rendered.set(svg, await renderPng(browser, svg, entry.size, entry.size));
-      emit(entry.destination, rendered.get(svg), { source: entry.source, variant: entry.disabled ? 'disabled' : 'icon' });
+      const svg = markSvg(entry.size, { disabled: entry.disabled, bleed: entry.bleed });
+      if (!rendered.has(svg)) rendered.set(svg, await renderPng(browser, svg, entry.size, entry.size, entry.bleed == null));
+      emit(entry.destination, rendered.get(svg), { source: entry.source, variant: entry.disabled ? 'disabled' : entry.bleed != null ? `icon-bleed-${entry.bleed}` : 'icon' });
     }
     for (const [p, width, height, svg, transparent] of storeJobs) {
       emit(p, await renderPng(browser, svg, width, height, transparent), { source: 'tools/branding/store-layouts.mjs', variant: path.basename(p, '.png') });

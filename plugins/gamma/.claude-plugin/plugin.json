@@ -1,0 +1,12 @@
+{
+  "name": "gamma",
+  "version": "0.2.1",
+  "description": "Search and read Gamma PDF libraries, pages, highlights, and notes.",
+  "author": {
+    "name": "Gamma",
+    "url": "https://github.com/tim4431/Gamma"
+  },
+  "homepage": "https://github.com/tim4431/Gamma/blob/main/docs/dev/mcp.md",
+  "repository": "https://github.com/tim4431/Gamma",
+  "skills": "./skills/"
+}

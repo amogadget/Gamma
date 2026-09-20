@@ -102,7 +102,7 @@ the client passes its `cite_prompt`/`cite_model` prefs, `/api/clip` uses the
 defaults) and returned as `ppt_cite`, so it is ready the moment the record
 is. A citation failure
 never fails the fetch. `/api/metadata/cite` is the regenerate path (↻ in the
-share popover) and the fallback the client's citation effect uses on open
+Share dialog's Citation section) and the fallback the client's citation effect uses on open
 for pages whose record predates this, whose citation call failed, or whose
 metadata was just edited — one attempt per page per session, only when AI
 is configured.

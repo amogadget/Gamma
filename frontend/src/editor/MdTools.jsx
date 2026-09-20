@@ -11,6 +11,7 @@ import { scanMathSpans } from "./BlockCmEditor";
 import { scanFences } from "./codeHighlight";
 import { scanImageSyntax } from "./mdMarks";
 import { ContextMenu, MenuItem } from "../shared/ui/Menus";
+import { ResizeGrip, useDragResize } from "../shared/ui/ResizeGrip";
 import { Segmented } from "../settings/SettingsKit";
 import {
   AlignCenterIcon, AlignLeftIcon, AlignRightIcon, CaptionIcon, DownloadIcon,
@@ -292,9 +293,11 @@ export function tsvToMarkdown(text) {
 export function MdImage({ src, alt, width, idx, onEdit }) {
   const [lightbox, setLightbox] = useState(false);
   const [caption, setCaption] = useState(null); // null | draft text
-  const [dragW, setDragW] = useState(null);
   const imgRef = useRef(null);
-  const dragRef = useRef(null); // {startX, startW, w, moved}
+  const { dragW, gripProps } = useDragResize({
+    measure: () => imgRef.current?.getBoundingClientRect().width,
+    onCommit: (w) => onEdit(idx, "width", w),
+  });
 
   useEffect(() => {
     if (!lightbox) return;
@@ -305,27 +308,6 @@ export function MdImage({ src, alt, width, idx, onEdit }) {
 
   const stop = (e) => e.stopPropagation();
   const w = dragW != null ? dragW : (width ? Number(width) : null);
-
-  function startResize(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    const startW = imgRef.current?.getBoundingClientRect().width || 200;
-    dragRef.current = { startX: e.clientX, startW, w: null, moved: false };
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-  }
-  function moveResize(e) {
-    const d = dragRef.current;
-    if (!d) return;
-    if (Math.abs(e.clientX - d.startX) > 2) d.moved = true;
-    d.w = Math.round(Math.min(1600, Math.max(60, d.startW + (e.clientX - d.startX))));
-    setDragW(d.w);
-  }
-  function endResize() {
-    const d = dragRef.current;
-    dragRef.current = null;
-    setDragW(null);
-    if (d?.moved && d.w) onEdit(idx, "width", d.w);
-  }
 
   function commitCaption(text) {
     setCaption(null);
@@ -356,19 +338,7 @@ export function MdImage({ src, alt, width, idx, onEdit }) {
               onClick={() => onEdit(idx, "delete")}><Trash2Icon /></button>
           </span>
         ) : null}
-        {onEdit ? (
-          <span
-            className="mdImgResize"
-            title="Drag to resize · double-click for natural size"
-            onMouseDown={stop}
-            onClick={stop}
-            onPointerDown={startResize}
-            onPointerMove={moveResize}
-            onPointerUp={endResize}
-            onPointerCancel={endResize}
-            onDoubleClick={(e) => { e.stopPropagation(); onEdit(idx, "width", 0); }}
-          />
-        ) : null}
+        {onEdit ? <ResizeGrip {...gripProps} /> : null}
       </span>
       {caption != null ? (
         <input

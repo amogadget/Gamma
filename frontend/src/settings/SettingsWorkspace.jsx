@@ -20,6 +20,7 @@ import {
   CheckIcon, DatabaseIcon, ExportIcon, GlobeIcon, HardDriveIcon, ImportIcon, LogOutIcon, PenIcon,
   PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon,
 } from "../shared/ui/Icons";
+import { MirrorsSection, useMirrors } from "./SettingsMirrors";
 
 // Workspace roles as the UI words them (docs/dev/workspaces.md); the account
 // menu's switcher in App.jsx reads the same table.
@@ -29,6 +30,7 @@ const ROLE_TEXT = { owner: "own it", editor: "can edit", viewer: "can view" };
 // One line under a switcher entry / workspace row: what kind it is and, for
 // a shared one, your role.
 export function workspaceMeta(w) {
+  if (w.mirror_of) return `clone of ${w.mirror_of}`;
   if (w.personal) return w.default ? "personal · default" : "personal";
   return `${w.access === "public" ? "public · " : ""}${ROLE_LABEL[w.role] || w.role}`;
 }
@@ -458,35 +460,26 @@ export function ManageWorkspaceDialog({ wsId, me, admin, accounts, confirm, setS
 // The Export / Import menus every workspace row carries. Export downloads
 // an /api/export zip of that workspace; Import restores or merges one into
 // it (owners restore, editors merge).
+// One "Data" menu per workspace row: export (everything / databases) and,
+// for editors and owners, import (merge / restore).
 export function WorkspaceDataMenus({ w, exportWorkspace, importWorkspace, closeSettings }) {
   const run = (fn) => { closeSettings?.(); fn(); }; // progress shows in the status pill, the confirm wants the screen
-  return (
-    <>
-      <ActionMenu
-        label="Export" icon={ExportIcon}
-        items={[
-          { icon: ExportIcon, label: "Everything (.zip)", title: `A zip of ${w.name}: its databases + every uploaded PDF`,
-            onClick: () => run(() => exportWorkspace(w.id, true)) },
-          { icon: DatabaseIcon, label: "Database only (.zip)", title: "A small zip with just the databases — no uploaded PDFs",
-            onClick: () => run(() => exportWorkspace(w.id, false)) },
-        ]}
-      />
-      {w.role !== "viewer" ? (
-        <ActionMenu
-          label="Import" icon={ImportIcon}
-          items={[
-            ...(w.role === "owner" ? [{ icon: ImportIcon, label: "Restore (replace)…", title: `Replace ${w.name}'s pages and chats with a backup zip`,
-                                        onClick: () => run(() => importWorkspace(w.id, "replace")) }] : []),
-            { icon: PlusIcon, label: "Merge into it…", title: "Add the backup's pages that are not there yet; nothing existing changes",
-              onClick: () => run(() => importWorkspace(w.id, "merge")) },
-          ]}
-        />
-      ) : null}
-    </>
-  );
+  const items = [
+    { icon: ExportIcon, label: "Export everything (.zip)", title: `A zip of ${w.name}: its databases + every uploaded PDF`,
+      onClick: () => run(() => exportWorkspace(w.id, true)) },
+    { icon: DatabaseIcon, label: "Export databases only (.zip)", title: "A small zip with just the databases — no uploaded PDFs",
+      onClick: () => run(() => exportWorkspace(w.id, false)) },
+  ];
+  if (w.role !== "viewer") {
+    items.push({ icon: PlusIcon, label: "Merge a backup into it…", title: "Add the backup's pages that are not there yet; nothing existing changes",
+      onClick: () => run(() => importWorkspace(w.id, "merge")) });
+    if (w.role === "owner") items.push({ icon: ImportIcon, label: "Restore from a backup (replace)…", title: `Replace ${w.name}'s pages and chats with a backup zip`,
+      onClick: () => run(() => importWorkspace(w.id, "replace")) });
+  }
+  return <ActionMenu label="Data" icon={DatabaseIcon} items={items} />;
 }
 
-export function WorkspacesSettings({ value }) {
+export function WorkspacesSettings({ value, onServer }) {
   const { workspace, me, isAdmin, switchWorkspace, refreshSession,
           exportWorkspace, exportAll, importWorkspace, setStatus, confirm, closeSettings } = value;
   const [data, setData] = React.useState(null);  // GET /api/workspaces/mine: {workspaces, account}
@@ -497,14 +490,16 @@ export function WorkspacesSettings({ value }) {
   const [busy, setBusy] = React.useState(false);
   const accounts = useAccounts();
   const currentId = workspace?.id;
+  const [mirrors, refreshMirrors] = useMirrors(!!me && me !== "guest");
 
   const refresh = React.useCallback(() => {
     apiJson(`${API}/workspaces/mine`).then(setData).catch((err) => setError(err.message));
-  }, []);
+    refreshMirrors();
+  }, [refreshMirrors]);
   React.useEffect(() => { refresh(); }, [refresh]);
 
   const all = data?.workspaces || [];
-  const personal = all.filter((w) => w.personal);
+  const personal = all.filter((w) => w.personal && !w.mirror_of);  // mirrors have their own section
   const shared = all.filter((w) => !w.personal);
 
   async function submitCreate(name) {
@@ -579,15 +574,13 @@ export function WorkspacesSettings({ value }) {
 
   return (
     <>
-      <PaneHead icon={UsersIcon} title="Workspaces">
-        Your libraries. Personal workspaces are just you and share your storage; shared ones are made by an admin and have members.
-      </PaneHead>
+      <PaneHead icon={UsersIcon} title="Workspaces" />
       {!data && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
       {error ? <Empty icon={UsersIcon}>Workspaces unavailable — {error}</Empty> : null}
       {data ? (
         <>
           <Section title="Storage">
-            <Row icon={DatabaseIcon} label="Your storage" hint={`all your personal workspaces together${data.account.max_upload_mb ? ` · max ${data.account.max_upload_mb} MB per file` : ""}`}
+            <Row icon={DatabaseIcon} label="Your storage" hint={`all personal workspaces${data.account.max_upload_mb ? ` · max ${data.account.max_upload_mb} MB per file` : ""}`}
               title="Uploads into your personal workspaces count against your account's quota. Shared workspaces carry their own.">
               <QuotaMeter usedBytes={data.account.used_bytes} quotaMb={data.account.quota_mb} />
             </Row>
@@ -613,10 +606,16 @@ export function WorkspacesSettings({ value }) {
           >
             {personal.map(row)}
           </Section>
+          {!me || me === "guest" ? null : (
+            <MirrorsSection mirrors={mirrors} refresh={refresh} workspaces={all} currentId={currentId}
+              switchWorkspace={switchWorkspace} closeSettings={closeSettings} confirm={confirm} setStatus={setStatus} />
+          )}
           <Section title="Shared">
             {shared.length ? shared.map(row) : (
               <Empty icon={UsersIcon}>
-                {isAdmin ? "No shared workspaces yet — make one in Settings → Server." : "No shared workspaces yet — an admin makes them."}
+                <span>No shared workspaces yet.</span>
+                {onServer ? <button className="uiBtn sm" onClick={onServer}><PlusIcon size={13} /> New shared workspace</button>
+                  : <span className="settingDesc">An admin makes them.</span>}
               </Empty>
             )}
           </Section>
@@ -625,7 +624,7 @@ export function WorkspacesSettings({ value }) {
 
       {creating ? (
         <NameDialog title="New personal workspace" label="Name"
-          hint={`a separate library of your own — work, life, play${isAdmin ? "; shared workspaces are made in Settings → Server" : "; ask an admin for a shared one"}`}
+          hint="a separate library of your own — work, life, play"
           submitLabel="Create and open" busy={busy} error={createError} onSubmit={submitCreate} onClose={() => setCreating(false)} />
       ) : null}
     </>

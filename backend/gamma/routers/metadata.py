@@ -26,6 +26,7 @@ from difflib import SequenceMatcher
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from .. import ai_usage
 from ..ai_client import call_ai as _call_ai
 from ..ai_context import ensure_indexed as _ensure_indexed
 from ..ai_context import pdf_excerpt as _pdf_excerpt
@@ -555,10 +556,12 @@ _DOC_KINDS = ("paper", "notes", "slides", "thesis", "book", "report", "other")
 def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | None:
     system = (prompt or METADATA_PROMPT).strip()[:4000]
     try:
+        entry = _resolve_model(rt, model)
         raw = _call_ai(
             [{"role": "user", "content": f"First pages of the paper:\n\n{text}"}],
             # Generous cap: reasoning models spend invisible tokens before the JSON
-            system, _resolve_model(rt, model), rt, max_tokens=8000, timeout=120,
+            system, entry, rt, max_tokens=8000, timeout=120,
+            on_usage=ai_usage.recorder("metadata", entry, rt),
         )
         m = re.search(r"\{[\s\S]*\}", raw)
         if not m:
@@ -623,8 +626,10 @@ def _make_ppt_cite(rt: dict, meta: dict | None, bibtex: str, prompt: str = "", m
     and POST /metadata/cite (regenerate)."""
     system = (prompt or CITE_PROMPT).strip()[:4000]
     source = bibtex or json.dumps(meta, indent=2)
-    return _call_ai([{"role": "user", "content": source}], system,
-                    _resolve_model(rt, model), rt, max_tokens=4000, timeout=120).strip()
+    entry = _resolve_model(rt, model)
+    return _call_ai([{"role": "user", "content": source}], system, entry, rt,
+                    max_tokens=4000, timeout=120,
+                    on_usage=ai_usage.recorder("cite", entry, rt)).strip()
 
 
 def _load_page(ws: str, block_id: str):
@@ -677,7 +682,9 @@ def _save_props(ws: str, block_id: str, updates: dict | None = None, remove: tup
               "props": props_patch(json.loads(row[1] or "{}"), props)}
         if rename:
             op["content"] = auto_title
-        after_commit(ws, conn, apply_ops(conn, block_id, [op], actor=actor))
+        # client "meta": the batch is the metadata worker's, not a person's
+        # keystrokes — an activity view or a sync can tell them apart.
+        after_commit(ws, conn, apply_ops(conn, block_id, [op], actor=actor, client="meta"))
         return rename, (auto_title if rename else content)
 
 

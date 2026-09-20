@@ -288,6 +288,7 @@ export default function SearchPanel({
       <button
         className={`iconBtn ${open ? "activeIcon" : ""}`}
         onClick={() => onOpenChange(!open)}
+        data-guide="header.search"
         title="Search everything (Ctrl+F)"
         aria-label="Search"
       >

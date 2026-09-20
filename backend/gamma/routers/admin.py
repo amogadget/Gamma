@@ -29,6 +29,7 @@ from .. import backups, workspaces
 from ..auth import require_admin
 from ..db import connect_users_db
 from ..logbuf import tail as _log_tail
+from .. import version
 from ..seed import create_account
 from ..server_settings import (
     QUOTA_MB_MAX,
@@ -82,6 +83,17 @@ def _check_password(password: str) -> str:
     if not password or len(password) > MAX_PASSWORD_LEN:
         raise HTTPException(status_code=400, detail="password must be 1-128 characters")
     return password
+
+
+@router.get("/server-info")
+def server_info(request: Request, refresh: bool = False):
+    """The Settings → Server dashboard: build, uptime, log counts by level,
+    the latest GitHub release and whether it is newer (``update_available``:
+    True/False, or None for an unversioned build). ``refresh=1`` bypasses
+    the release cache. Sync on purpose: the release check is a network
+    call."""
+    require_admin(request)
+    return version.server_info(refresh=refresh)
 
 
 @router.get("/logs")

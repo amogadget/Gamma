@@ -6,7 +6,7 @@ Where every setting lives, and how the Settings dialog is built.
 
 | Layer | Storage | Examples |
 |---|---|---|
-| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/app/prefs.js](../../frontend/src/app/prefs.js)) | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
+| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/app/prefs.js](../../frontend/src/app/prefs.js)) — except `gamma-link-name`, the share view's display name for a visitor without an account, owned by `src/collaboration/linkName.js` because the fetch wrapper reads it outside React | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
 | Session only | React state, nothing stored | the Ctrl+scroll text size of the notes list and the chat transcript (`useTextScale` in [Widgets.jsx](../../frontend/src/shared/ui/Widgets.jsx)) — resets on reload |
 | Per account, synced | `/api/prefs/{key}` (small JSON KV, `user_prefs` in `users.db`) | per account AND workspace: open tabs (`open-tabs`), the recently-viewed queue (`recent-views`), pinned folders (`pinned-folders`; pinned pages are a page property), reading positions (`read-pos`) — they name one workspace's pages; account-wide: active AI key (`ai-provider`), appearance (`appearance`: theme + flip page colors). Server wins on load, localStorage (keyed `user@workspace`) is the instant-paint cache. The recents-card cover thumbnails are workspace data, through their own `/api/page-snaps` store (`page_snaps` in the workspace's `data.db` — over the prefs size cap) |
 | Per account, server-only | AI provider entries (keys/OAuth tokens) under the reserved `ai-settings` prefs key (account-wide), managed via `/api/ai/providers*`; the browser only ever sees a masked hint | API keys, ChatGPT OAuth |
@@ -24,55 +24,90 @@ session caches are ignored because their account owner cannot be determined.
 
 ## The Settings dialog
 
-Five everyday destinations are defined by `PREFERENCE_NAV` in
-[SettingsDialog.jsx](../../frontend/src/settings/SettingsDialog.jsx):
+One dialog, one sidebar in three groups, defined by `PREFERENCE_NAV`,
+`AI_NAV` and `MANAGEMENT_NAV` in
+[SettingsDialog.jsx](../../frontend/src/settings/SettingsDialog.jsx). Every
+pane is one click from any other; nothing opens a second dialog or a
+"back" link. Panes carry no explanatory subtitle: a section rule's right-hand
+tag ("Your account" / "This browser") says where a setting lives, a row's
+short hint what it does, and the hover `title` the rest.
 
-- **Appearance**: theme choices and dark PDF pages (account-synced), control
-  size and status bar (this browser).
-  [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx):
-  eight theme cards (`PictureChoices`), a PDF sample that follows the page
-  tint and the dark-page switch, and the interface controls.
-- **Reading & editing**: imported annotations, the handwriting input rules
-  (stylus draws right away, fingers never draw, pressure), translation
-  shortcut and language, Enter behavior and search expansion. Vertical
-  scroll alignment and note badges on highlights are always on.
-- **Library**: thumbnails, folder/label display, metadata lookup, open-access
-  fallback and saving external PDFs. These are browser preferences. Display
-  is one live `PageCard` beside three switches (thumbnails, folders, labels);
-  the two chip switches map onto the four `fileLabels` modes.
-  [SettingsLibraryDisplay.jsx](../../frontend/src/settings/SettingsLibraryDisplay.jsx).
-- **AI**: opens a second-level sidebar with Connections & models, Assistant,
-  Advanced and Prompts. Assistant contains permissions and context presets;
-  Advanced contains exact context budgets, technical limits and translation
-  performance. Connections & models includes connection checks and models for
-  metadata, translation and dictation.
-- **Account**: the signed-in account only, including for admins. Existing
-  administrator-only account editing rules still apply.
+Preferences:
 
-Larger management areas open their own navigation with Back to settings.
-Shorter pages keep the main sidebar:
+- **Appearance**: the eight theme cards (`PictureChoices`), the dark-page
+  switch with its live PDF sample, control size and the status bar.
+  [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx).
+- **Reading & editing**: imported annotations (a Keep / Remove segmented
+  choice), handwriting as two `IconChoices` tiles ("Draws with": pen only /
+  pen and finger — the stored preference is still `inkPenOnly`) plus the
+  stylus-draws-right-away and pressure switches, translation (button and
+  language; the section's action jumps to AI › Advanced for model and
+  speed), the Enter key, and how search opens on the home page and on a
+  page (Full panel / Find bar).
+- **Library**: the live card demo with the thumbnails / folders / labels
+  switches ([SettingsLibraryDisplay.jsx](../../frontend/src/settings/SettingsLibraryDisplay.jsx)),
+  open-access fallback, metadata auto-fetch and saving external PDFs.
+- **Account**: the signed-in account's row and storage meter.
 
-- **AI › External assistants** ([SettingsIntegrations.jsx](../../frontend/src/settings/SettingsIntegrations.jsx)):
-  the workspace's assistant connections, the MCP URL, the Codex setup
-  command and the manual-token fallback ([mcp.md](mcp.md)).
-- **Manage workspaces**: workspaces and backups. A workspace's Manage action
-  opens an inline detail page; rename and invite are small editor dialogs.
-  Import/export, Export all and Back up all remain available. The account
-  popover links to this manager beside the workspace switcher.
-- **Library maintenance** (main sidebar): workspace storage, search-index rebuilding and the
-  per-paper metadata/text/index health table. Also linked from the Library
-  preferences page and the library operations menu.
-- **Administration** (admins only): Users (accounts, each with its personal
-  workspaces) and Server (shared workspaces, server-wide storage defaults,
-  the Assistant connections section with the public server URL, server
-  backups and logs).
-- **Diagnostics** (main sidebar): browser tracing and the browser session log.
+AI:
 
-Administrators can confirm the **Public server URL** under Server. It is
-prefilled from the browser origin but saved only on confirmation. The saved
-address immediately configures assistant sign-in and the MCP host allowlist;
-it persists in the server `settings` table. An existing `GAMMA_PUBLIC_URL`
-environment override takes precedence and is shown read-only.
+- **Connections**: the provider list (empty state: one sentence and the Add
+  button), the login connection check, the models (default chat, metadata,
+  dictation, translation) and the account's token usage
+  ([ai.md](ai.md) "Token usage"). The check, models and usage sections
+  appear only once a provider exists.
+- **Chat**: the tools master switch and, per chat kind (folder / PDF /
+  notes), the tool chips (`AgentToolPicker`, the same `ToggleGroup` the chat
+  header's settings popover shows for the open chat). No presets.
+- **Advanced**: reasoning effort, tool limits, the context budgets (the
+  section's action is the Standard / Larger / Custom preset), translation
+  effort and parallel requests, and the snapshot-clearing switch.
+- **Prompts**: the accordion with one Cancel / Save pair.
+- **Integrations** ([SettingsIntegrations.jsx](../../frontend/src/settings/SettingsIntegrations.jsx)):
+  the workspace's assistant connections, the MCP URL, Claude Code connection,
+  plugin setup and address-change commands, the Codex setup
+  command and the manual-token fallback ([mcp.md](mcp.md)) — a token's
+  scope is a `Segmented` (read-only for assistants, read and write for an
+  offline copy on another Gamma, [mirror.md](mirror.md)).
+
+Manage:
+
+- **Workspaces**: storage meter, personal and shared workspaces (each row:
+  Open, a Data menu with export and import, Manage — an inline detail page;
+  rename and invite are small editor dialogs), New workspace, Export all.
+  The empty Shared section offers admins "New shared workspace" (a jump to
+  Server). The account popover's "Workspaces…" opens this pane. Between
+  Personal and Shared, **Clones**
+  ([SettingsMirrors.jsx](../../frontend/src/settings/SettingsMirrors.jsx)):
+  the account's mirrors of remote workspaces in git's words (each row:
+  status line, Open, Pull & push or Reattach, Conflicts — an inline list of
+  the blocks both sides changed with Keep merged / Use ours / Use theirs —,
+  Detach, Remove origin) and "Clone a remote workspace" (a `SubDialog`:
+  origin server, write token, name, direction) — [mirror.md](mirror.md).
+  The same state sits in the header as the sync pill
+  (`collaboration/MirrorPopover.jsx`) while a clone is open; the clone's
+  own settings (cadence, direction, force pull / push, detach / reattach,
+  remove origin)
+  live in that pill's gear view, stored on the server per mirror
+  (`mirrors.poll_s`, `on_change`, `mode`).
+- **Backups**: server-kept snapshots per workspace.
+- **Library maintenance**: workspace storage, search-index rebuilding and
+  the per-paper metadata / text / index health table.
+- **Users** (admins): accounts, each with its personal workspaces and
+  labelled Storage / Edit buttons.
+- **Server** (admins): the dashboard (build, uptime, warnings, the update
+  check), the public server URL, storage defaults (each box saves on Enter
+  or blur), shared workspaces, server backups and the log with its level
+  filter ([user_db.md](user_db.md)).
+- **Diagnostics**: browser tracing and the browser session log.
+
+Administrators confirm the **Public server URL** under Server: the row shows
+a "confirmed" / "not confirmed" tag and, while the address is unconfirmed or
+edited, one Confirm button. It is prefilled from the browser origin but saved
+only on confirmation; the saved address immediately configures assistant
+sign-in and the MCP host allowlist and persists in the server `settings`
+table. An existing `GAMMA_PUBLIC_URL` environment override is shown
+read-only.
 
 Search is backed by [settingsNavigation.js](../../frontend/src/settings/settingsNavigation.js).
 It searches labels and synonyms, filters out inaccessible management pages,
@@ -85,11 +120,12 @@ The desktop surface has a persistent search header and labeled sidebar. On
 phones the Back button opens a labeled category list, replacing the old strip
 of unlabeled icons. All controls remain reachable by keyboard and touch.
 
-Most preferences apply immediately. Prompts use Save/Cancel. Credential,
-account and workspace editor dialogs protect unsaved drafts on Cancel,
-Escape and backdrop dismissal. `useSettingsDraft` registers dirty editors
-with the settings navigation guard. Server storage defaults save together,
-so saving one limit cannot discard an unsaved change to the other.
+Most preferences apply immediately, the server storage defaults included
+(each box saves when it commits). Prompts and the public server URL use a
+draft with Cancel / Save (Confirm). Credential, account and workspace editor
+dialogs protect unsaved drafts on Cancel, Escape and backdrop dismissal.
+`useSettingsDraft` registers dirty editors with the settings navigation
+guard.
 
 ## Chat settings are global
 
@@ -98,9 +134,8 @@ model, reasoning effort, single-paper context budget and tool permissions.
 The Tools button and checkbox also edit the global `agentEnabled` preference;
 there is no conversation-local tools override or reset on New chat.
 Permissions remain scoped by chat kind (folder, PDF, notes), applying to all
-chats of that kind in this browser. Read & search / Read, search & edit /
-Custom presets retain access to the individual permissions. Existing custom
-maps are preserved until the user explicitly picks a preset.
+chats of that kind in this browser. Both surfaces show the same tool
+chips per chat kind; there are no presets.
 
 These browser preferences persist locally; this does not make them
 account-synced. Provider selection and credentials retain their existing
@@ -115,7 +150,10 @@ the exact values without changing them.
 Ordinary rows show a small icon, a label, a short hint and a control, with the
 shared hover background. Put consequences in the visible
 hint; supplementary `title` text appears on hover, without a Details toggle.
-Use the existing shared controls, including `PictureChoices` for theme choices.
+Use the existing shared controls: `PictureChoices` for illustrated choices,
+`IconChoices` for a small exclusive set pictured as icon tiles (the share
+popover's audience, handwriting's "Draws with"), `Segmented` for two or three
+short words, `ToggleGroup` for independent chips.
 Editor dialogs accept a `draft` value for dismissal protection. See
 [ui-design.md](ui-design.md) for shared control styling.
 
@@ -133,7 +171,7 @@ another build cannot replace the assets while the suite runs.
 
 Two limits per account: max upload size per file (`max_upload_mb`, default
 50) and total uploads quota (`quota_mb`, 0 = unlimited). Server-wide defaults
-are admin-editable in Settings / Administration / Server; per-account overrides (NULL =
+are admin-editable in Settings → Server; per-account overrides (NULL =
 inherit) in the Users pane. They apply to the account's personal workspaces
 together; a shared workspace has its own optional quota (admins, Settings →
 Workspaces / Members & sharing — [workspaces.md](workspaces.md)). `GET

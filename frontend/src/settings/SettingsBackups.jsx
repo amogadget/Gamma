@@ -203,9 +203,7 @@ export function WorkspaceBackups({ value }) {
 
   return (
     <>
-      <PaneHead icon={DatabaseIcon} title="Backups">
-        Snapshots of your workspaces, kept on the server. Each one is a complete copy that restores on its own; download one to keep it elsewhere.
-      </PaneHead>
+      <PaneHead icon={DatabaseIcon} title="Backups">Server-kept snapshots; download one to keep it elsewhere.</PaneHead>
       {!mine && !error ? <Empty icon={DatabaseIcon}>Loading…</Empty> : null}
       {error ? <Empty icon={DatabaseIcon}>Backups unavailable — {error}</Empty> : null}
       {mine ? (

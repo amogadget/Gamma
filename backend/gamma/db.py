@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 13
 
 
 class SchemaOutdated(RuntimeError):
@@ -64,6 +64,22 @@ def safe_doc_id(doc_id: str) -> str:
 
 
 USERS_SCHEMA = [
+    # One row per AI call an account made, from the provider's own token
+    # report (gamma/ai_usage.py); Settings -> AI sums them.
+    """CREATE TABLE IF NOT EXISTS ai_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL,
+        at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        provider_id TEXT NOT NULL DEFAULT '',
+        provider_name TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        input INTEGER NOT NULL DEFAULT 0,
+        output INTEGER NOT NULL DEFAULT 0,
+        cache_read INTEGER NOT NULL DEFAULT 0,
+        cache_write INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS ai_usage_user_at ON ai_usage (username, at)",
     """CREATE TABLE IF NOT EXISTS mcp_oauth (
         kind TEXT NOT NULL,
         key_hash TEXT NOT NULL,
@@ -78,7 +94,28 @@ USERS_SCHEMA = [
         workspace_id TEXT NOT NULL,
         name TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
+        expires_at INTEGER NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'read'
+    )""",
+    # mirrors = local workspaces that are offline copies of a workspace on
+    # another Gamma server (gamma/sync_engine.py): where it lives, the
+    # write-scope token that signs the sync in (Fernet-encrypted with the
+    # data directory's key, publisher_sessions.cipher), the change-feed
+    # cursors, and the last run's status as JSON.
+    """CREATE TABLE IF NOT EXISTS mirrors (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+        remote_url TEXT NOT NULL,
+        remote_ws TEXT NOT NULL,
+        remote_name TEXT NOT NULL DEFAULT '',
+        token TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'two-way',
+        remote_cursor TEXT NOT NULL DEFAULT '',
+        local_cursor TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        poll_s INTEGER NOT NULL DEFAULT 30,
+        on_change INTEGER NOT NULL DEFAULT 1
     )""",
     """CREATE TABLE IF NOT EXISTS publisher_sessions (
         username TEXT NOT NULL,
@@ -184,6 +221,50 @@ PAGES_SCHEMA = [
         updated_at TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_ub_parent ON unified_blocks(parent_id, position)",
+    # deleted_pages = tombstones of deleted pages (gamma/ops.py delete_page):
+    # a page's id, when it went and who removed it. A page listing can't
+    # tell "never existed" from "deleted since you last looked"; anything
+    # that reconciles two copies of a workspace (a backup merge, a mirror)
+    # needs the difference. Creating a page under the same id clears it.
+    """CREATE TABLE IF NOT EXISTS deleted_pages (
+        page_id TEXT PRIMARY KEY,
+        deleted_at TEXT NOT NULL,
+        actor TEXT NOT NULL DEFAULT ''
+    )""",
+    # sync_pages / sync_conflicts: a mirror's per-page state
+    # (gamma/sync_engine.py) — the remote seq the page was last reconciled
+    # at and the tree as of then (the base of the three-way merge), and the
+    # merges it had to decide on its own. Empty in a workspace that mirrors
+    # nothing.
+    """CREATE TABLE IF NOT EXISTS sync_pages (
+        page_id TEXT PRIMARY KEY,
+        remote_seq INTEGER NOT NULL DEFAULT 0,
+        base TEXT NOT NULL DEFAULT '{}',
+        synced_at TEXT NOT NULL
+    )""",
+    # sync_log = what the last rounds did, page by page (the header pill's
+    # log), each row with its git-style block counts (stats: JSON
+    # {add, del, mod}); pruned to the newest SYNC_LOG_KEEP rows.
+    """CREATE TABLE IF NOT EXISTS sync_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        page_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        action TEXT NOT NULL,
+        stats TEXT NOT NULL DEFAULT ''
+    )""",
+    """CREATE TABLE IF NOT EXISTS sync_conflicts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        page_id TEXT NOT NULL,
+        block_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        mine TEXT NOT NULL DEFAULT '',
+        theirs TEXT NOT NULL DEFAULT '',
+        result TEXT NOT NULL DEFAULT '',
+        base TEXT NOT NULL DEFAULT '',
+        at TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0
+    )""",
     # page_ops = the per-page operation log (gamma/ops.py): one row per
     # applied batch, `seq` counting up per page. Live clients follow it over
     # the page's websocket; a reconnecting client catches up with

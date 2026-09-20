@@ -16,9 +16,10 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from .. import chatgpt_oauth
+from .. import ai_usage, chatgpt_oauth
 from ..ai_client import (
     UpstreamError,
+    add_usage as _add_usage,
     call_ai as _call_ai,
     chatgpt_request as _chatgpt_request,
     open_ai as _open_ai,
@@ -370,6 +371,23 @@ def _apply_provider_fields(entry: dict, payload: AIProviderRequest):
         entry["test_model"] = test_model
 
 
+@router.get("/ai/usage")
+def ai_usage_summary(request: Request):
+    """Token usage of the signed-in account's AI calls, as the providers
+    reported it: totals for today / 7 days / 30 days / all kept rows, the
+    30-day split by kind (chat, translate, metadata, cite, test) and by
+    model. Guests have no providers, so theirs is always empty."""
+    user = require_user(request)
+    return ai_usage.summary(user)
+
+
+@router.delete("/ai/usage")
+def ai_usage_reset(request: Request):
+    """Forget the account's usage rows (Settings → AI → Usage → Reset)."""
+    user = require_user(request)
+    return {"ok": True, "deleted": ai_usage.clear(user)}
+
+
 @router.get("/ai/settings")
 async def ai_settings_get(request: Request):
     user = require_user(request)
@@ -464,9 +482,10 @@ def _probe_entry(user: str, entry: dict, fallback_model: str = "") -> dict:
     started = time.time()
     try:
         # Generous cap: reasoning models burn invisible tokens even on "ok".
+        probe_entry = {"provider": provider_id, "model": model}
         _call_ai([{"role": "user", "content": 'Reply with the single word "ok".'}],
-                 "", {"provider": provider_id, "model": model}, rt,
-                 max_tokens=2048, timeout=45)
+                 "", probe_entry, rt, max_tokens=2048, timeout=45,
+                 on_usage=ai_usage.recorder("test", probe_entry, rt))
     except Exception as e:
         auth = isinstance(e, UpstreamError) and e.status in (401, 403)
         return {"ok": False, "model": model, "error": str(e), "auth": auth}
@@ -679,7 +698,7 @@ class ModelCatalogRequest(BaseModel):
     provider_id: str = ""  # saved entry to use the stored key of; "" = use the fields below
     protocol: str = ""
     api_key: str = ""
-    base_url: str = ""
+    base_url: str | None = None
 
 
 # Sync def: the upstream /v1/models fetch runs in the threadpool.
@@ -694,7 +713,7 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     protocol = payload.protocol
     if payload.provider_id:
         entry = next((e for e in load_provider_entries(user) if e.get("id") == payload.provider_id), None) or {}
-        protocol = entry.get("protocol") or protocol
+        protocol = protocol or entry.get("protocol")
     if protocol == "chatgpt":
         return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
     if protocol not in AI_PROTOCOLS:
@@ -702,7 +721,7 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     key = (payload.api_key or "").strip() or (entry.get("api_key") or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="enter the API key first, then load the model list")
-    base = ((payload.base_url or "").strip() or (entry.get("base_url") or "").strip()
+    base = ((payload.base_url if payload.base_url is not None else entry.get("base_url") or "").strip()
             or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
     try:
         data = _model_catalog_json(_models_list_request(protocol, key, base))
@@ -913,9 +932,11 @@ def ai_translate(payload: AITranslateRequest, request: Request):
         # thinking spends from the same budget.
         return min(30000, 8000 + 2 * sum(len(t) for t in batch))
 
+    count_usage = ai_usage.recorder("translate", entry, rt)
+
     def call(batch):
         return _call_ai(user_turn(batch), system, entry, rt, effort=effort,
-                        max_tokens=budget(batch), timeout=180)
+                        max_tokens=budget(batch), timeout=180, on_usage=count_usage)
 
     def stream_call(batch):
         """The same call, streamed: yields ("partial", text-so-far) as the
@@ -924,7 +945,7 @@ def ai_translate(payload: AITranslateRequest, request: Request):
                         max_tokens=budget(batch), timeout=180, stream=True)
         acc = ""
         try:
-            for text in _sse_deltas(resp, _protocol(rt, entry)):
+            for text in _sse_deltas(resp, _protocol(rt, entry), count_usage):
                 acc += text
                 yield ("partial", acc)
         finally:
@@ -1212,6 +1233,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                          payload.read_char_limit) or None) if valid_scope else None
     # The conversation the agent loop grows across tool rounds (agent mode).
     state = {}
+    count_usage = ai_usage.recorder("chat", entry, rt)
 
     def prepared(allow_native):
         pdf_b64s, context, coverage = _gather_inputs(ws, payload, allow_native)
@@ -1253,9 +1275,10 @@ def ai_chat(payload: AIChatRequest, request: Request):
 
     def agent_events(first_resp):
         """Organizer tool loop: yield ("delta", text) / ("action", dict) /
-        ("progress", dict) events. Each round streams one provider turn; tool
-        calls are executed here and their results appended before the next
-        round re-opens the provider. A "progress" event previews a note
+        ("progress", dict) / ("usage", dict) events. Each round streams one
+        provider turn (its token counts are one "usage" event; the client
+        sums them per reply); tool calls are executed here and their
+        results appended before the next round re-opens the provider. A "progress" event previews a note
         edit while the model is still writing it: the block being edited (or
         the parent/sibling of the block being created) plus the markdown
         streamed so far — the notes panel types it into the block live."""
@@ -1294,6 +1317,10 @@ def ai_chat(payload: AIChatRequest, request: Request):
                             mode = str(args.get("mode") or "replace").lower()
                             if mode in ("append", "prepend"):
                                 progress["mode"] = mode
+                            elif mode == "patch" and isinstance(args.get("find"), str):
+                                # patch: the preview swaps the passage in place.
+                                progress["mode"] = mode
+                                progress["find"] = args["find"]
                         else:
                             progress["parent_id"] = target
                             if args.get("after_id"):
@@ -1301,6 +1328,9 @@ def ai_chat(payload: AIChatRequest, request: Request):
                         yield ("progress", progress)
                     elif kind == "tool":
                         calls.append(data)
+                    elif kind == "usage":
+                        count_usage(data)
+                        yield ("usage", data)
             finally:
                 resp.close()
             if not calls:
@@ -1356,11 +1386,16 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 return StreamingResponse(agent_ndjson(), media_type="application/x-ndjson")
 
             def ndjson():
+                usage = []
                 try:
                     if head:
                         yield head
-                    for text in _sse_deltas(resp, _protocol(rt, entry)):
+                    for text in _sse_deltas(resp, _protocol(rt, entry), usage.append):
                         yield json.dumps({"delta": text}) + "\n"
+                    # The provider's token report closes the stream.
+                    for u in usage:
+                        count_usage(u)
+                        yield json.dumps({"usage": u}) + "\n"
                 except Exception as e:
                     log.warning(f"[ai_chat] stream error: {e}")
                     yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
@@ -1371,18 +1406,25 @@ def ai_chat(payload: AIChatRequest, request: Request):
         if tools:
             # The tool loop is SSE-based on every protocol; join it for
             # non-stream callers and return the actions alongside the text.
-            parts, actions = [], []
+            parts, actions, usage = [], [], None
             for kind, data in agent_events(open_with_fallback(True)):
                 if kind == "delta":
                     parts.append(data)
                 elif kind == "action":
                     actions.append(data)
+                elif kind == "usage":
+                    usage = _add_usage(usage, data)
                 # "progress" previews only matter to a live UI
             return {"response": "".join(parts), "actions": actions,
-                    "context": state.get("coverage") or []}
+                    "context": state.get("coverage") or [],
+                    **({"usage": usage} if usage else {})}
+        usage = []
         with open_with_fallback(False) as resp2:
-            text = _read_reply(resp2, _protocol(rt, entry))
-        return {"response": text, "context": state.get("coverage") or []}
+            text = _read_reply(resp2, _protocol(rt, entry), usage.append)
+        for u in usage:
+            count_usage(u)
+        return {"response": text, "context": state.get("coverage") or [],
+                **({"usage": usage[0]} if usage else {})}
     except HTTPException:
         raise
     except Exception as e:

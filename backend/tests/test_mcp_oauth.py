@@ -83,7 +83,9 @@ def test_discovery_and_browser_signin_roundtrip(browser):
     tools = c.post("/mcp", headers={"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"},
                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert tools.status_code == 200, tools.text
-    assert len(tools.json()["result"]["tools"]) == 6
+    assert {tool["name"] for tool in tools.json()["result"]["tools"]} == {
+        "list_pages", "read_page", "read_block", "search_library", "read_gamma_link",
+    }
     listing = c.get("/api/integrations/tokens").json()
     connection = next(t for t in listing["tokens"] if t["name"] == "Codex test (OAuth)")
     c.delete("/api/integrations/tokens/" + connection["id"])
@@ -159,6 +161,54 @@ def test_body_limit_and_guest_denial(browser):
     assert "error=" in response.headers["location"]
     c.post("/api/login-guest")
     assert c.get("/api/integrations/oauth/request?request_id=anything").status_code == 403
+
+
+@pytest.mark.parametrize("path", ["/oauth/register", "/oauth/token"])
+def test_oauth_endpoints_reject_oversized_bodies(browser, path):
+    c, _ = browser
+    response = c.post(path, content="x" * 16385,
+                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+    assert response.status_code == 413
+
+
+def test_bounded_request_replays_chunks_and_stops_at_limit():
+    import asyncio
+    from fastapi import HTTPException, Request
+    from gamma.mcp_oauth import bounded_request
+
+    async def check():
+        scope = {"type": "http", "method": "POST", "path": "/oauth/token",
+                 "query_string": b"", "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+                 "state": {"user": "reader"}}
+        # Finish the stream explicitly, as a chunked ASGI request does.
+        messages = iter([
+            {"type": "http.request", "body": b"code=", "more_body": True},
+            {"type": "http.request", "body": b"x" * (16384 - 5), "more_body": False},
+        ])
+
+        async def receive_at_limit():
+            return next(messages)
+
+        replay = await bounded_request(Request(scope, receive_at_limit))
+        assert replay.state.user == "reader"
+        assert len(await replay.body()) == 16384
+        assert (await replay.form())["code"] == "x" * (16384 - 5)
+        assert len(await replay.body()) == 16384  # SDK can reread after form parsing
+
+        calls = 0
+
+        async def receive_oversized():
+            nonlocal calls
+            calls += 1
+            assert calls <= 2, "must stop before reading the remaining stream"
+            return {"type": "http.request", "body": b"x" * 8193, "more_body": True}
+
+        with pytest.raises(HTTPException) as exc:
+            await bounded_request(Request(scope, receive_oversized))
+        assert exc.value.status_code == 413
+        assert calls == 2
+
+    asyncio.run(check())
 
 
 def test_logout_invalidates_an_unexchanged_code(browser):

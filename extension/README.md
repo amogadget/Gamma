@@ -72,8 +72,9 @@ connected session is not a guarantee of access; browser PDF uploads still work.
 
 The server encrypts the snapshot and limits reuse to that account and exact
 HTTPS host. Session cookies last at most 24 hours; persistent cookies last until
-their original expiry or 30 days, whichever comes first. Refresh is manual;
-uninstalling the Connector does not delete sessions already stored on Gamma.
+their original expiry or 30 days, whichever comes first. Automatic refresh can
+be disabled; **Refresh now** remains available in the popup. Uninstalling the
+Connector does not delete sessions already stored on Gamma.
 See [backend storage details](../docs/dev/paper_metadata.md#connected-publisher-sessions).
 
 ## Files
@@ -84,6 +85,7 @@ See [backend storage details](../docs/dev/paper_metadata.md#connected-publisher-
 | `worker.js` | per-tab detection state + badge, save pipeline, context menus, popup message API |
 | `detect.js` | content script: identifier extraction (meta tags, URL, JSON-LD, DOI fallback) |
 | `api.js` | settings in `chrome.storage.sync` + the fetch wrapper (cookie session, error parsing) |
+| `publisherSessions.js` | publisher-host validation, connection flow, automatic-refresh rules and session status text |
 | `popup.html/js/css` | the popup (setup → offline → sign-in → save); styling mirrors the app's theme tokens and control recipes |
 | `options.html/js` | server, account, saving defaults |
 | `assets/icons/` | enabled/disabled toolbar icons, manifest icons, and notification icon |

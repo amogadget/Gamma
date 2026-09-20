@@ -218,6 +218,18 @@
 .setStatBar > i { display: block; height: 100%; border-radius: 2px; background: var(--accent-dark); transition: width 0.3s ease; }
 .setStatBar > i.ok { background: var(--ok); }
 .setStatBar > i.warn { background: #d9822b; }
+/* Text tiles (StatText): version, uptime, counts — a smaller value, a hint line, a toned frame. */
+.setStatText .setStatNum { font-size: 15px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setStatHint { font-size: 10.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setStat.warn { border-color: rgba(217, 130, 43, 0.55); }
+.setStat.error { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+/* Several controls at the end of one settings row (a filter + Copy on the log row). */
+.setRowControls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+/* Level badge in a log row (LogBox entries with a tone). */
+.sysLogLevel { flex: none; align-self: flex-start; font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 4px; border-radius: 4px; }
+.sysLogLevel.warn { color: #d9822b; background: rgba(217, 130, 43, 0.14); }
+.sysLogLevel.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.sysLogRow:has(.sysLogLevel) .sysLogMsg { color: var(--text-secondary); }
 
 /* --- empty / loading state: a glyph and one sentence, centred --- */
 .setEmpty {
@@ -376,6 +388,36 @@
 .aiProvModelsLabel { color: var(--text-dim); font-size: 10px; align-self: center; margin-right: 2px; }
 /* Provider rows double as the active-key picker in the Providers pane. */
 .aiProvSelectable { cursor: pointer; }
+/* Token usage by model (AI pane): a compact grid table, numbers right-aligned. */
+.aiUsageTable {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 6px 0 4px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.aiUsageRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 64px 64px 60px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  min-height: 28px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.aiUsageRow > span:not(:first-child) { text-align: right; color: var(--text-muted); }
+.aiUsageRow:last-child { border-bottom: none; }
+.aiUsageHeader { font-weight: 600; color: var(--text-muted); background: var(--bg-surface); }
+.aiUsageHeader > span:first-child { color: var(--text-muted); }
+.aiUsageKind { background: var(--bg-block); }
+.aiUsageModel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.aiUsageModel em { font-style: normal; color: var(--text-dim); }
+@media (max-width: 600px) {
+  .aiUsageRow { grid-template-columns: minmax(0, 1fr) 40px 52px 52px; }
+  .aiUsageRow > span:last-child { display: none; }
+}
 /* The row is avatar · meta · actions — meta takes the slack so the text starts
    right after the glyph instead of floating in the middle of the row. */
 /* min-width is the wrap trigger: below it the actions move to their own
@@ -532,6 +574,25 @@
 .setPictureCheck { position: absolute; right: 0; top: 0; width: 14px; height: 14px; display: grid; place-items: center; }
 .setPictureChoice.on .setPictureCheck { border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .appearanceFootnote { font-size: 11px; line-height: 1.6; color: var(--text-secondary); margin: 8px 0 0; }
+
+/* IconChoices: stacked tiles — glyph over name over hint, centered. */
+.setIconTiles { margin: 2px 0 4px; }
+.setIconTiles .setPictureChoice.uiBtn { flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px 8px; }
+.setIconTiles .setPictureCaption { flex: auto; width: 100%; align-items: center; text-align: center; padding-right: 0; gap: 1px; }
+.setIconTiles .setPictureCheck { top: -30px; right: -2px; }
+.setTileIcon {
+  flex: 0 0 34px; width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  background: var(--bg-block);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.setPictureChoice.on .setTileIcon { background: var(--accent-bg); border-color: transparent; color: var(--accent); }
+@media (max-width: 620px) {
+  .setIconTiles .setPictureChoices { grid-template-columns: repeat(var(--picture-columns, 3), minmax(0, 1fr)); }
+  .setIconTiles .setPictureHint { display: block; }
+}
 .appearancePdf { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 10px; }
 .appearancePdfPreview { flex: 0 0 40px; width: 40px; height: 49px; }
 .appearancePdfControls { flex: 1; min-width: 0; }
@@ -569,6 +630,13 @@
 .integrationDetails .setStep { margin-bottom: 4px; }
 .integrationCreateControls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .integrationCreateControls .aiKeyInput { flex: 1; width: 100px; min-width: 0; margin: 0; }
+
+/* Settings → Workspaces → Offline copies: the merges list (SettingsMirrors.jsx). */
+.mirrorConflict { display: grid; gap: 6px; padding: 10px 0; }
+.mirrorConflict:not(:last-of-type) { border-bottom: 1px solid var(--border-subtle); }
+.mirrorConflictHead { display: flex; align-items: center; gap: 8px; }
+.mirrorConflictTexts { display: flex; flex-direction: column; gap: 4px; }
+.mirrorConflictHead .uiBtn { margin-left: auto; }
 
 @media (max-width: 820px) {
   .settingsSidebar { flex-basis: 180px; }

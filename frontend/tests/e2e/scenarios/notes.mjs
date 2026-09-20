@@ -193,8 +193,43 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     assertNoProblems(page);
   });
 
+  await step("notes: colored text via the / menu and a foldable [!note]- callout", async () => {
+    await editRow(page, "after gap");
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("/red");
+    await page.getByRole("button", { name: /Red text/ }).click();
+    // The command lands through a React round trip that sets the content
+    // first and the caret a beat later; type once the caret sits inside the
+    // span (the mermaid step waits for its selection the same way).
+    await page.waitForFunction(() => {
+      const sel = document.getSelection();
+      const ed = document.activeElement?.closest(".cm-content");
+      if (!ed || !sel?.anchorNode || !ed.contains(sel.anchorNode)) return false;
+      const r = document.createRange(); r.setStart(ed, 0); r.setEnd(sel.anchorNode, sel.anchorOffset);
+      return r.toString().endsWith('#e5484d">');
+    }, null, { timeout: 5000 });
+    await page.keyboard.type("hot");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("> [!note]- Proof");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("hidden body");
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(alice2, pageId)).includes('<span style=\\"color:#e5484d\\">hot</span>'), { what: "the color span saved as inline HTML" });
+    const colored = row(page, "hot").locator('.blockRendered span[style*="color"]');
+    assertEq(await colored.innerText(), "hot", "the rendered view colors the run");
+    const details = row(page, "Proof").locator("details.callout");
+    assertEq(await details.count(), 1, "the fold flag renders a <details>");
+    assertEq(await details.evaluate((el) => el.open), false, "'-' starts collapsed");
+    await details.locator("summary").click();
+    assertEq(await details.evaluate((el) => el.open), true, "the title toggles it");
+    assertEq(await page.locator(".blockEditorCm").count(), 0, "toggling never opens the editor");
+    assertNoProblems(page);
+  });
+
   await step("notes: Export… as an Obsidian vault downloads a zip", async () => {
-    await page.click("button[aria-label='Settings']");
+    await page.click("button[aria-label='View']");
     await page.locator(".popoverItem", { hasText: "Export…" }).click();
     const dialog = page.getByRole("dialog", { name: "Export", exact: true });
     await dialog.waitFor();

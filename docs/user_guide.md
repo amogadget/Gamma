@@ -8,6 +8,18 @@ A quick tour of everything you can do. For install instructions see the [README]
 - **Log in as guest** to try things out — guest data resets daily.
 - On open, each paper's title/authors/venue are fetched automatically (arXiv → DOI → AI).
 
+## Install as an app
+
+Gamma is a web app, and you can install it from the browser so it opens from an icon, full screen, without the browser's address bar and toolbars. No download, no store: it is the same Gamma, pointed at your server.
+
+- **iPad / iPhone**: open your Gamma address in Safari, tap the Share button, then **Add to Home Screen** → **Add**. You may be asked to sign in once more the first time, because the installed app keeps its own cookies; after that it stays signed in.
+- **Android**: open Gamma in Chrome and choose **Install app** (or **Add to Home screen**) from the ⋮ menu.
+- **Windows / macOS / Linux**: in Chrome or Edge, click the install icon at the right end of the address bar, or pick **Install Gamma** from the browser menu. (There is also the separate desktop app, which additionally runs local libraries on your disk.)
+
+On an iPad the Apple Pencil writes on papers right away while fingers scroll and pinch, with pressure — see *Reading & highlighting*. The status bar takes the color of Gamma's toolbar in whatever theme you use. Uninstall like any app: hold the icon and remove it; your data lives on the server and is untouched.
+
+The installed app still needs the server to be reachable; it does not work offline.
+
 ## Reading & highlighting
 
 - **Highlight**: select text with the mouse → a small popup offers four colors. Pick one and the highlight becomes a note block, already focused so you can type a comment. The chain button in the same popup links the selection to another paper or URL instead.
@@ -16,6 +28,7 @@ A quick tour of everything you can do. For install instructions see the [README]
   - the color popup appears — pick a color to also keep it as a rectangular highlight (its note card shows a thumbnail of the region).
 
   On a phone there's no Ctrl — use the text/rectangle mode toggle in the zoom column.
+- **Handwrite** with a stylus or the mouse: the pen button in the viewer's zoom column opens the tool strip — pens and highlighters with their own colors and widths, an eraser (whole strokes or partial), a lasso to move, recolor, duplicate or delete strokes, and Undo/Redo. A stylus (Apple Pencil, Surface Pen, Wacom) draws right away even with the strip closed, with pressure, while fingers keep scrolling and pinching; tap ink to select it. The strokes on a page become one block in the notes, with your caption under it; *New group* starts another block.
 - **Click a highlight** to jump to its note (and quote it into the chat). **Right-click** it to recolor, link it to a paper, copy it as a reference point (also copies a deep link to the exact passage), or delete it.
 - Highlights with a comment show a small **speech-bubble badge** — hover it to read the note in place.
 - **Zoom**: Ctrl+wheel (anchored at the cursor), pinch on touch, or the +/−/fit buttons on the right edge. Zoom and reading position are remembered per paper and synced across devices.
@@ -42,6 +55,7 @@ Open the chat from the **⋮ menu → AI Chat**. Configure providers in Settings
 - **Add more**: paste images, Ctrl+drag a region of the page (see above), or use the **+ menu** to attach files or pick several papers from your library (optionally with your notes and highlights).
 - **Quote passages**: click a highlight to set the chat's "Selection"; Ctrl+click more highlights to add up to six passages.
 - **Library agent**: on the home page or in a folder, the chat can act on your library — list, read and search the papers in view, rename them, file them into folders (*"rename these to AuthorYear style"*, *"which of these measure T1?"*). Every tool call shows as a chip you can click to see exactly what it did; permissions are per-tool in Settings → Assistant. It can never delete anything or edit your notes. Details: [the agent tools guide](dev/ai_tools.md).
+- **Token counts**: a dim line under each reply shows what it cost — ↑ tokens sent, ↓ tokens received, and how much of the prompt the provider served from its cache. The chat-settings popover totals the conversation; Settings → AI → **Token usage** totals today, the week and the month per model.
 - Per message: **copy**, **edit & re-send** (pencil, discards the replies after it), and a **stop** button while streaming. **Ctrl+F inside the panel** finds text in the conversation. A mic button dictates into the input.
 - Each paper and each folder keeps its own conversation; **New chat** starts over.
 

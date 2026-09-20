@@ -25,15 +25,19 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
 
 
-def check(key: str, max_hits: int, window_seconds: int) -> None:
+def check(key: str, max_hits: int, window_seconds: int, on_first_exceed=None) -> None:
     """Count one hit for `key`; raise 429 once it exceeds `max_hits` within the
-    current window. Windows are fixed and start on the first hit."""
+    current window. Windows are fixed and start on the first hit.
+    `on_first_exceed(count)` runs on the one hit that crosses the limit — the
+    place to log a warning once per window rather than once per request."""
     now = time.monotonic()
     bucket = _buckets[key]
     if now - bucket[0] >= window_seconds:
         bucket[0], bucket[1] = now, 0
     bucket[1] += 1
     if bucket[1] > max_hits:
+        if bucket[1] == max_hits + 1 and on_first_exceed is not None:
+            on_first_exceed(bucket[1])
         retry = max(1, int(window_seconds - (now - bucket[0])))
         raise HTTPException(
             status_code=429,

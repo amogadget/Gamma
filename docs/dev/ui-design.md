@@ -6,7 +6,9 @@ follow them instead of inventing new patterns.
 ## One control set, everywhere
 
 Mermaid diagram previews in notes and chat use the shared component and toolbar
-described in [mermaid.md](mermaid.md); their buttons use `uiBtn sm`.
+described in [mermaid.md](mermaid.md); the toolbar is the note image's hover
+strip of `ctlBtn` icon buttons, and the diagram resizes with the same
+right-edge grip as an image (`shared/ui/ResizeGrip.jsx`).
 
 Reuse the unified classes; never invent a bespoke style for a control that
 already exists. Bespoke CSS classes are for **layout only**.
@@ -97,148 +99,29 @@ themes. Never hardcode a red.
 
 ### The share popover
 
-`.sharePopover` (App.jsx, the topbar link button) is the one place a page is
-published, shaped like Notion's share sheet but built only from the shared
-controls: an invite row (`aiKeyInput` + `uiBtn sm primary`), people entries
-(`.shareEntry`: `.shareAvatar` initial · name + one-line sub · a `MenuSelect`
-for Can view / Can edit · `uiClose` remove), a "General access" entry whose
-avatar is the audience glyph and whose `MenuSelect` picks Anyone with the
-link / Signed-in users / Only people invited, and a `.shareFooter` with Stop
-sharing (`uiBtn sm danger`) left and Copy link right. The `.share*` classes
-are layout only. The read-only view shows the counterpart `.shareBadge`
-("Can edit · shared by …") in its top bar.
+`sharing/SharePopover.jsx` (the topbar link button) is the one place a page
+is published. It is a popover under its button, like the account menu (App
+wraps it in a `data-popover="share"` anchor, so the outside-click and Escape
+rules close it; on phones the bottom bar's popover rule spans it across the
+screen), built from the settings kit like the workspace Manage dialog:
+`Section`s — Link (the address as the row hint, Copy link and a danger
+`iconSq` Stop sharing), Access (pictured, not described: three
+`IconChoices` tiles — Anyone / Signed in / Invited only — and, as the
+section's action, one View / Edit
+`Segmented`; one summary sentence under the tiles is the only prose, amber
+`.shareWarn` when a link is editable without sign-in), People (`aiProvRow`
+rows: the owner, then each invited account with its own View / Edit
+`Segmented` and a `uiBtn sm iconSq` remove; the section's Invite action
+toggles an inline form — compact `AccountPicker` + access — a popover can't
+host a modal) and the page's Citation section (App.jsx owns it: a `citeHead`
+label line, then a `CopyBox` — text with the copy button pinned top-right —
+for the slide citation and for BibTeX; the section's action regenerates).
+Every change saves at once; nothing is a bespoke control. There is no
+"reset link": stopping and sharing again mints a new address. The read-only
+view shows the counterpart tag ("Can edit · shared by …", and "as <name>" for
+a visitor without an account) in its top bar.
 
-## Settings primitives
-
-### Show the result while editing
-
-A setting that changes a visible surface shows one live example of that
-surface with its controls beside it. Each control adds, removes or updates
-the matching element at once. Reuse the real product component so the
-preview stays accurate, and keep its shared styling and states (hover,
-shadow, focus). Bespoke CSS around it is layout only. On small screens the
-controls go below the preview.
-
-Library Display is the model: one `PageCard` with independent Thumbnails,
-Folders and Labels switches. Mutually exclusive palettes (themes) use a set
-of miniature cards instead.
-
-The Import and Export dialogs are the other `PictureChoices` surface: format
-and source cards grouped by file type (app logos for app formats, the shared
-PDF, notes and Markdown icons for document formats, all monochrome at one
-size), then a review step whose switches sit beside an illustrative page
-(`shared/illustrations/TransferPreview.jsx`, an example of the output, not a
-render of the document). The flow and its rules are described in
-[import_export.md](import_export.md).
-
-UI illustrations live in [illustrations/](../../frontend/src/shared/illustrations/README.md),
-one file per subject: React components for drawings that change with
-controls, SVG files for fixed ones, and one shared stylesheet. They reuse
-existing icons and widgets; control logic and layout stay with their owners.
-
-Settings panes are built only from
-[SettingsKit.jsx](../../frontend/src/settings/SettingsKit.jsx):
-
-- `PaneHead` / `Section` / `Row` / `Toggle`: small icon, readable label, short
-  hint and shared control. Rows use the shared hover background without a drop
-  shadow. Important effects stay visible; supplementary help uses a hover
-  tooltip, without an explicit Details toggle.
-- Larger areas (AI, workspace management and administration) get second-level
-  navigation with Back to settings. Short pages keep the main sidebar. Search
-  opens the relevant page and focuses the matching setting.
-- Appearance uses `PictureChoices` theme cards (`uiBtn` + `on`) with small
-  decorative SVG palette sketches beside the labels (stacked on narrow
-  screens). Its rows are not interactive surfaces, so they suppress the
-  shared hover fill; grouped rows use straight dividers. A PDF sample
-  reflects the current tint and dark-page switch. Account and browser scopes
-  sit beside section headings; the controls are the shared `Row`, `Toggle`
-  and `Stepper`.
-- Editor dialogs: `SubDialog` › `.settingsForm` › `Step` (numbered wizard
-  stages) or `Field` (caption + hint + one control), closed by a
-  `.reportModalBtns` footer. Pass the draft to `SubDialog` so unsaved edits are
-  protected on Cancel, Escape and backdrop clicks.
-- Shared controls: `Segmented` (joined pills for exclusive choices),
-  `PictureChoices` (illustrated cards for one exclusive choice: the theme
-  cards, the import/export format cards; `onConfirm` fires on double-click),
-  `ToggleGroup` (its multi-select counterpart: a wrapping row of small
-  icon + short-name chips, each an independent on/off — `uiBtn sm` with the
-  shared `on` state; the agent's per-tool permissions in Settings and in the
-  chat's ⚙ popover are one of these, never a column of checkboxes),
-  `UnitInput` (number + unit suffix — units never live in labels),
-  `Stepper` (−/+ around a readout for a small numeric range; the readout
-  is followed by the shared Reset button),
-  `PasswordInput` (a password box with a show/hide eye — a `ctlBtn` over the
-  input's right edge, outside the Tab order; it wraps the input's own class,
-  so the login page uses it with `loginInput` and every secret field in
-  Settings — account passwords, API keys — with `aiKeyInput`),
-  `CharSlider` (log-scaled character budget), `Stat`, `Empty`, `QuotaMeter`.
-
-## Theme
-
-Eight states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark/Gamma Light/Gamma Dark/Sepia/Solarized Light/Gray — `gamma-theme` in
-localStorage (valid values are `THEMES` in `app/prefs.js`), applied as
-`data-theme` on the root element. The choice (plus
-"Flip page colors") also follows the account through `/api/prefs/appearance` —
-server wins on login and on window focus, changes push back; localStorage
-stays the instant-paint cache the `index.html` script reads. An inline script in `index.html` applies a pinned theme before
-first paint; `color-scheme` follows so native controls match. Scrollbars are
-themed rather than left to the OS: a global `scrollbar-width: thin` +
-`scrollbar-color: var(--scrollbar-thumb) transparent` (with a
-`::-webkit-scrollbar` fallback for older WebKit/Blink) in `shared/styles/app.css`.
-"Flip page colors" (`gamma-pdf-dark`) is separate and display-only: it
-inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
-to screen, and darkens the scroller surround.
-
-**Gamma Light** and **Gamma Dark** (`gamma-light`, `gamma-dark`) are the
-hero-derived brand themes: warm gray and amber, charcoal and soft gold. They
-add `--on-accent` (text on an accent surface) and `--accent-hover`. Gamma
-Light joins the light-ground and tinted-surround selector lists below; Gamma
-Dark gives the PDF viewer dark pages by default (`[data-theme="gamma-dark"]
-.pdfViewer` rules next to `.pdfDark`), so "Flip page colors" adds nothing there.
-
-**Sepia**, **Solarized Light**, and **Gray** are the eye-comfort modes and the themes that reach
-the PDF page as well as the chrome. Sepia: warm beige surfaces and dark teal
-text (`#073642`). Solarized Light (`solarized`) follows
-[VS Code's Solarized Light](https://github.com/microsoft/vscode/blob/main/extensions/theme-solarized-light/themes/solarized-light-color-theme.json):
-cream content surfaces (`#fdf6e3`), `#eee8d5` chrome, blue-gray text
-(`#657b83`), the stock Solarized accents and Solarized `.hljs-*` token
-colors; the desktop shell (`desktop/ui/theme.css`, `desktop/main.js`) and the
-`index.html` first-paint background carry the same palette. All three tint
-the PDF page the same way:
-`[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
-page wrapper the `--pdf-paper` ground and letting the canvas `multiply` onto
-it. Multiply, not a `sepia()`/`hue-rotate` filter: white paper lands exactly
-on the ground color while figures only warm slightly. The canvas also gets
-`opacity: 0.82` — under multiply that leaves the paper invariant and lifts
-only the ink, black → `(1−α)·paper` ≈ `#2e2c29` (~12.6:1), the softened
-charcoal the eye-strain guidance recommends over pure black. **Gray** is the
-neutral counterpart — the same machinery driven by different tokens
-(`--pdf-paper: #f4f4f4`, `#2d2d2d` text ladder, Light's role colors) for
-users who want the glare cut without a color cast; the canvas multiply rule
-selects `:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`
-and the viewer surround adds `gamma-light` to that list, so a new tinted theme only
-needs a token block plus membership in those lists. The tint needs no prop — `data-theme` is global, so it is pure CSS
-— and "Flip page colors" wins when both are on. Light-ground rules select
-`:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
-extend that list, don't add another copy.
-
-## Layout
-
-- Desktop: dockable windows via `react-resizable-panels` **v2** (v4 has an
-  incompatible API).
-- Phone (< 700 px, or a short coarse-pointer viewport): single full-width
-  panel with a bottom tab bar (`useIsPhone`, `.phoneTabBar` / `.phonePanel`).
-- View modes come from the URL query, no router lib: `/` home,
-  `/?page=<id>` paper, `/?share=<token>` read-only, `/?block=<id>`
-  jump-to-block.
-- Icons are hand-rolled SVGs in [Icons.jsx](../../frontend/src/shared/ui/Icons.jsx) —
-  add there, keep the stroke style.
-
-## File map (frontend/src)
-
-| File | Owns |
-|---|---|
+---|---|
 | `app/App.jsx` | routing, block-tree editor state, docks, the page's live session glue, AI chat glue (decomposition in progress) |
 | `collaboration/usePageCollab.js`, `shared/model/blockOps.js`, `collaboration/Presence.jsx` | the live session (ops out, ops + presence in), the pure tree diff/apply, the avatar stack / row chips ([collab.md](collab.md)) |
 | `app/prefs.js` | every localStorage preference (`useAppPrefs`) |
@@ -255,12 +138,13 @@ extend that list, don't add another copy.
 | `editor/BlockTree.jsx`, `shared/model/blockModel.js` | outliner rendering / pure tree ops (`shared/model/highlightColors.js` is the highlight palette both share with the viewer). Line breaks in a rendered note: one Enter is a hard line break (`remark-breaks`), one blank line the paragraph break, and every further blank line a visible empty line (`expandBlankLines` in `editor/mdMarks.js`, applied by `mdPreprocess` outside math and code) — what the editor shows is what the note renders |
 | `transfers/FileChip.jsx` | the file chip an upload link renders as — a small card (kind icon in a tinted square, name, download arrow), inline so it sits in a sentence, identical for every type; a PDF or markdown chip whose page exists gets an accent "open page" button before the arrow; a `ContextMenu` on right-click with "Open page" / "Add to library" (fed by `FileChipContext` from App and one batched `POST /pages/by-docs` per render) and download; also the shared `postFile` / `uploadFilesAsLines` upload helpers |
 | `editor/MdTools.jsx` | in-place tools on rendered notes: `MdImage` (hover toolbar of `ctlBtn` icons — zoom lightbox, caption via alt text, download, delete — plus a drag grip writing the Obsidian `![alt|300]` size; legacy Logseq `{:width N}` reads and normalizes on edit) and `MdTableWrap` (hover "+" strips, column/row handle menus — insert, align, delete — and click-a-cell in-place editing: an input over the cell, Tab/Shift-Tab hop cells across the commit remount via a module-level session map, Enter commits, Esc cancels; tables are never edited as raw markdown — a cell mousedown stops the block row's edit-on-mousedown), backed by pure source transforms (`scanImages`/`scanTables` locate the nth rendered construct; `applyImageEdit`/`applyTableEdit` rewrite it, tables re-serialized pretty-printed; `formatTables` also runs when a block's raw editor closes) and `htmlTableToMarkdown` for the spreadsheet-paste path |
-| `editor/BlockCmEditor.jsx` | the CodeMirror 6 block editor (textarea-compatible facade) with live in-place rendering of closed `$…$`/`$$…$$` spans, ``` ``` ``` fences (highlight.js cards), `[[ref]]`/`![[embed]]` chips, `![alt](url)` images (the picture, sized like the rendered view, alt as caption; `scanImageSyntax` in `mdMarks.js` is the one image scanner, shared with `MdTools`), and markdown (headings, `**`/`*`/`` ` ``/`~~`/`==`, links + bare URLs, clickable `- [ ]` checkboxes, `- ` bullets, `---` rules, quote lines and full `> [!type]` callout boxes) — the construct the caret touches stays raw source (line-level touch for heading/quote prefixes, marker-only touch for list markers so a todo's checkbox survives editing its text). Raw math gets VSCode-style bracket-pair colorization (depth-cycled `--bracket-*` colors, enclosing pair boxed). Decorations come from a `StateField`, not a ViewPlugin — plugin decorations may not replace line breaks (multi-line fences/`$$` would throw). Formatting hotkeys: Ctrl/Cmd+B/I/E, Ctrl+Shift+X/H toggle `**`/`*`/`` ` ``/`~~`/`==` Obsidian-style, Ctrl+K inserts `[sel](url)` (clipboard URL fills the slot); swallowed inside math/fences/inline code |
+| `editor/BlockCmEditor.jsx` | the CodeMirror 6 block editor (textarea-compatible facade) with live in-place rendering of closed `$…$`/`$$…$$` spans, ``` ``` ``` fences (highlight.js cards), `[[ref]]`/`![[embed]]` chips, `![alt](url)` images (the picture, sized like the rendered view, alt as caption; `scanImageSyntax` in `mdMarks.js` is the one image scanner, shared with `MdTools`), and markdown (headings, `**`/`*`/`` ` ``/`~~`/`==`, links + bare URLs, clickable `- [ ]` checkboxes, `- ` bullets, `---` rules, quote lines and full `> [!type]` callout boxes with their fold flag, colored runs — `<span style="color:…">` / `background:…` inline HTML, tags hidden, `scanColorSpans` in `mdMarks.js`) — the construct the caret touches stays raw source (line-level touch for heading/quote prefixes, marker-only touch for list markers so a todo's checkbox survives editing its text). Raw math gets VSCode-style bracket-pair colorization (depth-cycled `--bracket-*` colors, enclosing pair boxed). Decorations come from a `StateField`, not a ViewPlugin — plugin decorations may not replace line breaks (multi-line fences/`$$` would throw). Formatting hotkeys: Ctrl/Cmd+B/I/E, Ctrl+Shift+X/H toggle `**`/`*`/`` ` ``/`~~`/`==` Obsidian-style, Ctrl+K inserts `[sel](url)` (clipboard URL fills the slot); swallowed inside math/fences/inline code |
 | `editor/mdMarks.js` | the inline-mark table (regex + class per marker) shared by the live renderer and the hotkeys, plus the pure `toggleMark`/`insertLink` transforms (wrap / unwrap / empty pair / per-line for multi-line selections). `scanMarks` allows proper nesting (`**a *b* c**`, `*a **b** c*`; nothing inside inline code) and treats `***x***` as one bold+italic span with two `layers`, so Ctrl+B and Ctrl+I each peel off their own delimiters |
-| `editor/SlashMenu.jsx` | the "/" command catalog + popup (link, embed, equations, highlight, headings, to-do, lists, quote, callout, code, divider, table, image, date) and the "Paste as" chooser shown after a URL paste (gamma block link → mention/synced block/URL, other URLs → URL/titled link); blockTree owns trigger detection and key handling |
-| `editor/callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css) |
+| `editor/SlashMenu.jsx` | the "/" command catalog + popup (link, embed, equations, highlight, headings, to-do, lists, quote, callout, code, mermaid, divider, table, image, date, and the `hidden` text/background color commands from `mdMarks.TEXT_COLORS` that show only when the query matches) and the "Paste as" chooser shown after a URL paste (gamma block link → mention/synced block/URL, other URLs → URL/titled link); blockTree owns trigger detection and key handling |
+| `editor/callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css); Obsidian's `[!note]-` / `+` fold flag makes a native `<details>` with the title as `<summary>` (chevron in app.css) |
 | `editor/codeHighlight.js` | fenced ``` ``` ``` code helpers shared by editor + renderer: `scanFences` (region scanner, mirrored in mdPreprocess exclusions and blockTree's Enter/Tab-in-fence handling), `fenceInnerAt`, and the highlight.js (`lib/common`) wrapper; token colors are theme-aware `.hljs-*` rules in app.css |
-| `editor/LatexEditor.jsx` | LaTeX aids while editing: viewport-bounded, scrollable live preview, `\command` snippets, argument/Tab-out navigation, `renderKatex`/`useCaretAnchored` shared helpers; `editor/latexInput.js` supplies scalable delimiter pairing. See [LaTeX editing](latex_editing.md) for shortcuts and browser checks |
+| `editor/LatexEditor.jsx` | LaTeX aids while editing: the live preview docked to the editor column with a caret marker, the `\command` popup, `renderKatex`/`useCaretAnchored` shared helpers; `editor/latexCompletion.js` is the pure catalog (prefix/abbreviation/fuzzy tiers, snippets, Tab-out navigation) it re-exports; `editor/latexInput.js` supplies scalable delimiter pairing. See [LaTeX editing](latex_editing.md) for shortcuts and browser checks |
 | `library/libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/foldertags.py`) |
 | `shared/ui/Widgets.jsx`, `shared/ui/Menus.jsx`, `shared/ui/Icons.jsx` | shared components |
+| `shared/ui/MermaidDiagram.jsx`, `shared/ui/ResizeGrip.jsx` | the Mermaid figure with its hover toolbar of `ctlBtn`s ([mermaid.md](mermaid.md)); the right-edge drag grip + `useDragResize` hook that size note images and diagrams alike |
 | `shared/ui/menuAim.js` | pointer-trajectory ("safe triangle") hover intent for hierarchical menus — UI-agnostic, consumed by `shared/ui/Menus.jsx` |

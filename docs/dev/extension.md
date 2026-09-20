@@ -256,7 +256,7 @@ side and the security model: [paper_metadata.md](paper_metadata.md#connected-pub
   remembers an HTTP-to-HTTPS redirect to the exact same host, port and API path,
   with the standard port changing from 80 to 443. The worker and options page
   use that resolved origin. Other redirect destinations are never saved.
-  Publisher-session requests continue to reject redirects so cookie snapshots
+  Publisher-session requests reject redirects so cookie snapshots
   cannot be forwarded to another server. This avoids a misleading "Failed to
   fetch" when ordinary account checks followed an HTTPS redirect successfully.
 - A 401 anywhere flips the tab state to `auth: false` (badge `!`) and the

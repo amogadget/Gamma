@@ -11,6 +11,8 @@ def _static_client(tmp_path, monkeypatch):
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets" / "index-abc123.js").write_text("console.log(1)")
     (tmp_path / "favicon.svg").write_text("<svg/>")
+    (tmp_path / "media").mkdir()
+    (tmp_path / "media" / "manifest.webmanifest").write_text('{"name": "Gamma"}')
     (tmp_path / "index.html").write_text("<!doctype html><title>Gamma</title>")
     monkeypatch.setattr(config, "STATIC_DIR", str(tmp_path))
     return TestClient(create_app())
@@ -44,3 +46,11 @@ def test_index_html_falls_back_and_revalidates(tmp_path, monkeypatch):
     assert r.status_code == 200 and "Gamma" in r.text
     assert r.headers["cache-control"] == "no-cache"
     assert c.get("/some/deep/route", headers={"If-None-Match": r.headers["etag"]}).status_code == 304
+
+
+def test_web_app_manifest_has_its_media_type(tmp_path, monkeypatch):
+    c = _static_client(tmp_path, monkeypatch)
+    r = c.get("/media/manifest.webmanifest")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/manifest+json")
+    assert r.headers["cache-control"] == "no-cache"

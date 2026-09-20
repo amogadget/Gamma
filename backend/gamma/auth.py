@@ -12,7 +12,9 @@ Two questions every endpoint answers through this module:
   takes (``connect_pages_db``, ``ws_uploads_dir``, ...). docs/dev/workspaces.md.
 """
 
+import re
 import secrets
+from urllib.parse import unquote
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -160,7 +162,23 @@ async def session_middleware(request: Request, call_next):
     request.state.is_guest = False
     request.state.is_admin = False
     request.state.default_ws = ""
+    request.state.auth = "session"
+    request.state.token_ws = ""
+    request.state.token_scope = ""
     new_session_token = None
+    bearer = _api_bearer(request) if not token else None
+    if bearer:
+        # An integration token on the HTTP API (a mirror syncing, a script):
+        # the account behind it, confined to the token's workspace by
+        # require_ws, never an admin, never a session to manage tokens or
+        # accounts with (require_personal_user refuses it).
+        from .integrations import resolve_token_scope  # local: integrations imports workspaces
+        found = resolve_token_scope(bearer)
+        if not found:
+            resp = JSONResponse({"detail": "invalid or expired token"}, status_code=401)
+            return _finish_request_log(request, resp, started, None, "bad-token")
+        request.state.user, request.state.token_ws, request.state.token_scope = found
+        request.state.auth = "token"
     if token:
         with sqlite3.connect(str(USERS_DB)) as conn:
             row = conn.execute(_SESSION_SQL, (token,)).fetchone()
@@ -221,6 +239,19 @@ async def session_middleware(request: Request, call_next):
     return _finish_request_log(request, response, started, expected)
 
 
+def _api_bearer(request: Request) -> str:
+    """The ``Authorization: Bearer gamma_…`` token of an /api request, else
+    "". The MCP endpoint resolves its own (audience-bound OAuth tokens
+    included); the HTTP API takes manual tokens only."""
+    if not request.url.path.startswith("/api/"):
+        return ""
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    value = value.strip()
+    if scheme.lower() != "bearer" or not value.startswith("gamma_") or value.startswith("gamma_oauth_"):
+        return ""
+    return value
+
+
 def require_user(request: Request) -> str:
     """Return the session username or raise 401. Identity only — endpoints
     that touch a workspace's data use require_ws / resolve_ws instead."""
@@ -235,6 +266,8 @@ def require_personal_user(request: Request, detail: str) -> str:
     username = require_user(request)
     if request.state.is_guest:
         raise HTTPException(403, detail)
+    if getattr(request.state, "auth", "session") == "token":
+        raise HTTPException(403, "an integration token cannot do this — sign in")
     return username
 
 
@@ -285,13 +318,22 @@ def require_ws(request: Request, write: bool = False) -> str:
     user = require_user(request)
     ws = getattr(request.state, "ws", None)
     if ws is None:
-        ws, role = workspace_access(user, requested_ws(request), request.state.default_ws)
+        if getattr(request.state, "auth", "session") == "token":
+            # A token names its workspace; a request may only repeat it.
+            wanted = requested_ws(request)
+            if wanted and wanted != request.state.token_ws:
+                raise HTTPException(status_code=403, detail="this token belongs to another workspace")
+            ws, role = workspace_access(user, request.state.token_ws, "")
+        else:
+            ws, role = workspace_access(user, requested_ws(request), request.state.default_ws)
         request.state.ws, request.state.ws_role = ws, role
     role = request.state.ws_role
     if not role:
         raise HTTPException(status_code=403, detail="you are not a member of this workspace")
     if write and role == "viewer":
         raise HTTPException(status_code=403, detail="you can only view this workspace")
+    if write and getattr(request.state, "auth", "session") == "token" and request.state.token_scope != "write":
+        raise HTTPException(status_code=403, detail="this token is read-only")
     return ws
 
 
@@ -354,10 +396,12 @@ def share_access(share: dict, carrier):
     only add to that, never take away); a signed-in account the sharer
     INVITED (``users``) gets its own per-person role regardless of general
     access; everyone else goes through the general access gate — ``anyone``
-    needs no session (and is always view-only), ``users`` admits any
-    signed-in non-guest account with the share's role, ``list`` admits nobody
-    beyond the invited. Guests count as not signed in. ``carrier`` is a
-    Request or a WebSocket (its ``state`` carries user / is_guest).
+    needs no session and grants the share's role (an edit link works for
+    whoever holds it, attributed as ``link:<name>`` by actor_of), ``users``
+    admits any signed-in non-guest account with the share's role, ``list``
+    admits nobody beyond the invited. Guests count as not signed in.
+    ``carrier`` is a Request or a WebSocket (its ``state`` carries user /
+    is_guest).
     """
     from . import workspaces
 
@@ -375,7 +419,7 @@ def share_access(share: dict, carrier):
                 return invited["role"], ""
     audience = share["audience"]
     if audience == "anyone":
-        return "view", ""
+        return share["role"], ""
     if not signed_in:
         return None, "login"
     if audience == "list":
@@ -400,12 +444,86 @@ def share_grant(request: Request):
     token = request.query_params.get("share")
     if token:
         share = share_lookup(token)
-        if share:
+        if not share:
+            note_share_miss(request)
+        else:
             level, _reason = share_access(share, request)
             if level:
                 grant = (share["workspace_id"], share["page_id"], level)
     request.state._share_grant = grant
     return grant
+
+
+# ---- Who a write is attributed to ------------------------------------------
+# Anyone-with-the-link shares may grant edit. A visitor without an account
+# gets a display name in the share view; the frontend sends it as the
+# X-Gamma-Name header on writes (percent-encoded UTF-8 — header values may
+# not carry non-Latin-1 text) and as ?name= on the page websocket (browser
+# handshakes cannot carry headers). It is a label, not an identity: stored
+# as ``link:<name>`` in the op log and shown as the name in presence — never
+# confusable with an account, since usernames may not contain ":".
+LINK_NAME_HEADER = "x-gamma-name"
+LINK_ACTOR_PREFIX = "link:"
+LINK_NAME_MAX = 40
+ANONYMOUS_NAME = "Anonymous"
+
+
+def link_name(raw) -> str:
+    """A visitor's display name, cleaned: control characters dropped,
+    whitespace collapsed, capped at LINK_NAME_MAX; ``Anonymous`` when empty."""
+    text = re.sub(r"[\x00-\x1f\x7f]", "", str(raw or ""))
+    text = re.sub(r"\s+", " ", text).strip()[:LINK_NAME_MAX].strip()
+    return text or ANONYMOUS_NAME
+
+
+def is_link_visitor(carrier) -> bool:
+    """A share-token request from someone without a personal account (no
+    session, or the guest account) — the case a display name stands in for."""
+    return bool(carrier.query_params.get("share")) and (not carrier.state.user or carrier.state.is_guest)
+
+
+def actor_of(carrier) -> str:
+    """The name a write is recorded under: the signed-in account, else — for
+    a link visitor — ``link:<display name>``. Takes a Request or a WebSocket."""
+    if is_link_visitor(carrier):
+        if isinstance(carrier, Request):
+            raw = unquote(carrier.headers.get(LINK_NAME_HEADER, ""))
+        else:
+            raw = carrier.query_params.get("name", "")
+        return LINK_ACTOR_PREFIX + link_name(raw)
+    return carrier.state.user or ""
+
+
+def link_ratelimit(request: Request, what: str, max_hits: int, window_seconds: int) -> None:
+    """Per-IP fixed-window limit that applies to link visitors only — an
+    account is accountable, a link is not. Crossing it is one warning in
+    the server log per window (Settings → Server → Dashboard)."""
+    if is_link_visitor(request):
+        from . import ratelimit
+        ip = ratelimit.client_ip(request)
+        ratelimit.check(f"link:{what}:{ip}", max_hits=max_hits, window_seconds=window_seconds,
+                        on_first_exceed=lambda n: log.warning(
+                            f"[share] link visitor {ip} sent more than {max_hits} {what} requests in "
+                            f"{window_seconds}s — throttled for the rest of the window"))
+
+
+# Unknown share tokens. Links are 96 random bits, so guessing one is hopeless,
+# but a scanner trying is worth seeing: past this many misses in five minutes
+# the address is answered 429 for the rest of the window and the server log
+# gets one warning — the only signal an admin has that someone is probing.
+SHARE_MISSES_PER_5_MIN = 30
+
+
+def note_share_miss(carrier) -> None:
+    """A ?share= token that names no share. Counted per IP (a Request or a
+    WebSocket — both carry headers and a client address); raises 429 once
+    the address is over the limit."""
+    from . import ratelimit
+    ip = ratelimit.client_ip(carrier)
+    ratelimit.check(f"share-miss:{ip}", max_hits=SHARE_MISSES_PER_5_MIN, window_seconds=300,
+                    on_first_exceed=lambda n: log.warning(
+                        f"[share] {ip} opened {n} unknown share links in 5 min — blocked for the rest of "
+                        f"the window; someone may be probing for links"))
 
 
 def _share_denied(request: Request) -> HTTPException:

@@ -52,6 +52,12 @@ workspace's files), `db.SCHEMA_VERSION`, `manage.py migrate` / `backups`.
 | 5 | `publisher_sessions` | Adds private, encrypted publisher cookie snapshots in `users.db`, keyed by account and publisher host. Existing content and account settings are unchanged |
 | 6 | `integration_tokens` | Adds the `integration_tokens` table in `users.db`: hashed assistant tokens per account and workspace ([mcp.md](mcp.md)) |
 | 7 | `mcp_oauth` | Adds the `mcp_oauth` table in `users.db`: OAuth client registrations, pending authorizations and access-token audiences, all expiring |
+| 8 | `ai_usage` | Adds the `ai_usage` table in `users.db`: per-account token counts of AI calls ([ai.md](ai.md)) |
+| 9 | `upload_path_titles` | Runs the content normalizers over every workspace's `pages.db` once more for the new `upload_path_titles` step: a directory path that a browser leaked into `original_filename` (and into the generated title, while it still equals it) becomes the leaf. This used to be repaired on every library listing with raw SQL outside the op log; reads now write nothing |
+| 10 | `mirrors` | `integration_tokens` gains `scope` (`read`, the old meaning, or `write`); users.db gains `mirrors`, the offline copies of remote workspaces ([mirror.md](mirror.md)). Per-workspace `pages.db` files gain `sync_pages` / `sync_conflicts` on connect (additive `CREATE TABLE IF NOT EXISTS`, like `page_ops`) |
+| 11 | `mirror_cadence` | `mirrors` gains `poll_s` (how often a round checks the original, 0 = by hand) and `on_change` (a round a few seconds after a local edit); `mode` may be `off` (detached) |
+| 12 | `sync_log_stats` | every workspace's `sync_log` gains `stats`, the git-style block counts of a row (JSON `{add, del, mod}`); older rows carry none |
+| 13 | `sync_conflict_base` | every workspace's `sync_conflicts` gains `base`, the text a merged block had before either side edited it (the resolver's diff view); older rows carry none |
 
 ## Backups (`gamma/backups.py`)
 
@@ -123,7 +129,9 @@ SCHEMA_VERSION = 3   # gamma/db.py
   the same time, so a fresh install and an upgraded one end up identical.
 - A change to block *content* shapes (a renamed property, a syntax) goes into
   `normalize.py` as a `LIKE`-filtered idempotent rewrite, called from the
-  step *and* automatically on restore.
+  step *and* automatically on restore. Never repair a shape on a read path
+  (a listing, a fetch): reads write nothing, so two copies of a workspace
+  only ever differ by what the op log and `deleted_pages` record.
 - Test it in `tests/test_migrations.py`: build the old layout by hand in a
   temp data directory, run `ensure_current()`, assert the new shape, run it
   again (no-op), and cover the interrupted-run resume.

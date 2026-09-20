@@ -112,6 +112,7 @@ function appInfo() {
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     userDataDir: app.getPath('userData'),
+    version: app.getVersion(), // the sidecar reports it as its build (GAMMA_VERSION)
   };
 }
 
@@ -283,19 +284,172 @@ function refreshGamma() {
   if (origin !== new URL(current.url).origin) return;
   if (gammaFetch) return;
   const ses = content.webContents.session;
+  const server = current;
   gammaFetch = ses
     .fetch(origin + '/api/session', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(5000) })
     .then((r) => (r.ok ? r.json() : null))
-    .then((j) => {
+    .then(async (j) => {
       gamma = j && j.user
         ? { user: j.user, current: currentWsId() || j.default_workspace || '', list: j.workspaces || [] }
         : null;
+      if (gamma && server.type === 'local') await reconcileMirrors(server.id, origin, ses);
     })
     .catch(() => { gamma = null; })
     .finally(() => {
       gammaFetch = null;
       pushState();
     });
+}
+
+// A local server's own list of offline copies (`GET /api/mirrors`, the
+// signed-in admin's), into the registry's map — copies made or stopped
+// from Gamma's Settings are picked up here, so the switcher's cross-links
+// stay right. Best effort.
+async function reconcileMirrors(serverId, origin, ses) {
+  try {
+    const r = await ses.fetch(origin + '/api/mirrors', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return;
+    const j = await r.json();
+    registry.setServerMirrors(serverId, (j.mirrors || []).map(mirrorEntry));
+  } catch {}
+}
+
+function mirrorEntry(m) {
+  return { workspace: m.workspace_id, name: m.name || '', remoteUrl: m.remote_url, remoteWs: m.remote_ws, remoteName: m.remote_name || '' };
+}
+
+// The switcher's cross-links on a workspace row: on a remote server, the
+// local copy a workspace has (`copy`); on a local server, the original a
+// copy follows (`original`), when that remote server is registered here.
+function annotateWorkspace(w, state) {
+  if (!current) return w;
+  if (current.type === 'remote') {
+    const origin = registry.originOf(current.url);
+    const m = state.mirrors.find((x) => x.remoteUrl === origin && x.remoteWs === w.id);
+    const srv = m && state.servers.find((s) => s.id === m.server);
+    return srv ? { ...w, copy: { server: srv.id, serverName: srv.name, workspace: m.workspace, running: Boolean(sidecar.status(srv.id)) } } : w;
+  }
+  const m = state.mirrors.find((x) => x.server === current.id && x.workspace === w.id);
+  const srv = m && state.servers.find((s) => s.type === 'remote' && registry.originOf(s.url) === m.remoteUrl);
+  return srv ? { ...w, original: { server: srv.id, serverName: srv.name, workspace: m.remoteWs, name: m.remoteName } } : w;
+}
+
+// Open the offline copy of one of the open remote server's workspaces.
+async function openCopy(wsId) {
+  if (!current || current.type !== 'remote') throw new Error('Open a remote server first');
+  const m = registry.findMirror(current.url, wsId);
+  if (!m || !registry.get(m.server)) throw new Error('This workspace has no clone');
+  await openServer(m.server);
+  await openGammaWorkspace(m.workspace);
+  buildMenu();
+  return { workspace: m.workspace, server: m.server };
+}
+
+// Open the origin that a clone on the open local server follows.
+async function openOriginal(wsId) {
+  if (!current || current.type !== 'local') throw new Error('Open the clone first');
+  const m = registry.mirrorOf(current.id, wsId);
+  if (!m) throw new Error('This workspace is not a clone');
+  const srv = registry.load().servers.find((s) => s.type === 'remote' && registry.originOf(s.url) === m.remoteUrl);
+  if (!srv) throw new Error(`${m.remoteUrl} is not one of your servers`);
+  await openServer(srv.id);
+  await openGammaWorkspace(m.remoteWs);
+  buildMenu();
+  return { workspace: m.remoteWs, server: srv.id };
+}
+
+// Local servers that hold offline copies run for as long as the app does —
+// a copy syncs only while its server runs, and it should keep up in the
+// background whichever server the window shows. Best effort, after the
+// window is up; a server already running (the one just opened) is left alone.
+function startMirrorHosts() {
+  const state = registry.load();
+  const hosts = new Set(state.mirrors.map((m) => m.server));
+  for (const srv of state.servers) {
+    if (srv.type !== 'local' || !hosts.has(srv.id) || sidecar.status(srv.id)) continue;
+    sidecar
+      .start(srv, state.settings, appInfo())
+      .then(() => pushState())
+      .catch((e) => console.error(`[shell] could not start ${srv.name} for its offline copies: ${e.message || e}`));
+  }
+}
+
+// "Keep an offline copy": a mirror of the open REMOTE server's workspace
+// on a local server (docs/dev/mirror.md). Everything happens through
+// Gamma's public API with the content session's cookies — nothing is
+// injected into any page: a write-scope integration token is minted on
+// the remote for that workspace, the local server is started (made, when
+// there is none) and signed into with its seeded credentials, the mirror
+// is created there, and the window moves to it. The first fill runs on the
+// local server in the background.
+async function keepOffline(wsId) {
+  if (!current || current.type !== 'remote' || !content) throw new Error('Open a remote server first');
+  const g = gamma;
+  const ws = g && g.list.find((w) => w.id === wsId);
+  if (!ws) throw new Error('Unknown workspace');
+  const remoteOrigin = new URL(current.url).origin;
+  const known = registry.findMirror(remoteOrigin, wsId);
+  if (known && registry.get(known.server)) return openCopy(wsId); // one copy per workspace: open it
+  const ses = content.webContents.session;
+  const api = async (origin, path, init) => {
+    const r = await ses.fetch(origin + path, { credentials: 'include', cache: 'no-store', ...init });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `${path}: HTTP ${r.status}`);
+    return body;
+  };
+  busy = `Cloning ${ws.name}…`;
+  pushState();
+  let token = null;
+  const dropToken = () => token && api(remoteOrigin, `/api/integrations/tokens/${token.id}`, { method: 'DELETE' }).catch(() => {});
+  try {
+    token = await api(remoteOrigin, '/api/integrations/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Gamma-Workspace': wsId },
+      body: JSON.stringify({ name: 'Gamma desktop offline copy', scope: 'write', expires_in_days: 365 }),
+    });
+    let local = registry.load().servers.find((s) => s.type === 'local');
+    if (!local) local = registry.addLocal('Local');
+    const entry = await sidecar.start(local, registry.getSettings(), appInfo());
+    const localOrigin = new URL(entry.url).origin;
+    allowedOrigins.add(localOrigin);
+    const session = await api(localOrigin, '/api/session');
+    if (!session.user) {
+      await api(localOrigin, '/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: local.adminUser, password: local.adminPassword }),
+      });
+    }
+    let mirror;
+    try {
+      mirror = await api(localOrigin, '/api/mirrors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remote_url: remoteOrigin, token: token.token, name: `${ws.name} (clone)` }),
+      });
+    } catch (e) {
+      // The local server already holds a copy the registry did not know
+      // (made from Gamma's Settings, or the registry was lost): open that one.
+      await reconcileMirrors(local.id, localOrigin, ses);
+      if (!registry.findMirror(remoteOrigin, wsId)) throw e;
+      await dropToken();
+      busy = null;
+      return openCopy(wsId);
+    }
+    token = null; // the mirror holds it now
+    registry.addMirror({ server: local.id, ...mirrorEntry(mirror) });
+    busy = null;
+    await openServer(local.id);
+    await openGammaWorkspace(mirror.workspace_id);
+    buildMenu();
+    return { workspace: mirror.workspace_id, server: local.id };
+  } catch (e) {
+    await dropToken(); // a token minted for a copy that was never made
+    throw e;
+  } finally {
+    busy = null;
+    pushState();
+  }
 }
 
 // Navigate the open server to one of its Gamma workspaces.
@@ -318,8 +472,8 @@ function barState() {
     busy,
     update: updater.state(),
     // Gamma's workspaces on the open server (null until known / signed in),
-    // with the one the content view shows.
-    gamma: gamma ? { ...gamma, current: currentWsId() || gamma.current } : null,
+    // with the one the content view shows and the offline-copy cross-links.
+    gamma: gamma ? { ...gamma, current: currentWsId() || gamma.current, list: gamma.list.map((w) => annotateWorkspace(w, state)) } : null,
     servers: state.servers.map((ws) => ({
       id: ws.id,
       name: ws.name,
@@ -559,6 +713,18 @@ function registerIpc() {
     setBarExpanded(false);
     await openGammaWorkspace(id);
   }));
+  const withDialog = (message, fn) => async (id) => {
+    setBarExpanded(false);
+    try {
+      return await fn(id);
+    } catch (e) {
+      dialog.showMessageBox(win, { type: 'error', title: 'Gamma', message, detail: String(e && e.message || e), buttons: ['OK'] }).catch(() => {});
+      throw e;
+    }
+  };
+  ipcMain.handle('shell:keep-offline', shellOnly(withDialog('Could not clone the workspace.', keepOffline)));
+  ipcMain.handle('shell:open-copy', shellOnly(withDialog('Could not open the clone.', openCopy)));
+  ipcMain.handle('shell:open-original', shellOnly(withDialog('Could not open the origin.', openOriginal)));
   ipcMain.handle('shell:open', shellOnly(async (id) => {
     setBarExpanded(false);
     try {
@@ -679,9 +845,10 @@ app.whenReady().then(async () => {
   // Reopen where the user left off; the launcher is one click away in the bar.
   const last = registry.getSettings().openLastOnLaunch ? registry.getLastOpened() : null;
   if (last) {
-    openServer(last.id).then(buildMenu).catch((e) => loadLauncher(e.message || e));
+    openServer(last.id).then(buildMenu).catch((e) => loadLauncher(e.message || e)).finally(startMirrorHosts);
   } else {
     loadLauncher();
+    startMirrorHosts();
   }
 
   app.on('activate', () => {
@@ -707,6 +874,9 @@ if (process.env.GAMMA_SHELL_TEST) {
     sidecar,
     openServer,
     openGammaWorkspace,
+    openCopy,
+    openOriginal,
+    keepOffline,
     loadLauncher,
     current: () => current,
     gamma: () => gamma,

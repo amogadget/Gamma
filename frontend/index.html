@@ -6,6 +6,16 @@
          zoomed-in page puts the toolbars out of reach. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/media/icons/favicon.svg" />
+    <!-- Installable web app (iPad "Add to Home Screen", Chrome/Edge "Install"):
+         docs/dev/ipad.md. The status bar takes theme-color, which App.jsx
+         keeps equal to the topbar's background for the active theme. -->
+    <link rel="manifest" href="/media/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/media/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Gamma" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="theme-color" content="#1b1b1a" />
     <title>Gamma — Annotate PDFs, Share Your Thinking</title>
     <!-- A pinned theme (Settings → General) must win before the bundle loads,
          or the splash flashes the OS color; the control size likewise, or the

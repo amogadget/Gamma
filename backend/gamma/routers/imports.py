@@ -19,7 +19,7 @@ from ..db import connect_pages_db, page_now, pdf_upload_path, ws_uploads_dir
 from ..blocks_store import last_child_position
 from ..foldertags import clean_path, parse_tags
 from ..logbuf import log
-from ..ops import note_reload
+from ..ops import MAX_OPS, commit_ops, note_reload
 from ..markdown_import import MAX_MARKDOWN_BYTES, md_to_blocks
 from ..markdown_zip_import import import_markdown_zip, markdown_page
 from ..ink import InkError, dumps as ink_dumps, from_pdf_ink, parse_ink, pdf_position as ink_position
@@ -472,16 +472,14 @@ def import_embedded_annotations(ws: str, block_id: str, pdf_path, strip: bool, a
             # start writing these blocks again (it skips imported ones only
             # while the original annotation still lives in the PDF).
             with connect_pages_db(ws) as conn:
-                rows = conn.execute(
-                    "SELECT id, properties FROM unified_blocks WHERE parent_id=? "
-                    "AND json_extract(properties,'$.imported_annot') IS NOT NULL",
-                    (block_id,)).fetchall()
-                for bid, props_json in rows:
-                    props = json.loads(props_json or "{}")
-                    props["annot_stripped"] = True
-                    conn.execute("UPDATE unified_blocks SET properties=? WHERE id=?",
-                                 (json.dumps(props), bid))
-                conn.commit()
+                ids = [r[0] for r in conn.execute(
+                    "SELECT id FROM unified_blocks WHERE parent_id=? "
+                    "AND json_extract(properties,'$.imported_annot') IS NOT NULL "
+                    "AND json_extract(properties,'$.annot_stripped') IS NULL",
+                    (block_id,)).fetchall()]
+            for i in range(0, len(ids), MAX_OPS):
+                commit_ops(ws, block_id, [{"op": "set", "id": bid, "props": {"annot_stripped": True}}
+                                          for bid in ids[i:i + MAX_OPS]], actor=actor)
     return {"found": len(found), "imported": inserted, "stripped": stripped}
 
 

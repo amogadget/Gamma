@@ -8,12 +8,14 @@ import { API, apiJson, copyText, isPdfFile, readNdjson } from "../shared/lib/uti
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "../shared/ui/Widgets";
 import PaperMentionInput from "./PaperMentionInput";
 import { MAX_CHAT_REFERENCES } from "./paperMentions";
+import { addUsage, cachedPercent, conversationUsage, fmtTokens, liveUsage, usageDetail } from "./tokenUsage";
 import { createTitleScorer } from "../library/librarySearch";
 import { pageAttachment } from "../library/libraryUtils";
 import { MenuSelect } from "../shared/ui/Menus";
+import { guideEvents } from "../guide/events.js";
 import { CharSlider, approxPages } from "../settings/SettingsKit";
 import { AgentToolPicker, CHAT_KIND_ROWS } from "../settings/SettingsDialog";
-import { AlertCircleIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
+import { AlertCircleIcon, ArrowDownIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -78,6 +80,26 @@ function ContextCoverage({ items }) {
         </span>
       ))}
     </div>
+  );
+}
+
+// The token line under a reply, Claude Code style: prompt in, reply out,
+// and the share of the prompt the provider served from its cache. Every
+// count comes from the provider's own report ({"usage"} lines of the chat
+// stream, summed over an agent reply's rounds); a reply without one shows
+// nothing. While the reply streams the same line ticks up next to the
+// "Responding" pill: exact counts for the rounds already reported, a "~"
+// estimate from the characters received for the one still arriving.
+function UsageLine({ usage, className = "chatMsgUsage" }) {
+  if (!usage || !(usage.input || usage.output)) return null;
+  const cached = cachedPercent(usage);
+  const live = !!usage.estimate;
+  return (
+    <span className={className} title={live ? "Counting while the reply streams — the provider's own count replaces the estimate when it finishes" : usageDetail(usage)}>
+      {usage.input ? <span className="chatMsgUsagePart"><ArrowUpIcon size={9} />{fmtTokens(usage.input)}</span> : null}
+      <span className="chatMsgUsagePart"><ArrowDownIcon size={9} />{live ? "~" : ""}{fmtTokens(usage.output)}</span>
+      {cached && !live ? <span className="chatMsgUsagePart">{cached}% cached</span> : null}
+    </span>
   );
 }
 
@@ -512,6 +534,7 @@ export default function ChatDock({
     if (readOnly) return;
     const text = (rawText || "").trim();
     if (!text || chatLoading) return;
+    guideEvents.emit("chat.sent");
     const selectedDocs = referenceMessage ? (referenceMessage.contextPages || []).map((p) => p.id) : chatDocs;
     const includeNotes = referenceMessage ? !!referenceMessage.includeNotes : chatIncludeNotes;
     if (referenceMessage) { setChatDocs(selectedDocs); setChatIncludeNotes(includeNotes); }
@@ -569,10 +592,14 @@ export default function ChatDock({
     let acc = ""; // streamed reply so far — kept on Stop
     const actions = []; // organizer mutations streamed for this reply
     let coverage = null; // {"context": [...]} — what the model was given, per document
+    let usage = null; // the provider's token report, summed over the reply's rounds
+    let liveChars = 0; // characters received since the last report — the running estimate
+    const liveArgs = new Map(); // tool call id -> argument chars previewed so far (cumulative)
     const aiMsg = (extra = {}) => ({
       role: "ai", text: acc,
       ...(actions.length ? { actions: [...actions] } : {}),
       ...(coverage ? { context: coverage } : {}),
+      ...(usage ? { usage } : {}),
       ...extra,
     });
     try {
@@ -620,13 +647,22 @@ export default function ChatDock({
           } else if (ev.progress) {
             // The agent is still writing a note edit — the block types it in.
             onAgentEvent?.({ type: "progress", ...ev.progress });
+            const seen = liveArgs.get(ev.progress.id) || 0;
+            const now = (ev.progress.content || "").length;
+            if (now > seen) { liveChars += now - seen; liveArgs.set(ev.progress.id, now); }
           } else if (ev.context) {
             coverage = ev.context;
+          } else if (ev.usage) {
+            // The round is counted for real now; the estimate starts over.
+            usage = addUsage(usage, ev.usage);
+            liveChars = 0;
+            liveArgs.clear();
           } else {
             acc += ev.delta || "";
+            liveChars += (ev.delta || "").length;
           }
         }
-        if (acc || actions.length) showReply(aiMsg({ partial: true }));
+        if (acc || actions.length || usage) showReply(aiMsg({ partial: true, live: liveChars }));
       });
       showReply(aiMsg({ text: acc || (actions.length ? "" : "(no response)") }), true);
     } catch (err) {
@@ -852,11 +888,13 @@ export default function ChatDock({
           const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
           const currentId = models.some((m) => m.id === chatModel) ? chatModel : models[0].id;
           const currentModel = models.find((m) => m.id === currentId);
+          const totalUsage = conversationUsage(chatMessages);
+          const usageTitle = totalUsage ? `; this conversation: ${fmtTokens(totalUsage.input)} tokens in, ${fmtTokens(totalUsage.output)} out` : "";
           return (
             <span data-popover="chatsettings" className="popoverAnchor">
-              <button type="button" className={`ctlBtn ${settingsOpen ? "modeActive" : ""}`}
+              <button type="button" data-guide="chat.settings" className={`ctlBtn ${settingsOpen ? "modeActive" : ""}`}
                 onClick={() => setOpenPopover((p) => (p === "chatsettings" ? null : "chatsettings"))}
-                title={`Chat settings — ${currentModel?.model || "model"}${chatEffort ? `, effort: ${chatEffort}` : ""}, context ${chatContextChars.toLocaleString()} chars`}
+                title={`Chat settings — ${currentModel?.model || "model"}${chatEffort ? `, effort: ${chatEffort}` : ""}, context ${chatContextChars.toLocaleString()} chars${usageTitle}`}
                 aria-label="Chat settings" aria-expanded={settingsOpen}>
                 <SettingsIcon size={15} />
               </button>
@@ -902,6 +940,15 @@ export default function ChatDock({
                   <div className="popoverHint">
                     Applies to all {chatKindLabel.toLowerCase()} conversations in this browser.
                   </div>
+                  <div className="popoverSection">Tokens · this conversation</div>
+                  {totalUsage ? (
+                    <div className="chatUsageTotal" title={usageDetail(totalUsage)}>
+                      <UsageLine usage={totalUsage} className="chatMsgUsage inline" />
+                      <span className="popoverHint">{chatMessages.filter((m) => m.role === "ai" && m.usage).length} replies counted, as the provider reported them. Totals per day and model: Settings / AI / Token usage.</span>
+                    </div>
+                  ) : (
+                    <div className="popoverHint">No token counts yet — they appear under each reply once the provider reports them.</div>
+                  )}
                 </div>
               ) : null}
             </span>
@@ -910,6 +957,7 @@ export default function ChatDock({
         <button
           type="button"
           className={`ctlBtn ${toolsEnabled ? "modeActive" : ""}`}
+          data-guide="chat.tools"
           aria-pressed={toolsEnabled}
           aria-label={`Tools ${toolsEnabled ? "on" : "off"}`}
           onClick={() => { setOpenPopover(null); toggleTools(); }}
@@ -1061,11 +1109,7 @@ export default function ChatDock({
           <div className="chatEmpty">
             {loadError || (readOnly ? "No saved conversation for this page." : aiInfo && !aiInfo.enabled ? (
               openAiKeysEditor ? (
-                <>
-                  AI is not configured —{" "}
-                  <button className="chatEmptyLink" onClick={openAiKeysEditor}>add an AI provider</button>
-                  {" "}with your API key to enable it.
-                </>
+                <>Connect an AI provider to start — <button className="chatEmptyLink" onClick={openAiKeysEditor}>Set up AI</button>.</>
               ) : "AI is not configured."
             ) : focusedBlockId ? "Ask AI about this page…"
               : agentIntro || "Ask AI anything, or generate a report from your pages…")}
@@ -1175,10 +1219,13 @@ export default function ChatDock({
                       <div className="chatThinking" role="status" aria-label={m.text ? "AI is responding" : "AI is thinking"}>
                         <span aria-hidden="true">{m.text ? "Responding" : "Thinking"}</span>
                         <span className="chatTyping" aria-hidden="true"><span /><span /><span /></span>
+                        <UsageLine usage={liveUsage(m.usage, m.live)} className="chatMsgUsage live" />
                       </div>
                     ) : null}
                   </div>
-                  {!isResponding ? <div className="chatMsgActions">
+                  {!isResponding ? <div className="chatMsgFoot">
+                    {!isUser ? <UsageLine usage={m.usage} /> : null}
+                    <div className="chatMsgActions">
                     <button type="button" className="chatMsgActionBtn" title="Copy message"
                       onClick={() => copyChatMessage(i, m.text)}>
                       {copiedMsgIdx === i
@@ -1191,6 +1238,7 @@ export default function ChatDock({
                         <PencilIcon size={13} />
                       </button>
                     ) : null}
+                    </div>
                   </div> : null}
                 </div>
               </div>
@@ -1245,7 +1293,7 @@ export default function ChatDock({
         </div>
       ) : null}
       {chatImages.length ? (
-        <div className="chatImgPreviewRow">
+        <div className="chatImgPreviewRow" data-guide="chat.imageContext">
           {chatImages.map((src, i) => (
             <span key={i} className="chatImgPreview">
               <img src={src} alt="pasted figure" />
@@ -1257,6 +1305,7 @@ export default function ChatDock({
       ) : null}
       <form
         className="chatInputRow"
+        data-guide="chat.composer"
         onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
       >
         {dictation === "rec" ? (
@@ -1282,6 +1331,7 @@ export default function ChatDock({
           <button
             type="button"
             className={`chatAttachToggle chatPlusBtn ${(chatDocs.length || chatIncludeNotes) ? "on" : ""}`}
+            data-guide="chat.context"
             onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
             title="Add photos & files, or pages from your library"
             aria-label="Add attachments or chat context"
@@ -1344,6 +1394,7 @@ export default function ChatDock({
           onAttach={(id) => setChatDocs((prev) => prev.includes(id) ? prev : [...prev, id])}
           onSend={sendChatMessage}
           className="chatInput chatInputArea"
+          data-guide="chat.input"
           rows={1}
           value={chatInput}
           onChange={setChatInput}
@@ -1356,10 +1407,10 @@ export default function ChatDock({
             : pdfSelections.length ? "Ask about the selection…"
             : chatNotes?.length > 1 ? `Ask about the ${chatNotes.length} attached notes…`
             : chatNotes?.length ? (chatNotes[0].kind === "block" ? "Ask about the attached block…" : "Ask about the selected note…")
-            : cursorChip ? "Ask about the block at your cursor…"
+            : cursorChip ? "Ask about this block…"
             : chatDocs.length ? `Ask about ${chatDocs.length} attached page${chatDocs.length > 1 ? "s" : ""}…`
             : agentAsk || "Ask…"
-          ) + " (@ to mention a paper)"}
+          ) + " (@ paper)"}
         />
         {chatLoading ? (
           <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
@@ -1371,7 +1422,7 @@ export default function ChatDock({
           </button>
         ) : (
           <>
-            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
+            <button className="uiBtn chatCircleBtn chatMicBtn" data-guide="chat.voice" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
               <MicIcon size={13} />
             </button>
             <button className="uiBtn primary chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">

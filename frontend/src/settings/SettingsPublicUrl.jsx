@@ -34,26 +34,25 @@ export function PublicUrlSettings({ setStatus }) {
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
   }
+  const confirmed = !!saved?.public_url;
+  const needsAction = !!saved && !managed && (dirty || !confirmed) && !!draft.trim();
   return <>
     <Row icon={LinkIcon} label="Public server URL"
-      hint="Confirm the address assistants use to reach Gamma. Use HTTPS for a remote server; localhost can use HTTP.">
-      <input className="aiKeyInput" type="url" aria-label="Public server URL" value={draft} spellCheck={false}
-        disabled={!saved || managed || busy} placeholder="https://gamma.example.com"
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); save(); } }} />
+      hint={managed ? "Set by the server's environment" : "The address assistants use to reach Gamma; HTTPS unless localhost"}
+      title="Assistant sign-in (MCP OAuth) needs to know the address this server is reached at. Confirm it once; no restart. Changing it later makes assistants connect again.">
+      <span className="setRowControls">
+        {saved && !managed ? (
+          <span className={`uiTag ${confirmed && !dirty ? "ok" : ""}`}>{confirmed && !dirty ? "confirmed" : "not confirmed"}</span>
+        ) : null}
+        <input className="aiKeyInput" type="url" aria-label="Public server URL" value={draft} spellCheck={false}
+          disabled={!saved || managed || busy} placeholder="https://gamma.example.com"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); save(); } }} />
+        {needsAction ? (
+          <button className="uiBtn sm primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Confirm"}</button>
+        ) : null}
+      </span>
     </Row>
-    {saved ? <>
-      <p className="setNotice">{managed
-        ? "This address is managed by the server's environment configuration."
-        : saved.public_url
-          ? "Changes apply immediately. Changing the address requires assistants to connect again."
-          : "Suggested from your browser address. Confirm it once to enable assistant sign-in; no restart is needed."}</p>
-      {!managed ? <div className="reportModalBtns">
-        <button className="uiBtn sm" disabled={!dirty || busy} onClick={discard}>Cancel address changes</button>
-        <button className="uiBtn sm primary" disabled={busy || (!dirty && !!saved.public_url) || (!saved.public_url && !draft.trim())}
-          onClick={save}>{busy ? "Saving..." : saved.public_url ? "Save address" : "Confirm address"}</button>
-      </div> : null}
-    </> : !error ? <p className="setNotice">Loading server address...</p> : null}
     {error ? <p className="settingsPaneHint aiKeysError" role="alert">{error}</p> : null}
   </>;
 }

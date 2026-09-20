@@ -11,7 +11,8 @@ function initial(peer) {
 
 function describe(peer) {
   const what = peer.anchor >= 0 ? "editing" : peer.block ? "on a block" : "viewing";
-  return `${peer.name || "Anonymous"} · ${what}`;
+  // No account behind the peer: a share-link visitor under a chosen name.
+  return `${peer.name || "Anonymous"}${peer.user ? "" : " (via link)"} · ${what}`;
 }
 
 export function PeerAvatar({ peer, onClick, title }) {

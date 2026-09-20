@@ -13,6 +13,14 @@
 // page last reported (so the launcher/shell bar paint in it before any page
 // is loaded), and the window bounds.
 //
+// `mirrors` is the map of offline copies (docs/dev/mirror.md): which local
+// server + workspace mirrors which remote workspace (`remoteUrl` origin +
+// `remoteWs`). Written when the shell makes a copy and replaced from a
+// local server's own `/api/mirrors` whenever that server is open, so copies
+// made or stopped from Gamma's Settings show up too. The shell keeps no
+// sync state and no token — only this map, for the switcher's cross-links
+// and for starting the servers that hold copies at launch.
+//
 // Local server data dirs live under ONE root, `<root>/<server id>`:
 // `settings.dataRoot` when set, else `<userData>/workspaces` (the folder
 // name predates the rename and stays so existing installs need no move).
@@ -41,6 +49,7 @@ const DEFAULTS = {
     dataRoot: '',
   },
   servers: [],
+  mirrors: [],
   lastOpened: null,
   windowBounds: null,
 };
@@ -71,6 +80,7 @@ function load() {
     return {
       settings: { ...DEFAULTS.settings, ...(raw.settings || {}) },
       servers: list,
+      mirrors: Array.isArray(raw.mirrors) ? raw.mirrors : [],
       lastOpened: raw.lastOpened || null,
       windowBounds: raw.windowBounds || null,
     };
@@ -219,6 +229,7 @@ function remove(id, { deleteData = false } = {}) {
   const srv = state.servers.find((s) => s.id === id);
   if (!srv) return;
   state.servers = state.servers.filter((s) => s.id !== id);
+  state.mirrors = state.mirrors.filter((m) => m.server !== id);
   if (state.lastOpened === id) state.lastOpened = null;
   save(state);
   if (deleteData && srv.type === 'local' && srv.dataDir) {
@@ -267,6 +278,45 @@ function setWindowBounds(bounds) {
   save(state);
 }
 
+// --- offline copies -------------------------------------------------------
+
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return String(url || '');
+  }
+}
+
+// The copy of a remote workspace, if the shell knows one: { server, workspace, name, remoteUrl, remoteWs, remoteName }.
+function findMirror(remoteUrl, remoteWs) {
+  const origin = originOf(remoteUrl);
+  return load().mirrors.find((m) => m.remoteUrl === origin && m.remoteWs === remoteWs) || null;
+}
+
+// The entry of a local server's workspace when that workspace is a copy.
+function mirrorOf(serverId, workspaceId) {
+  return load().mirrors.find((m) => m.server === serverId && m.workspace === workspaceId) || null;
+}
+
+function addMirror(entry) {
+  const state = load();
+  const clean = { ...entry, remoteUrl: originOf(entry.remoteUrl) };
+  state.mirrors = state.mirrors.filter((m) => !(m.server === clean.server && m.workspace === clean.workspace));
+  state.mirrors.push(clean);
+  save(state);
+  return clean;
+}
+
+// Replace everything known about one local server's copies with its own list.
+function setServerMirrors(serverId, entries) {
+  const state = load();
+  state.mirrors = state.mirrors
+    .filter((m) => m.server !== serverId)
+    .concat(entries.map((e) => ({ ...e, server: serverId, remoteUrl: originOf(e.remoteUrl) })));
+  save(state);
+}
+
 // Bytes on disk under a local server's data dir (SQLite files + uploads).
 // Synchronous walk; libraries are at most a few thousand files.
 function dirSize(dir) {
@@ -296,4 +346,5 @@ module.exports = {
   init, load, get, addLocal, addRemote, rename, remove, markOpened, getLastOpened,
   getSettings, setSettings, getWindowBounds, setWindowBounds, dirSize,
   defaultDataRoot, dataRoot, localsUnderRoot, setDataRoot,
+  originOf, findMirror, mirrorOf, addMirror, setServerMirrors,
 };
