@@ -52,7 +52,7 @@ const entries = [
   ["prompts", "Custom prompts", "system prompt citation metadata agent"],
   ["account", "Account", "profile password storage quota"],
   ["workspaces", "Workspaces", "members sharing import export storage quota default"],
-  ["backups", "Backups", "snapshot restore merge download"],
+  ["backups", "Backups", "snapshot restore merge download automatic scheduled tasks hourly daily weekly monthly cron retention"],
   ["maintenance", "Library maintenance", "metadata health text index rebuild papers"],
   ["users", "Users", "administration accounts password limits personal workspaces"],
   ["server", "Server", "administration storage defaults shared workspaces backups log"],

@@ -14,7 +14,8 @@ Settings → Backups manages: taken by a workspace owner (or for every
 workspace of an account at once), listed, downloaded, restored in place,
 deleted. Each is a FULL copy — no incremental chain, so any one of them
 restores on its own and deleting one never breaks another; the price is
-size, bounded by ``MAX_PER_WORKSPACE`` and the databases-only choice.
+size, bounded by ``MAX_PER_WORKSPACE`` manual snapshots and the databases-only
+choice. Automatic snapshots have separate retention in ``backup_schedule.py``.
 Snapshots are not metered against anyone's quota (they live outside
 ``uploads/``) and are not part of admin server snapshots (``gamma/backups.py``
 copies the databases and uploads, not ``backups/``); deleting a workspace
@@ -50,7 +51,7 @@ class BackupError(ValueError):
 # --- the zip ----------------------------------------------------------------------
 
 def write_zip(ws: str, dest: Path, *, uploads: bool = True, by: str = "", label: str = "",
-              progress: dict | None = None) -> dict:
+              progress: dict | None = None, scheduled: bool = False, task_id: str = "") -> dict:
     """Write the workspace's backup zip to ``dest``. ``progress`` (a dict the
     caller shares with a poller) gets ``total`` / ``done`` byte counts.
     Returns the manifest."""
@@ -75,6 +76,8 @@ def write_zip(ws: str, dest: Path, *, uploads: bool = True, by: str = "", label:
         "exported_by": by,
         "exported_at": page_now(),
         "label": label,
+        "scheduled": scheduled,
+        "task_id": task_id,
         "uploads": bool(uploads),
         "upload_files": len(upload_files),
     }
@@ -306,7 +309,8 @@ def info(ws: str, name: str) -> dict | None:
     m = read_manifest(path)
     return {"name": name, "size_bytes": path.stat().st_size, "created_at": m.get("exported_at", ""),
             "label": m.get("label", ""), "uploads": bool(m.get("uploads")),
-            "upload_files": m.get("upload_files", 0), "by": m.get("exported_by", "")}
+            "upload_files": m.get("upload_files", 0), "by": m.get("exported_by", ""),
+            "scheduled": bool(m.get("scheduled")), "task_id": m.get("task_id", "")}
 
 
 def list_backups(ws: str) -> list[dict]:
@@ -318,11 +322,11 @@ def list_backups(ws: str) -> list[dict]:
     return [b for b in out if b]
 
 
-def create(ws: str, *, label: str = "manual", uploads: bool = True, by: str = "") -> dict:
+def create(ws: str, *, label: str = "manual", uploads: bool = True, by: str = "", scheduled: bool = False, task_id: str = "") -> dict:
     """Take a snapshot. Raises BackupError on a bad label or a full store."""
     if not LABEL_RE.match(label or ""):
         raise BackupError("label must be 1-40 chars of letters, digits, _ . -")
-    if len(list_backups(ws)) >= MAX_PER_WORKSPACE:
+    if not scheduled and sum(not b["scheduled"] for b in list_backups(ws)) >= MAX_PER_WORKSPACE:
         raise BackupError(f"this workspace already has {MAX_PER_WORKSPACE} backups — delete one first")
     d = store_dir(ws)
     d.mkdir(parents=True, exist_ok=True)
@@ -334,7 +338,7 @@ def create(ws: str, *, label: str = "manual", uploads: bool = True, by: str = ""
     dest = d / f"{name}.zip"
     tmp = dest.with_suffix(".zip.part")
     try:
-        write_zip(ws, tmp, uploads=uploads, by=by, label=label)
+        write_zip(ws, tmp, uploads=uploads, by=by, label=label, scheduled=scheduled, task_id=task_id)
         tmp.replace(dest)  # never a half-written snapshot in the listing
     except Exception:
         tmp.unlink(missing_ok=True)

@@ -4,7 +4,6 @@ Zotero libraries (a zip of the "Zotero RDF" export)."""
 
 import json
 import os
-import posixpath
 import re
 import secrets
 import tempfile
@@ -32,7 +31,7 @@ from ..logseq_import import (
     parse_edn,
     parse_logseq_md,
 )
-from ..zotero_import import find_zip_entry, parse_zotero_rdf, zip_name_map
+from ..zotero_import import plan_zotero_archive
 
 router = APIRouter(prefix="/api", tags=["import"])
 
@@ -521,38 +520,30 @@ def _merge_tags(existing_raw: str, new_tags: list[str]) -> str:
     return ", ".join(merged)
 
 
-def _zotero_item_page(conn, ws, uploads, zf, names, base, item, prefix, now, report):
+def _zotero_existing_page(conn, item):
+    row = None
+    if item["digest"]:
+        row = conn.execute(
+            "SELECT id, properties, content FROM unified_blocks WHERE parent_id='root' "
+            "AND json_extract(properties,'$.doc_id') = ?", (item["digest"],)).fetchone()
+    if row is None and item["key"]:
+        row = conn.execute(
+            "SELECT id, properties, content FROM unified_blocks WHERE parent_id='root' "
+            "AND json_extract(properties,'$.zotero_key') = ?", (item["key"],)).fetchone()
+    return row
+
+
+def _zotero_folders(item, prefix):
+    folders = [f"{prefix}/{p}" if prefix else p for p in item["folders"]]
+    return folders or ([prefix] if prefix else [])
+
+
+def _zotero_item_page(conn, ws, uploads, zf, item, prefix, now, report):
     """Store the item's PDF (if any), find-or-create its page, merge metadata,
     labels and notes. Returns (block_id, pdf_path) when embedded annotations
     should be imported afterwards, else None."""
-    pdf_bytes = digest = None
-    for path in item["pdf_paths"]:
-        real = find_zip_entry(names, base, path)
-        if not real:
-            report["warnings"].append({"title": item["title"], "reason": f"file not in zip: {path}"})
-            continue
-        data = zf.read(real)
-        if not is_pdf(data):
-            report["warnings"].append({"title": item["title"], "reason": f"not a PDF: {path}"})
-            continue
-        # First stored PDF becomes the page's file; extra attachments are left out.
-        pdf_bytes, digest = data, content_digest(data)
-        if len(item["pdf_paths"]) > 1:
-            report["warnings"].append({"title": item["title"],
-                                       "reason": f"only the first of {len(item['pdf_paths'])} PDFs imported"})
-        break
-
-    # Find the page: by file hash first, then by the Zotero item key (a
-    # re-export produces different bytes, so the key is the durable identity).
-    row = None
-    if digest:
-        row = conn.execute(
-            "SELECT id, properties FROM unified_blocks WHERE parent_id='root' "
-            "AND json_extract(properties,'$.doc_id') = ?", (digest,)).fetchone()
-    if row is None and item["key"]:
-        row = conn.execute(
-            "SELECT id, properties FROM unified_blocks WHERE parent_id='root' "
-            "AND json_extract(properties,'$.zotero_key') = ?", (item["key"],)).fetchone()
+    digest = item["digest"]
+    row = _zotero_existing_page(conn, item)
 
     created = row is None
     if created:
@@ -560,10 +551,13 @@ def _zotero_item_page(conn, ws, uploads, zf, names, base, item, prefix, now, rep
     else:
         block_id, props = row[0], json.loads(row[1] or "{}")
 
+    if props.get("doc_id") and digest and props["doc_id"] != digest:
+        report["warnings"].append({"title": item["title"], "reason": "Existing page keeps its current PDF and annotations; the different exported PDF will not replace it."})
+
     # Attach the file only when the page doesn't already have one — a page
     # found by zotero_key keeps its existing PDF (and the highlights tied to it).
     if digest and not props.get("doc_id"):
-        _, source_url, already_existed = store_pdf(ws, pdf_bytes)
+        _, source_url, already_existed = store_pdf(ws, zf.read(item["pdf_entry"]))
         if not already_existed:
             report["pdfs_stored"] += 1
         props["doc_id"] = digest
@@ -576,9 +570,7 @@ def _zotero_item_page(conn, ws, uploads, zf, names, base, item, prefix, now, rep
             props["bibtex"] = _build_bibtex(item["meta"])
     props["zotero_key"] = item["key"]
 
-    folders = [f"{prefix}/{p}" if prefix else p for p in item["folders"]]
-    if prefix and not folders:
-        folders = [prefix]
+    folders = _zotero_folders(item, prefix)
     if folders:
         props["folder"] = _merge_tags(props.get("folder"), folders)
     if item["tags"]:
@@ -595,7 +587,9 @@ def _zotero_item_page(conn, ws, uploads, zf, names, base, item, prefix, now, rep
         conn.execute("UPDATE unified_blocks SET properties=?, updated_at=? WHERE id=?",
                      (json.dumps(props), now, block_id))
         report["pages_merged"] += 1
-    report["pages"].append({"id": block_id, "title": item["title"], "created": created})
+    report["pages"].append({"id": block_id, "title": item["title"] if created else row[2],
+                            "created": created, "kind": "pdf" if props.get("doc_id") else "page",
+                            "folders": parse_tags(props.get("folder"))})
 
     if item["notes"]:
         existing = {r[0] for r in conn.execute(
@@ -621,45 +615,91 @@ def _zotero_item_page(conn, ws, uploads, zf, names, base, item, prefix, now, rep
 
 
 # Sync endpoint: zip + PyPDF2 work is CPU-bound; the threadpool keeps the loop free.
+def _open_zotero_zip(file):
+    try:
+        return zipfile.ZipFile(file.file)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="not a zip file — zip the exported folder and upload that")
+
+
+def _zotero_plan(zf):
+    try:
+        return plan_zotero_archive(zf)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"could not read the Zotero export: {exc}")
+
+
+@router.post("/import/zotero/preview")
+def preview_zotero(request: Request, file: UploadFile = File(...), folder: str = Form("")):
+    ws = require_ws(request, write=True)
+    prefix = clean_path(folder)
+    with _open_zotero_zip(file) as zf:
+        plan = _zotero_plan(zf)
+    pages, by_digest, by_key = {}, {}, {}
+    # Simulate merges within this ZIP too, without storing files or changing pages.
+    with connect_pages_db(ws) as conn:
+        for row in conn.execute("SELECT id, properties, content FROM unified_blocks WHERE parent_id='root'"):
+            props = json.loads(row[1] or "{}")
+            target = {"id": row[0], "title": row[2], "props": props, "exists": True}
+            if props.get("doc_id"):
+                by_digest.setdefault(props["doc_id"], target)
+            if props.get("zotero_key"):
+                by_key.setdefault(props["zotero_key"], target)
+        for index, item in enumerate(plan["items"]):
+            target = by_digest.get(item["digest"]) or by_key.get(item["key"])
+            if target is None:
+                target = {"id": f"new:{index}", "title": item["title"], "props": {}, "exists": False}
+            props = target["props"]
+            folders = parse_tags(_merge_tags(props.get("folder"), _zotero_folders(item, prefix)))
+            kind = "pdf" if props.get("doc_id") or item["digest"] else "page"
+            warnings = list(item["warnings"])
+            if props.get("doc_id") and item["digest"] and props["doc_id"] != item["digest"]:
+                warning = {"title": item["title"], "reason": "Existing page keeps its current PDF and annotations; the different exported PDF will not replace it."}
+                warnings.append(warning)
+                plan["warnings"].append(warning)
+            prior = pages.get(target["id"])
+            page = {"key": item["key"], "title": target["title"],
+                    "folders": folders, "kind": kind, "action": "merge" if target["exists"] else "create",
+                    "existing_id": target["id"] if target["exists"] else None, "source_path": item["pdf_entry"],
+                    "notes": len(item["notes"]), "tags": item["tags"], "warnings": warnings}
+            if prior:
+                page["warnings"] = prior["warnings"] + warnings
+                page["notes"] += prior["notes"]
+                page["source_path"] = prior["source_path"] or item["pdf_entry"]
+            pages[target["id"]] = page
+            props["folder"] = ", ".join(folders)
+            if item["digest"] and not props.get("doc_id"):
+                props["doc_id"] = item["digest"]
+                by_digest[item["digest"]] = target
+            old_key = props.get("zotero_key")
+            if old_key and by_key.get(old_key) is target:
+                del by_key[old_key]
+            props["zotero_key"] = item["key"]
+            if item["key"]:
+                by_key[item["key"]] = target
+    return {"ok": True, "manifest": plan["manifest"], "entries": plan["entries"],
+            "pages": list(pages.values()), "warnings": plan["warnings"], "folder": prefix}
+
+
 @router.post("/import/zotero")
 def import_zotero(request: Request, file: UploadFile = File(...),
                   strip: bool = Form(False), folder: str = Form("")):
     ws = require_ws(request, write=True)
-    try:
-        zf = zipfile.ZipFile(file.file)
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400,
-                            detail="not a zip file — zip the exported folder and upload that")
-    with zf:
-        rdf_names = [n for n in zf.namelist() if n.lower().endswith(".rdf")]
-        if not rdf_names:
-            raise HTTPException(status_code=400,
-                                detail='no .rdf file in the zip — export from Zotero as "Zotero RDF" with "Export Files"')
-        # The shallowest .rdf is the export manifest; z:path values resolve
-        # relative to it (users zip either the folder or its contents).
-        rdf_name = min(rdf_names, key=lambda n: (n.replace("\\", "/").count("/"), len(n)))
-        base = posixpath.dirname(rdf_name.replace("\\", "/"))
-        try:
-            items = parse_zotero_rdf(zf.read(rdf_name).decode("utf-8"))
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"could not parse the Zotero RDF: {e}")
-        if not items:
-            raise HTTPException(status_code=400, detail="no importable items in the export")
-
-        names = zip_name_map(zf)
+    with _open_zotero_zip(file) as zf:
+        plan = _zotero_plan(zf)
+        items = plan["items"]
         prefix = clean_path(folder)
         uploads = ws_uploads_dir(ws)
         uploads.mkdir(parents=True, exist_ok=True)
         now = page_now()
         report = {"items": len(items), "pages_created": 0, "pages_merged": 0,
                   "pdfs_stored": 0, "annotations_imported": 0, "notes_imported": 0,
-                  "pages": [], "skipped": [], "warnings": []}
+                  "pages": [], "skipped": [], "warnings": plan["warnings"]}
         annot_jobs = []
         with connect_pages_db(ws) as conn:
             for item in items:
                 try:
-                    job = _zotero_item_page(conn, ws, uploads, zf, names, base,
-                                            item, prefix, now, report)
+                    job = _zotero_item_page(conn, ws, uploads, zf, item, prefix, now, report)
                     if job:
                         annot_jobs.append(job)
                 except HTTPException as e:  # per-file quota (413/507) skips the item

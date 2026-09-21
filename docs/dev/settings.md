@@ -22,6 +22,48 @@ synced preferences. Its key is `gamma-session:<user>@<workspace>`. Reads wait
 for workspace selection; changing scope cancels pending saves. Old unscoped
 session caches are ignored because their account owner cannot be determined.
 
+## Periodic backup tasks
+
+Settings → Backups has one central task table. Each account can create up to
+100 named tasks, independently of its workspaces. A task targets selected
+workspaces or all workspaces its owner owns (including future workspaces).
+Multiple tasks can cover the same workspace with different schedules and
+retention. Tasks can be edited, duplicated, paused, queued to run now, or
+deleted without deleting their snapshots.
+
+The editor offers hourly, daily, weekly (multiple weekdays), monthly and custom
+five-field cron schedules. Cron uses **UTC**; the next three runs are previewed
+in the browser's local timezone. Numeric wildcards, lists, ranges and steps are
+supported; Sunday is 0 or 7. Restricted day-of-month and weekday fields use OR
+semantics. Monthly dates absent from a month are skipped. Impossible schedules
+with no occurrence in five years are rejected.
+
+Retention is either an age (days; the editor also offers weeks and 30-day
+months) or a snapshot count per workspace. Only snapshots carrying that task's
+ID are eligible, after all selected backups succeed. The newest snapshot is
+always kept. Manual backups and other tasks' snapshots are untouched; the
+20-manual-snapshot cap stays separate.
+
+`GET/POST /api/backup-tasks`, `PUT/DELETE /api/backup-tasks/{id}`,
+`POST /api/backup-tasks/{id}/run`, and `POST /api/backup-tasks/preview` manage
+account-owned tasks. Guests and integration tokens cannot manage tasks.
+Workspace ownership (or current admin authority) is checked at save and again
+at execution. Owners can pause or delete a task after losing target access.
+
+Configuration and results persist in `backups/tasks/<id>.json`. A per-task OS
+lock prevents overlapping execution by server workers. The backend checks
+every 30 seconds, catches up once after downtime, and retries enabled failed
+tasks after an hour. Run-now queues a task (even if paused), preserving an
+upcoming scheduled run. Shutdown waits for active backups. The UI polls task
+state every five seconds and refreshes snapshots after successful runs.
+
+Older per-workspace `schedule.json` settings are imported once as editable
+tasks, then renamed to `schedule.migrated`. Their existing untagged snapshots
+remain available for manual management. Deleting a selected workspace makes
+its task fail visibly until the selection is updated; all-owned tasks discover
+the current set each run. Backups stay on the server; download copies to store
+elsewhere. Whole-server snapshots remain in Settings → Server.
+
 ## The Settings dialog
 
 One dialog, one sidebar in three groups, defined by `PREFERENCE_NAV`,

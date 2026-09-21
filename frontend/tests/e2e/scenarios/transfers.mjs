@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { ROOT } from "../harness.mjs";
 import { newPageViaUi } from "./notes.mjs";
 import { waitForPdf } from "./pdf.mjs";
 
@@ -15,6 +18,68 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
   }
   const choice = (dialog, name) => dialog.getByRole("button", { name, exact: true });
   const toggle = (dialog, name) => dialog.getByRole("checkbox", { name, exact: true });
+
+  await step("transfer: Zotero ZIP review, cancellation, import report and repeat import", async () => {
+    const { ctx, page } = await setup();
+    try {
+      const fixture = path.join(server.dir, "review.zip");
+      const python = process.env.GAMMA_E2E_PYTHON || path.join(ROOT, "backend", "venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+      // Use the backend's synthetic fixture: one real PDF, one absent PDF,
+      // a nested collection and an explicitly empty attachment directory.
+      execFileSync(python, ["-c", `
+import sys, zipfile
+sys.path.insert(0, 'backend/tests')
+from test_zotero_import import RDF, _annotated_pdf
+rdf = RDF.replace('s41586-000-00000-0', 'e2e-zotero-review')
+rdf = rdf.replace('<dc:title>Proximal Policy Optimization</dc:title>', '<dc:title>Missing PDF example</dc:title><link:link rdf:resource="#missing"/>')
+rdf = rdf.replace('</rdf:RDF>', '<z:Attachment rdf:about="#missing"><z:path rdf:resource="files/99/missing.pdf"/></z:Attachment></rdf:RDF>')
+with zipfile.ZipFile(sys.argv[1], 'w') as z:
+    z.writestr('Review/library.rdf', rdf)
+    z.writestr('Review/files/3/Vaswani - 2017 - Attention.pdf', _annotated_pdf(b'E2E review PDF'))
+    z.writestr('Review/files/99/', '')
+`, fixture], { cwd: ROOT });
+      const selectZip = async () => {
+        const dialog = await openDialog(page, "Import");
+        await choice(dialog, "Zotero library (.zip)").click();
+        await choice(dialog, "Next").click();
+        const chooser = page.waitForEvent("filechooser");
+        await choice(dialog, "Choose .zip…").click();
+        await (await chooser).setFiles(fixture);
+        const review = page.getByRole("dialog", { name: "Review Zotero import", exact: true });
+        await review.getByRole("heading", { name: "Library after import", exact: true }).waitFor();
+        return review;
+      };
+      await page.waitForSelector(".folderNewBtn");
+      let imports = 0;
+      page.on("request", request => { if (new URL(request.url()).pathname === "/api/import/zotero") imports++; });
+      let review = await selectZip();
+      assert(await review.getByText("Empty folder", { exact: true }).isVisible());
+      const target = review.getByRole("region", { name: "Library after import", exact: true });
+      assert(await target.getByText("ML", { exact: true }).isVisible());
+      assert(await target.getByText("Transformers", { exact: true }).isVisible());
+      assert(await target.getByText("Missing PDF example", { exact: true }).isVisible());
+      assertEq((await target.locator(".zoteroKind").allTextContents()).join(","), "PDF,Page");
+      assert((await review.locator(".zoteroWarnings").innerText()).includes("PDF missing from ZIP"));
+      assertEq(imports, 0, "preview does not import");
+      if (flags.keep) await page.screenshot({ path: `${server.dir}/zotero-review.png` });
+      await choice(review, "Cancel").click();
+      assertEq(imports, 0, "cancelling leaves the library unchanged");
+      review = await selectZip();
+      await choice(review, "Import to library").click();
+      const report = page.getByRole("dialog", { name: "Import complete", exact: true });
+      await report.waitFor();
+      assertEq(imports, 1);
+      assert((await report.locator(".zoteroWarnings").innerText()).includes("PDF missing from ZIP"));
+      await choice(report, "Done").click();
+      review = await selectZip();
+      assert((await review.innerText()).includes("2 updates"));
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert(!(await review.evaluate(el => el.scrollWidth > el.clientWidth + 1)), "review fits mobile");
+      if (flags.keep) await page.screenshot({ path: `${server.dir}/zotero-review-mobile.png` });
+      await choice(review, "Cancel").click();
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
 
   await step("transfer: format selection, live options, back navigation and a real notes PDF", async () => {
     const { ctx, page } = await setup();

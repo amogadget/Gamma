@@ -162,6 +162,26 @@ shared `import_embedded_annotations` (reader annotations arrive inside the
 exported PDFs; `strip` follows the client's embedded-annotations preference).
 Merging only fills gaps: existing meta/bibtex/files are kept, labels union.
 
+Choosing the ZIP opens `transfers/ZoteroImportDialog.jsx`. Its two trees show
+the archive (including empty directories and unused files) and the destination
+library (PDF/page, new/update, collection paths, notes). The active library
+folder becomes the import prefix. `POST /api/import/zotero/preview` accepts
+the same `file` and `folder`, requires workspace write access, and writes no
+pages or uploads. Both endpoints use `plan_zotero_archive`, so attachment
+resolution and warnings agree. Import uploads the file again, rechecks the
+current library, and leaves the actual results and warnings in the dialog.
+
+The parser accepts standalone and inline PDF attachments, both MIME namespaces,
+and literal or resource paths. Lookup normalizes relative dot segments and
+percent encoding as well as ZIP filename encodings. If a filename changed,
+only a unique PDF in that same `files/<attachment-id>` directory can be used;
+ambiguous or cross-item matches are never guessed. Additional PDFs become
+separate pages in the item's collections, with stable attachment keys.
+Missing/invalid PDFs, unsupported or unlinked files, recovered filenames and
+preserved existing PDFs are reported. Empty directories do not supply PDF
+bytes; a URL in metadata is not a bundled attachment. Reimporting a complete
+export attaches a recovered PDF to an existing metadata-only page.
+
 ## Zotero RDF export
 
 The import's exact inverse (`gamma/zotero_export.py`, endpoint branches in

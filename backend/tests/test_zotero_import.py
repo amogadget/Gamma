@@ -5,6 +5,8 @@ the annotations embedded in the exported PDFs become highlight blocks."""
 import io
 import zipfile
 
+import pytest
+
 
 def _annotated_pdf(text=b"Attention is all you need, says the paper."):
     """Minimal one-page PDF with a text layer and one /Highlight annotation
@@ -188,3 +190,143 @@ def test_zotero_import_rejects_junk(guest):
     r = guest.post("/api/import/zotero",
                    files={"file": ("x.zip", buf, "application/zip")})
     assert r.status_code == 400 and ".rdf" in r.json()["detail"]
+
+
+def _custom_zip(rdf, files):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("export/library.rdf", rdf)
+        for path, data in files.items():
+            zf.writestr(f"export/{path}", data)
+    return buf.getvalue()
+
+
+def _send(guest, data, preview=False, **form):
+    return guest.post("/api/import/zotero" + ("/preview" if preview else ""),
+                      files={"file": ("lib.zip", data, "application/zip")}, data=form)
+
+
+def test_preview_is_read_only_and_predicts_upgrade(guest):
+    from conftest import workspace_of
+    from gamma.db import connect_pages_db, ws_uploads_dir
+
+    rdf = RDF.replace("s41586-000-00000-0", "preview-upgrade").replace("Attention is all you need", "Preview upgrade")
+    missing = _custom_zip(rdf, {"files/3/": b""})
+    ws = workspace_of("guest")
+    with connect_pages_db(ws) as conn:
+        before = conn.execute("SELECT * FROM unified_blocks ORDER BY id").fetchall()
+    uploads_before = set(ws_uploads_dir(ws).glob("*"))
+    response = _send(guest, missing, preview=True, folder="Research")
+    assert response.status_code == 200, response.text
+    plan = response.json()
+    page = next(p for p in plan["pages"] if p["title"] == "Preview upgrade")
+    assert page["kind"] == "page" and page["action"] == "create"
+    assert page["folders"] == ["Research/ML/Transformers"]
+    assert any("PDF missing" in w["reason"] for w in plan["warnings"])
+    assert any(e["directory"] for e in plan["entries"])
+    with connect_pages_db(ws) as conn:
+        assert conn.execute("SELECT * FROM unified_blocks ORDER BY id").fetchall() == before
+    assert set(ws_uploads_dir(ws).glob("*")) == uploads_before
+    first = _send(guest, missing).json()
+    page_id = next(p["id"] for p in first["pages"] if p["title"] == "Preview upgrade")
+    complete = _custom_zip(rdf, {"files/3/Vaswani - 2017 - Attention.pdf": _annotated_pdf(b"Recovered preview PDF")})
+    plan = _send(guest, complete, preview=True).json()
+    page = next(p for p in plan["pages"] if p["title"] == "Preview upgrade")
+    assert page["action"] == "merge" and page["kind"] == "pdf" and page["existing_id"] == page_id
+    result = _send(guest, complete).json()
+    assert next(p for p in result["pages"] if p["id"] == page_id)["kind"] == "pdf"
+    assert guest.get(f"/api/blocks/{page_id}").json()["properties"]["doc_id"]
+
+
+@pytest.mark.parametrize("path,entry", [
+    ("./files/3/paper%20name.pdf", "files/3/paper name.pdf"),
+    ("files\\3\\paper.pdf", "files/3/paper.pdf"),
+    ("files/3/caf\u00e9.pdf", "files/3/cafe\u0301.pdf"),
+    ("files/3/a-long-original-name.pdf", "files/3/renamed.pdf"),
+])
+def test_pdf_path_variations(path, entry):
+    from gamma.zotero_import import plan_zotero_archive
+    rdf = RDF.replace("files/3/Vaswani - 2017 - Attention.pdf", path)
+    with zipfile.ZipFile(io.BytesIO(_custom_zip(rdf, {entry: _annotated_pdf()}))) as zf:
+        plan = plan_zotero_archive(zf)
+    assert plan["items"][0]["pdf_entry"] == f"export/{entry}"
+
+
+def test_pdf_matching_never_guesses_across_items_or_ambiguous_folders():
+    from gamma.zotero_import import plan_zotero_archive
+    files = {"files/3/one.pdf": _annotated_pdf(), "files/3/two.pdf": _annotated_pdf(),
+             "files/99/Vaswani - 2017 - Attention.pdf": _annotated_pdf()}
+    with zipfile.ZipFile(io.BytesIO(_custom_zip(RDF, files))) as zf:
+        plan = plan_zotero_archive(zf)
+    assert plan["items"][0]["pdf_entry"] is None
+    assert any("PDF missing" in w["reason"] for w in plan["warnings"])
+    assert sum(e["status"] == "not_imported" for e in plan["entries"]) == 3
+
+
+def test_standalone_inline_and_additional_pdfs(guest):
+    rdf = RDF.replace("s41586-000-00000-0", "all-attachments").replace("Attention is all you need", "All attachments")
+    rdf = rdf.replace('<link:link rdf:resource="#item_3"/>', '''<link:link rdf:resource="#item_3"/>
+        <link:link><z:Attachment rdf:about="#inline">
+          <z:path>files/4/supplement</z:path><dcterms:type>application/pdf</dcterms:type>
+        </z:Attachment></link:link>''')
+    rdf = rdf.replace('</rdf:RDF>', '''<z:Attachment rdf:about="#standalone">
+        <z:itemType>attachment</z:itemType><dc:title>Standalone paper</dc:title>
+        <z:path rdf:resource="files/5/standalone.pdf"/><dcterms:type>application/pdf</dcterms:type>
+        </z:Attachment></rdf:RDF>''')
+    data = _custom_zip(rdf, {"files/3/Vaswani - 2017 - Attention.pdf": _annotated_pdf(b"Primary"),
+                            "files/4/supplement": _annotated_pdf(b"Supplement"),
+                            "files/5/standalone.pdf": _annotated_pdf(b"Standalone")})
+    plan = _send(guest, data, preview=True).json()
+    assert sum(p["kind"] == "pdf" for p in plan["pages"]) == 3
+    supplement = next(p for p in plan["pages"] if p["source_path"] == "export/files/4/supplement")
+    assert supplement["folders"] == ["ML/Transformers"] and supplement["notes"] == 0
+    result = _send(guest, data).json()
+    assert sum(p["kind"] == "pdf" for p in result["pages"]) == 3
+    assert result["skipped"] == []
+    again = _send(guest, data).json()
+    assert again["pages_created"] == 0 and again["annotations_imported"] == 0
+
+
+def test_invalid_pdf_and_unsupported_file_are_visible(guest):
+    data = _custom_zip(RDF, {"files/3/Vaswani - 2017 - Attention.pdf": b"not a pdf",
+                            "files/4/snapshot.html": b"<html>snapshot</html>"})
+    preview = _send(guest, data, preview=True).json()
+    assert any("not a PDF" in w["reason"] for w in preview["warnings"])
+    assert any("snapshot.html" == w["title"] for w in preview["warnings"])
+    result = _send(guest, data).json()
+    assert result["warnings"] == preview["warnings"]
+
+
+def test_preview_reports_existing_pdf_preservation(guest):
+    rdf = RDF.replace("s41586-000-00000-0", "keep-existing-pdf")
+    path = "files/3/Vaswani - 2017 - Attention.pdf"
+    original = _custom_zip(rdf, {path: _annotated_pdf(b"Original PDF")})
+    changed = _custom_zip(rdf, {path: _annotated_pdf(b"New PDF")})
+    first = _send(guest, original).json()
+    page_id = first["pages"][0]["id"]
+    digest = guest.get(f"/api/blocks/{page_id}").json()["properties"]["doc_id"]
+    plan = _send(guest, changed, preview=True).json()
+    assert any("keeps its current PDF" in w["reason"] for w in plan["warnings"])
+    result = _send(guest, changed).json()
+    assert result["warnings"] == plan["warnings"]
+    assert guest.get(f"/api/blocks/{page_id}").json()["properties"]["doc_id"] == digest
+
+
+def test_preview_collapses_same_pdf_into_one_destination(guest):
+    rdf = RDF.replace("s41586-000-00000-0", "same-pdf-preview")
+    rdf = rdf.replace('</rdf:RDF>', '''<z:Attachment rdf:about="#same-pdf-standalone">
+      <dc:title>Duplicate PDF</dc:title><z:path rdf:resource="files/5/duplicate.pdf"/>
+      </z:Attachment><z:Collection rdf:about="#duplicates"><dc:title>Copies</dc:title>
+      <dcterms:hasPart rdf:resource="#same-pdf-standalone"/></z:Collection></rdf:RDF>''')
+    pdf = _annotated_pdf(b"Same PDF in two items")
+    data = _custom_zip(rdf, {"files/3/Vaswani - 2017 - Attention.pdf": pdf, "files/5/duplicate.pdf": pdf})
+    preview = _send(guest, data, preview=True).json()
+    pdf_pages = [p for p in preview["pages"] if p["kind"] == "pdf"]
+    assert len(pdf_pages) == 1
+    assert pdf_pages[0]["folders"] == ["ML/Transformers", "Copies"]
+    assert pdf_pages[0]["action"] == "create"
+    result = _send(guest, data).json()
+    assert len({p["id"] for p in result["pages"] if p["kind"] == "pdf"}) == 1
+    again = _send(guest, data, preview=True).json()
+    assert len([p for p in again["pages"] if p["kind"] == "pdf"]) == 1
+    assert all(p["action"] == "merge" for p in again["pages"])

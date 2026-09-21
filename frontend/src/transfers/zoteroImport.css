@@ -1,0 +1,32 @@
+.reportModal.zoteroImportModal { width: min(1120px, calc(100vw - 32px)); max-width: 1120px; }
+.zoteroImportModal .settingsDialogContent { min-height: 0; overflow-y: auto; }
+.zoteroImportHeader { margin: 8px 0 16px; }
+.zoteroImportHeader strong { overflow-wrap: anywhere; }
+.zoteroImportHeader p, .zoteroDestination { color: var(--text-muted); font-size: 13px; margin: 6px 0; }
+.zoteroImportColumns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.zoteroImportColumns section { border: 1px solid var(--border); border-radius: 10px; min-width: 0; display: flex; flex-direction: column; }
+.zoteroImportColumns h3 { font-size: 14px; margin: 14px 14px 8px; }
+.zoteroDestination { margin: 0 14px 8px; overflow-wrap: anywhere; }
+.zoteroTreeScroll { overflow: auto; height: min(42vh, 440px); padding: 0 10px 12px; }
+.zoteroTree { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.zoteroTree .zoteroTree { padding-left: 16px; border-left: 1px solid var(--border); margin-left: 7px; }
+.zoteroTree summary { padding: 7px 0; cursor: pointer; overflow-wrap: anywhere; }
+.zoteroTree summary svg { vertical-align: middle; margin: 0 6px 0 2px; }
+.zoteroTreeFile { display: flex; gap: 7px; align-items: flex-start; padding: 8px 0; }
+.zoteroTreeFile > svg { flex-shrink: 0; margin-top: 2px; color: var(--text-muted); }
+.zoteroFileText { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
+.zoteroFileText small { display: block; color: var(--text-muted); font-size: 11px; margin-top: 3px; }
+.zoteroKind { text-transform: uppercase; color: var(--text-muted); font-size: 10px; padding-top: 3px; }
+.zoteroEmpty { display: block; margin: 0 0 8px 22px; color: var(--text-muted); font-size: 11px; }
+.zoteroWarning, .zoteroFileText .zoteroWarning { color: var(--text-primary); }
+.zoteroFileText .zoteroWarning { border-left: 2px solid #b58b39; padding-left: 6px; }
+.zoteroWarnings { margin: 14px 0; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.zoteroWarnings summary { cursor: pointer; font-weight: 600; }
+.zoteroWarnings ul { max-height: 160px; overflow: auto; padding-left: 20px; margin-bottom: 0; }
+.zoteroWarnings li { padding: 5px 0; overflow-wrap: anywhere; }
+.zoteroWarnings li span { display: block; color: var(--text-muted); margin-top: 3px; }
+.zoteroImportFooter { position: sticky; bottom: 0; background: var(--bg-surface); padding-top: 12px; }
+@media (max-width: 640px) {
+  .zoteroImportColumns { grid-template-columns: minmax(0, 1fr); }
+  .zoteroTreeScroll { height: 220px; }
+}

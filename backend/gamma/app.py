@@ -2,12 +2,13 @@
 
 import mimetypes
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
 
-from . import config, migrations
+from . import backup_schedule, config, migrations
 from . import sync_engine, version
 from .auth import session_middleware
 from .db import connect_data_db, connect_pages_db, connect_users_db
@@ -19,6 +20,7 @@ from .routers import (
     ai,
     auth as auth_router,
     blocks,
+    backup_tasks,
     chats,
     clip,
     collab,
@@ -106,7 +108,12 @@ def create_app() -> FastAPI:
     setup_logging()
     _silence_windows_connection_reset()
     mcp = LazyMCP()
-    app = FastAPI(title="Gamma PDF Annotator", lifespan=mcp.lifespan)
+    @asynccontextmanager
+    async def lifespan(app):
+        async with mcp.lifespan(app), backup_schedule.lifespan():
+            yield
+
+    app = FastAPI(title="Gamma PDF Annotator", lifespan=lifespan)
 
     app.middleware("http")(session_middleware)
 
@@ -118,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(workspaces.router)
     app.include_router(ws_backups.router)
+    app.include_router(backup_tasks.router)
     app.include_router(ai.router)
     app.include_router(chats.router)
     app.include_router(chats.history_router)

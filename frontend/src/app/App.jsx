@@ -3,6 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
+import ZoteroImportDialog from "../transfers/ZoteroImportDialog";
 import { parsePdfCitation } from "../pdf/pdfCitation.js";
 import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
 import {
@@ -2489,6 +2490,7 @@ function LibraryApp() {
   // categories on the left, the selected pane on the right.
   const [settingsOpen, setSettingsOpen] = useState(null); // null | pane id — see settingsNavigation.js
   const [importOpen, setImportOpen] = useState(false);
+  const [zoteroImport, setZoteroImport] = useState(null);
   // Export dialog: one "Export…" menu entry, the shape of the export chosen
   // here. Remembered across sessions — most people export the same way twice.
   const [exportOpen, setExportOpen] = useState(false);
@@ -4338,20 +4340,22 @@ function LibraryApp() {
   // third source; also reachable from Settings → Library). Collections become
   // folders, tags labels, notes child blocks; the reader annotations ride
   // inside the exported PDFs, so strip works exactly like for "this PDF".
-  async function importZotero(file, strip = embAnnots === "strip") {
+  async function importZotero(file, strip = embAnnots === "strip", folder = "") {
     if (shareMode) return;
     const ctl = new AbortController();
     const taskId = addTransfer({ name: `Zotero import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…", cancel: () => ctl.abort() });
     setStatus("Importing Zotero library — this can take a while for big exports…");
     try {
-      const { data, summary } = await importZoteroZip(file, strip, ctl.signal);
+      const { data, summary } = await importZoteroZip(file, strip, ctl.signal, folder);
       updateTransfer(taskId, { status: "done", info: `${data.pages_created + data.pages_merged} pages` });
       setStatus(`Zotero import: ${summary}.`);
       refreshQuota?.();
       await fetchHomeBlocks();
+      return { data, summary };
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
       if (!ctl.signal.aborted) setStatus(`Zotero import failed: ${err.message}`);
+      throw err;
     }
   }
 
@@ -5271,7 +5275,7 @@ function LibraryApp() {
       const inp = document.createElement("input");
       inp.type = "file";
       inp.accept = ".zip,application/zip";
-      inp.onchange = () => { if (inp.files?.[0]) importZotero(inp.files[0], o.strip); };
+      inp.onchange = () => { if (inp.files?.[0]) setZoteroImport({ file: inp.files[0], strip: o.strip, folder: homeMode && folderFilter ? folderFilter : "" }); };
       inp.click();
       return;
     }
@@ -8879,6 +8883,7 @@ function LibraryApp() {
           onImport={runImport}
         />
       ) : null}
+      {zoteroImport ? <ZoteroImportDialog {...zoteroImport} onClose={() => setZoteroImport(null)} onImport={importZotero} /> : null}
       {exportOpen ? (
         <ExportDialog
           opts={exportOpts}
