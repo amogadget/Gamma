@@ -228,3 +228,43 @@ def test_list_pages_filters_and_labels_mode(org):
     assert '- label "Jeff": 1 page' in text and '- label "jeff": 1 page' in text
     assert '- label "qec": 1 page' in text and '- folder "labtest": 2 pages' in text
     assert jeff1 not in text
+
+
+def _blank_pdf(path, pages=2):
+    from PyPDF2 import PdfWriter
+    w = PdfWriter()
+    for _ in range(pages):
+        w.add_blank_page(width=200, height=300)
+    with open(path, "wb") as f:
+        w.write(f)
+    return path
+
+
+def test_view_pdf_page_renders_a_picture_for_the_model(org, monkeypatch, tmp_path):
+    """view_pdf_page rasterizes one page through pdfium: the picture rides
+    on the chip as `images` (the loop moves it to the tool result), the text
+    names the page and the count, and bad pages/pages without a PDF refuse."""
+    c, ids = org
+    pdf = _blank_pdf(tmp_path / "two.pdf")
+    monkeypatch.setattr("gamma.ai_tools.pdf_path", lambda ws, doc: pdf)
+    text, action = run_agent_tool(ids["ws"], folder("readout"), "view_pdf_page",
+                                  {"page_id": ids["a"], "pdf_page": 2})
+    assert text.startswith("PDF page 2 of 2"), text
+    assert action["kind"] == "view" and action["pdf_page"] == 2 and action["page_id"] == ids["a"]
+    (media_type, data), = action["images"]
+    assert media_type in ("image/png", "image/jpeg") and len(data) > 100
+    assert "×" in text and "not kept" in text  # dimensions named; replay warning
+    # Out of range: the count tells the model how far it may look.
+    text, action = run_agent_tool(ids["ws"], folder("readout"), "view_pdf_page",
+                                  {"page_id": ids["a"], "pdf_page": 3})
+    assert text.startswith("error") and "has 2 pages" in text and action["error"]
+    assert "images" not in action
+    # A page without an attachment has nothing to draw.
+    text, action = run_agent_tool(ids["ws"], folder("readout"), "view_pdf_page",
+                                  {"page_id": ids["b"], "pdf_page": 1})
+    assert "no PDF attachment" in text and not action.get("error")
+    # Permission off: refused before any rendering.
+    text, action = run_agent_tool(ids["ws"], folder("readout"), "view_pdf_page",
+                                  {"page_id": ids["a"], "pdf_page": 1},
+                                  allowed_tools={"read_page"})
+    assert text.startswith("error") and "not enabled" in text

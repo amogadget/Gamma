@@ -42,7 +42,7 @@ export const TRANSLATE_LANGS = [
 // a pre-kind flat map ({list, read, …}) is applied to every kind.
 export const CHAT_KINDS = ["folder", "pdf", "notes"];
 const TOOL_PERMS_DEFAULT = {
-  list: true, read: true, block_read: true, search: true,
+  list: true, read: true, block_read: true, view: true, search: true,
   web_search: true, web_read: true,
   rename: true, move: true, block_edit: true,
 };

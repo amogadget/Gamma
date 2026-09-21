@@ -126,7 +126,7 @@ function ServerLimitRows({ setStatus, refreshQuota }) {
   }, []);
   async function commit(key, raw, min) {
     const n = Number.parseInt(String(raw).trim(), 10);
-    if (!Number.isFinite(n) || n < min) { setSaved((s) => ({ ...s })); return; } // re-render restores the stored value
+    if (!Number.isFinite(n) || n < min) return; // the box shows the stored value again once the commit settles
     if (n === saved[key]) return;
     setError("");
     try {
@@ -142,11 +142,11 @@ function ServerLimitRows({ setStatus, refreshQuota }) {
   return <>
     {saved ? <>
       <Row icon={ImportIcon} label="Default max upload" hint="Largest single file; Users can override per account">
-        <UnitInput key={`u${saved.max_upload_mb}`} unit="MB" min={1} value={String(saved.max_upload_mb)}
+        <UnitInput unit="MB" min={1} value={String(saved.max_upload_mb)}
           onCommit={(raw) => commit("max_upload_mb", raw, 1)} />
       </Row>
       <Row icon={ServerIcon} label="Default quota" hint="Personal uploads per account; 0 = unlimited">
-        <UnitInput key={`q${saved.quota_mb}`} unit="MB" min={0} value={String(saved.quota_mb)}
+        <UnitInput unit="MB" min={0} value={String(saved.quota_mb)}
           onCommit={(raw) => commit("quota_mb", raw, 0)} />
       </Row>
     </> : !error ? <p className="setNotice">Loading…</p> : null}

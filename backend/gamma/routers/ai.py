@@ -1352,8 +1352,12 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 # mutations count against the change budget.
                 if name in MUTATING_TOOLS and not action.get("error"):
                     actions += 1
+                # A picture a tool answered with (view_pdf_page) goes to the
+                # model with its result, never into the streamed/saved chip.
+                tool_images = action.pop("images", None)
                 yield ("action", action)
-                messages.append({"role": "tool", "call_id": call["id"], "content": result})
+                messages.append({"role": "tool", "call_id": call["id"], "content": result,
+                                 **({"images": tool_images} if tool_images else {})})
             if round_no == max_rounds - 1:
                 yield ("delta", "\n\n*(stopped: tool-round limit reached — "
                                 "raise it in Settings → Assistant)*")

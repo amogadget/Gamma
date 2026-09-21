@@ -25,6 +25,7 @@ import { apiJson, withShare, withWorkspace } from "../shared/lib/utils";
 import { ChatMarkdown } from "../shared/ui/Widgets";
 import { PdfCitationOverlay } from "./PdfCitationOverlay";
 import { citationRuns, runChars } from "./pdfCitation.js";
+import { noteBadgeAnchor } from "./noteAnchor.js";
 import { COLORS } from "../shared/model/highlightColors.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 // One worker for every document. pdf.js otherwise starts a fresh worker per
@@ -2219,8 +2220,11 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
         }
         // Speech-bubble badge at the end of the passage when the user typed a
         // note on the highlight — click behaves like clicking the highlight.
-        if (h.hasNote && rects.length) {
-          const r = rects[rects.length - 1];
+        // The end is found by geometry (noteBadgeAnchor), not by taking the
+        // last stored rect: imported highlights keep per-glyph rects in no
+        // particular order, and a stray sliver rect would put it anywhere.
+        const r = h.hasNote ? noteBadgeAnchor(rects) : null;
+        if (r) {
           elements.push(
             <NoteBadge key={h.id + "-note"} hlId={h.id}
               text={h.comment?.text?.trim() || ""}

@@ -263,3 +263,60 @@ def test_anthropic_folds_user_turn_after_tool_only_reply():
     assert wire[2]["content"] == [
         {"type": "tool_result", "tool_use_id": "c1", "content": "ok"},
         {"type": "text", "text": "thanks, next"}]
+
+
+PICTURE_TURNS = [
+    {"role": "user", "content": "what does page 3 show?"},
+    {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "c1", "name": "view_pdf_page", "arguments": {"page_id": "p", "pdf_page": 3}},
+        {"id": "c2", "name": "read_page", "arguments": {"page_id": "p"}}]},
+    {"role": "tool", "call_id": "c1", "content": "PDF page 3 attached", "images": [("image/png", "QUJD")]},
+    {"role": "tool", "call_id": "c2", "content": "Title…"},
+]
+
+
+def test_tool_result_pictures_on_each_wire():
+    """A tool result's `images` reach the model on every wire: inside the
+    Anthropic tool_result, and — the OpenAI wires take only text there — as
+    one user turn after the round's results, in call order."""
+    body = json.loads(anthropic_request(CONF, [dict(m) for m in PICTURE_TURNS], "sys", "m",
+                                        tools=ALL_TOOLS).data)
+    results = body["messages"][2]["content"]
+    assert [r["type"] for r in results] == ["tool_result", "tool_result"]
+    assert results[0]["content"] == [
+        {"type": "text", "text": "PDF page 3 attached"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}}]
+    assert results[1]["content"] == "Title…"
+
+    body = json.loads(openai_request(CONF, [dict(m) for m in PICTURE_TURNS], "sys", "m",
+                                     tools=ALL_TOOLS).data)
+    roles = [m["role"] for m in body["messages"]]
+    assert roles == ["system", "user", "assistant", "tool", "tool", "user"]
+    assert body["messages"][3]["content"] == "PDF page 3 attached"
+    picture = body["messages"][5]["content"]
+    assert picture[0]["type"] == "text" and picture[1] == {
+        "type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}}
+
+    for build in (chatgpt_request, openai_responses_request):
+        body = json.loads(build(CONF, [dict(m) for m in PICTURE_TURNS], "sys", "m",
+                                tools=ALL_TOOLS).data)
+        kinds = [i["type"] for i in body["input"]]
+        assert kinds == ["message", "function_call", "function_call", "function_call_output",
+                         "function_call_output", "message"], build.__name__
+        assert body["input"][3]["output"] == "PDF page 3 attached"
+        assert body["input"][5]["role"] == "user"
+        assert body["input"][5]["content"][1] == {
+            "type": "input_image", "image_url": "data:image/png;base64,QUJD"}
+
+
+def test_user_attachments_never_ride_on_a_tool_picture_turn():
+    """The user's own attachments belong to their prompt, not to the picture
+    turn the OpenAI wires append after a round's tool results."""
+    body = json.loads(chatgpt_request(CONF, [dict(m) for m in PICTURE_TURNS], "sys", "m",
+                                      pdf_b64s=["QUJD"], tools=ALL_TOOLS).data)
+    assert body["input"][0]["content"][0]["type"] == "input_file"
+    assert [c["type"] for c in body["input"][5]["content"]] == ["input_text", "input_image"]
+    body = json.loads(openai_request(CONF, [dict(m) for m in PICTURE_TURNS], "sys", "m",
+                                     pdf_b64s=["QUJD"], tools=ALL_TOOLS).data)
+    assert body["messages"][1]["content"][0]["type"] == "file"
+    assert [c["type"] for c in body["messages"][5]["content"]] == ["text", "image_url"]
