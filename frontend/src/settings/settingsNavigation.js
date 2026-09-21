@@ -10,7 +10,7 @@ const entries = [
   ["server", "Public server URL", "public address HTTPS remote proxy OAuth MCP assistant sign-in"],
   ["appearance", "Theme", "dark light gamma amber gold sepia solarized gray system colors"],
   ["appearance", "Dark PDF pages", "flip invert page colors"],
-  ["appearance", "Control size", "zoom buttons scale touch"],
+  ["appearance", "Interface size", "zoom text buttons controls scale touch"],
   ["appearance", "Status bar", "notifications messages"],
   ["reading", "Imported annotations", "hide strip keep remove originals highlights PDF"],
   ["reading", "Draws with", "handwriting pen finger touch stylus ink"],

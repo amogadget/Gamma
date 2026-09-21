@@ -1762,17 +1762,19 @@ function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
   }, [tip]);
   return (
     <>
-      <button ref={btnRef} type="button" className="pdfNoteBadge" data-hl-id={hlId} style={style}
-        onPointerDown={(e) => { touchRef.current = e.pointerType !== "mouse"; }}
-        onMouseEnter={show} onMouseLeave={hide}
-        onClick={(e) => {
-          if (touchRef.current) { e.stopPropagation(); clearTimeout(timerRef.current); if (tip) setTip(null); else place(); return; }
-          hideNow(); onClick(e);
-        }}
-        onContextMenu={(e) => { hideNow(); onContextMenu(e); }}
-      >
-        <MessageSquareIcon size={10} strokeWidth={2.2} />
-      </button>
+      <span className="pdfNoteAnchor" style={style}>
+        <button ref={btnRef} type="button" className="pdfNoteBadge" data-hl-id={hlId} aria-label="Show highlight note"
+          onPointerDown={(e) => { touchRef.current = e.pointerType !== "mouse"; }}
+          onMouseEnter={show} onMouseLeave={hide}
+          onClick={(e) => {
+            if (touchRef.current) { e.stopPropagation(); clearTimeout(timerRef.current); if (tip) setTip(null); else place(); return; }
+            hideNow(); onClick(e);
+          }}
+          onContextMenu={(e) => { hideNow(); onContextMenu(e); }}
+        >
+          <MessageSquareIcon size={10} strokeWidth={2.2} />
+        </button>
+      </span>
       {tip ? createPortal(
         <div ref={tipRef} className="pdfNoteTip" style={tip} onMouseEnter={hold} onMouseLeave={hide}>
           {text ? <ChatMarkdown text={text} /> : "This highlight has a note"}

@@ -37,7 +37,7 @@ others substitute, and the raw text is still in the annotation popup.
 import io
 import math
 
-from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2 import PdfWriter
 from PyPDF2._page import PageObject
 from PyPDF2.generic import (
     DecodedStreamObject,
@@ -49,7 +49,7 @@ from PyPDF2.generic import (
 from . import pdf_text, vector_text
 from .logbuf import log
 from .note_markup import TEXT, latex_spans, parse_note
-from .pdf_export import parse_css_color
+from .pdf_export import ExportPdfReader, parse_css_color
 from .pdf_glyphs import GlyphFonts
 from .pdf_image import XObjectStore
 from .pdf_typeset import (
@@ -408,7 +408,7 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
     ``uploads_dir`` is where ``/api/uploads/…`` refs are read from; without it
     images degrade to their alt text.
     """
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+    reader = ExportPdfReader(io.BytesIO(pdf_bytes))
     writer = PdfWriter()
     writer.append(reader)
 

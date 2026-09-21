@@ -25,20 +25,20 @@ already exists. Bespoke CSS classes are for **layout only**.
 | `categoryTag`, `uiTag` | chips and small badges |
 | `popoverAnchor` | the `position: relative; inline-flex` wrapper every popover trigger sits in (`data-popover="…"` on the same element) — never inline that style |
 
-### Control size and text size
+### Interface size and text size
 
-Two separate size levers, deliberately not one "zoom":
-
-- **Control size** (Settings / Appearance, `gamma-ui-scale`, a `Stepper` over
-  the `UI_SCALE` range in `app/prefs.js`, 70–160 % in 10 % steps) is a CSS
-  `zoom` on every button and toggle —
-  `:where(button, .uiBtn, .ctlBtn, .uiClose, .switch)` in `shared/styles/app.css` reads
-  `--ui-scale` off the root element. Zoom scales the box, its text and its
-  SVG icon as one unit, so rows and toolbars just grow to fit; a second rule
-  resets the zoom on a control nested in another so it never compounds.
-  `index.html` applies the stored value before first paint (like the theme),
-  App.jsx keeps the property in sync afterwards. Content — notes, PDF, chat
-  text — is untouched.
+- **Interface size** (Settings / Appearance, `gamma-ui-scale`, a `Stepper` over
+  the `UI_SCALE` range in `app/prefs.js`, 70–160 % in 10 % steps) scales both
+  interface text and controls. Fixed font sizes in the application stylesheets
+  multiply by `--ui-font-scale`, inherited from `--ui-scale`. Controls (buttons,
+  summaries, button roles and the shared control classes) use CSS `zoom` for
+  their box, text and icon, and reset `--ui-font-scale` to 1 to avoid doubling
+  the text scale. Nested controls reset `zoom` to 1 as well.
+  Keep PDF-coordinate positioning on an unscaled wrapper, with the control
+  inside it (`pdfNoteAnchor` / `pdfNoteBadge`); zooming the positioned element
+  also scales its offsets and makes it drift away from the highlight.
+  `index.html` applies the stored value before first paint and App.jsx keeps
+  it in sync. PDF page geometry and its text layer retain their separate zoom.
 - **Text size** is per panel and per session: Ctrl/⌘+scroll over the notes
   list or the chat transcript. `useTextScale` (`shared/ui/Widgets.jsx`) owns it. It is
   a native non-passive wheel listener, because React's `onWheel` can't

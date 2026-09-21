@@ -415,6 +415,12 @@ upload → image-XObject registry.
 
 ## Annotated-PDF export
 
+Both the annotation and visible-note writers use `ExportPdfReader`, which
+resolves dangling indirect references to PDF null objects. Some otherwise
+readable PDFs contain missing optional objects; PyPDF2 returns Python `None`
+for these and its writer otherwise fails with a blank `AssertionError`.
+The repair is in memory during export; the stored original is unchanged.
+
 `/api/pages/{id}/export-pdf`: highlights become standard `/Highlight` (or
 `/Square` for area notes) annotations with the note text in the popup
 (`gamma/pdf_export.py`) — `?highlights=0` skips that layer entirely. Every

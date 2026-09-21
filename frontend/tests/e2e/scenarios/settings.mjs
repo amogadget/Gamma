@@ -300,9 +300,9 @@ export async function settingsScenarios(env) {
       assert(await page.locator(".appearancePdfPreview.isDark").isVisible());
       await page.getByRole("checkbox", { name: "Dark PDF pages", exact: true }).uncheck();
       await until(() => user.api("/api/prefs/appearance").then((v) => v.value?.pdfDark === false));
-      await row(page, "Control size").getByRole("button", { name: "Larger", exact: true }).click();
-      assert((await row(page, "Control size").innerText()).includes("110%"));
-      await row(page, "Control size").getByRole("button", { name: "Reset", exact: true }).click();
+      await row(page, "Interface size").getByRole("button", { name: "Larger", exact: true }).click();
+      assert((await row(page, "Interface size").innerText()).includes("110%"));
+      await row(page, "Interface size").getByRole("button", { name: "Reset", exact: true }).click();
       if (flags.keep) await page.screenshot({ path: `${server.dir}/settings-appearance.png`, animations: "disabled" });
       await nav(page, "Diagnostics").click();
       assertEq(await nav(page, "Back to settings").count(), 0, "one sidebar: no second-level navigation");
@@ -453,9 +453,9 @@ export async function settingsScenarios(env) {
       assert(!(await page.locator(".settingsPane").evaluate((el) => el.scrollWidth > el.clientWidth + 1)), "appearance fits the phone without horizontal scrolling");
       if (flags.keep) await page.screenshot({ path: `${server.dir}/settings-appearance-mobile.png`, animations: "disabled" });
       await page.setViewportSize({ width: 320, height: 844 });
-      for (let i = 0; i < 6; i++) await row(page, "Control size").getByRole("button", { name: "Larger", exact: true }).click();
-      assert(!(await page.locator(".settingsPane").evaluate((el) => el.scrollWidth > el.clientWidth + 1)), "appearance fits a small phone at maximum control size");
-      await row(page, "Control size").getByRole("button", { name: "Reset", exact: true }).click();
+      for (let i = 0; i < 6; i++) await row(page, "Interface size").getByRole("button", { name: "Larger", exact: true }).click();
+      assert(!(await page.locator(".settingsPane").evaluate((el) => el.scrollWidth > el.clientWidth + 1)), "appearance fits a small phone at maximum interface size");
+      await row(page, "Interface size").getByRole("button", { name: "Reset", exact: true }).click();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.getByRole("button", { name: "Back", exact: true }).click();
       await nav(page, "Reading & editing").click();

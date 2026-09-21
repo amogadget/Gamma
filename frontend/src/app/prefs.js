@@ -79,9 +79,9 @@ const SIZE_INDEX_CODEC = {
 
 export const THEMES = ["system", "light", "dark", "gamma-light", "gamma-dark", "sepia", "solarized", "gray"];
 
-// Control size (Settings → General): a CSS `zoom` on every button and toggle
-// (app.css, `--ui-scale`) — the interface chrome, not the notes/chat text,
-// which Ctrl+scroll resizes in place per panel and never persists. The
+// Interface size (Settings → Appearance): text and control boxes share
+// --ui-scale in app.css. Ctrl+scroll further resizes notes/chat text in place
+// per panel and never persists. PDF zoom remains independent. The
 // index.html pre-paint script repeats the bounds — keep them in step.
 export const UI_SCALE = { min: 0.7, max: 1.6, step: 0.1, default: 1 };
 
@@ -97,7 +97,7 @@ export function useAppPrefs() {
   });
   // Flip page colors: display-only inverted (night) rendering of the PDF canvas.
   const [pdfDarkPage, setPdfDarkPage] = usePersistedFlag("gamma-pdf-dark", false);
-  // Control size: index.html applies the stored value before first paint,
+  // Interface size: index.html applies the stored value before first paint,
   // App.jsx keeps `--ui-scale` on the root in sync afterwards.
   const [uiScale, setUiScale] = usePersistedState("gamma-ui-scale", 1, {
     parse: (raw) => {

@@ -3901,7 +3901,7 @@ function LibraryApp() {
     if (session.notesVisible != null) setNotesVisible(session.notesVisible);
   }, [wsReady, shareMode]);
 
-  // Control size (Settings → General): app.css zooms every button/toggle by it.
+  // Interface size: app.css scales text and control boxes together.
   useEffect(() => {
     document.documentElement.style.setProperty("--ui-scale", String(uiScale));
   }, [uiScale]);
@@ -7004,7 +7004,7 @@ function LibraryApp() {
                             <div className="reportOverlay" onClick={() => setPdfTextPreview(null)}>
                               <div className="reportModal" style={{ width: "min(640px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()}>
                                 <div className="reportModalTitle">Extracted PDF text</div>
-                                <div className="reportPageList" style={{ maxHeight: "60vh", whiteSpace: "pre-wrap", fontSize: 12, color: "var(--text-secondary)", padding: 10 }}>
+                                <div className="reportPageList" style={{ maxHeight: "60vh", whiteSpace: "pre-wrap", fontSize: "calc(12px * var(--ui-font-scale, 1))", color: "var(--text-secondary)", padding: 10 }}>
                                   {pdfTextPreview.loading ? "Extracting…" : pdfTextPreview.text}
                                 </div>
                                 {!pdfTextPreview.loading ? <div className="reportModalHint">First 12,000 characters — the AI context is drawn from this.</div> : null}

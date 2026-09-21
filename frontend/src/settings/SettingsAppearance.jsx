@@ -40,8 +40,8 @@ export function AppearanceSettings({ value, diagnostics }) {
 
       <Section title="Interface" action={<span className="setScope">This browser</span>}>
         <div className="appearanceInterface">
-          <Row icon={MaximizeIcon} label="Control size" hint="Buttons, icons and switches."
-            title="To resize notes or chat text instead, hold Ctrl (⌘ on Mac) and scroll over that panel.">
+          <Row icon={MaximizeIcon} label="Interface size" hint="Text, buttons, icons and switches."
+            title="PDF zoom stays separate. To further resize notes or chat text, hold Ctrl (⌘ on Mac) and scroll over that panel.">
             <Stepper value={value.uiScale} onChange={value.setUiScale}
               min={UI_SCALE.min} max={UI_SCALE.max} step={UI_SCALE.step} reset={UI_SCALE.default}
               format={(v) => `${Math.round(v * 100)}%`} />
