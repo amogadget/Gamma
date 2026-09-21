@@ -251,7 +251,7 @@ Search, Rename, Move, Edit — folder scope offers all, page scope the reading
 tools and the note-block editors); clicking a chip allows or forbids that
 tool for every chat of the kind. The stored map is localStorage JSON
 `gamma-ai-agent-perms` = `{folder, pdf, notes}` → `{list, read, block_read,
-search, rename, move, block_edit}` (a pre-kind flat map is applied to every
+view, search, web_search, web_read, rename, move, block_edit}` (a pre-kind flat map is applied to every
 kind on read). The chat header's ⚙ popover carries the same picker for the
 kind of the chat it is opened in (`AgentToolPicker` in `settings/SettingsDialog.jsx`,
 bound to the same map), so a change in either place is the same change.
@@ -260,13 +260,14 @@ else `pageAttach` → pdf; else notes) and sends that kind's map as the
 request's `permissions`.
 
 One permission per capability: List pages, Read pages, Read note blocks,
-Search library (`search_library` — notes and PDF text; the stored key is
+View PDF pages (`view` → `view_pdf_page`, a rendered page picture for a
+scan or a figure), Search library (`search_library` — notes and PDF text; the stored key is
 still `search`), Search papers online (`web_search` → `search_papers`), Fetch
 documents (`web_read` → `fetch_paper`; both web tools are read-only and
 described in [ai_tools.md](ai_tools.md)), Rename pages, Move pages, and Edit
 note blocks (one chip arming `edit_block`/`create_block`/`move_block`
 together). The "Read & search" preset (`chat/chatSettings.js` `READ_TOOLS`)
-includes the two web tools. Plus:
+includes the two web tools and the page viewer. Plus:
 
 - **Tool rounds** (`gamma-ai-tool-rounds` → request `tool_rounds`, default 32,
   user-tunable 1–100) — provider round-trips one message may use.
@@ -287,7 +288,7 @@ the server executes them → results go back → repeat until it answers.
 
 Every tool call streams back as an
 `{"action": {kind, summary, tool, args, result}}` NDJSON line (kinds
-list/read/search/rename/move/edit/create, plus `error` with `error: true` for
+list/read/view/search/rename/move/edit/create, plus `error` with `error: true` for
 failed/blocked calls) that the chat renders as a chip and saves in the message
 — clicking a chip expands the arguments and the (truncated, `_DETAIL_CAP`)
 output the model got; only applied mutations count against
@@ -295,7 +296,10 @@ output the model got; only applied mutations count against
 the note-block tools' actions carry `page_id`/`src_page_id` so the frontend
 reloads the open page's block tree when the AI touched it (`onNotesChange`;
 with the page's live socket up the tools' ops already arrived through it and
-the reload is skipped — [collab.md](collab.md)).
+the reload is skipped — [collab.md](collab.md)). A `view_pdf_page` result
+also carries the rendered page: the loop lifts it off the action into the
+tool message's `images` before yielding the chip, so the model sees the
+picture and the saved chat never holds it ([ai_tools.md](ai_tools.md)).
 
 ### Watching the agent work (live footprint)
 

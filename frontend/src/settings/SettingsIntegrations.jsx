@@ -1,24 +1,61 @@
 import React from "react";
 import { API, apiJson, copyText } from "../shared/lib/utils";
 import { PaneHead, Section, Row, Segmented, Step } from "./SettingsKit";
-import { LinkIcon } from "../shared/ui/Icons";
+import { LinkIcon, KeyIcon, CopyIcon, CheckIcon, RefreshIcon, UnlinkIcon } from "../shared/ui/Icons";
 import { codexSetupCommand, claudeConnectCommand, claudePluginInstallCommands } from "./assistantSetup";
 
+const COPIED = "Copied. You can paste it now.";
+const COPY_MANUALLY = "Select the text above and copy it manually.";
+
+// A read-only code box with the copy button in its corner. A successful copy
+// swaps the icon for a check; the status text is visible only when the
+// clipboard was refused (the check already says the rest, but the sentence
+// stays in the DOM for assistive tech).
 function CopyField({ label, value, action, rows = 2 }) {
   const [status, setStatus] = React.useState("");
   React.useEffect(() => setStatus(""), [value]);
+  React.useEffect(() => {
+    if (status !== COPIED) return undefined;
+    const timer = setTimeout(() => setStatus(""), 2000);
+    return () => clearTimeout(timer);
+  }, [status]);
   const copy = async () => {
-    try { setStatus(await copyText(value) ? "Copied. You can paste it now." : "Select the text above and copy it manually."); }
-    catch { setStatus("Select the text above and copy it manually."); }
+    try { setStatus(await copyText(value) ? COPIED : COPY_MANUALLY); }
+    catch { setStatus(COPY_MANUALLY); }
   };
+  const copied = status === COPIED;
   return <div className="integrationDetails">
-    <textarea className="aiKeyInput" aria-label={label} readOnly rows={rows} value={value}
-      onFocus={(event) => event.target.select()} />
-    <div className="integrationActions">
-      <button className="uiBtn" onClick={copy}>{action}</button>
-      <span className="settingDesc" role="status">{status}</span>
+    <div className="integrationCode">
+      <textarea className="aiKeyInput" aria-label={label} readOnly rows={rows} value={value}
+        onFocus={(event) => event.target.select()} />
+      <button type="button" className={`uiBtn sm iconSq integrationCopy${copied ? " on" : ""}`} aria-label={action} title={action} onClick={copy}>
+        {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+      </button>
     </div>
+    <span className={`settingDesc integrationCopyStatus${copied ? " ok" : ""}`} role="status">{status}</span>
   </div>;
+}
+
+const dateOf = (seconds) => new Date(seconds * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+
+// One connected assistant: how it signed in, what it may do, when it was
+// connected and when its access lapses. OAuth connections are minted with an
+// " (OAuth)" suffix on the client's name (mcp_oauth_provider.py).
+function ConnectionRow({ item, busy, onRevoke }) {
+  const oauth = /\s\(OAuth\)$/.test(item.name);
+  const name = oauth ? item.name.replace(/\s\(OAuth\)$/, "") : item.name;
+  const daysLeft = Math.ceil((item.expires_at * 1000 - Date.now()) / 86400000);
+  const expiry = daysLeft <= 0 ? `Expired ${dateOf(item.expires_at)}`
+    : `Expires ${dateOf(item.expires_at)} (${daysLeft === 1 ? "1 day" : `${daysLeft} days`} left)`;
+  const connected = item.created_at ? `Connected ${new Date(item.created_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}` : null;
+  const parts = [oauth ? "Browser sign-in" : "Token", item.scope === "write" ? "Read and write" : "Read-only", connected, expiry].filter(Boolean);
+  return <Row icon={oauth ? LinkIcon : KeyIcon} label={name}
+    hint={<>{parts.join(" · ")}{daysLeft <= 0 ? <span className="uiTag warn">Expired</span> : null}</>}>
+    <button type="button" className="uiBtn sm iconSq danger" disabled={busy} aria-label="Disconnect"
+      title={`Disconnect ${name}: the assistant loses access to this workspace`} onClick={() => onRevoke(item)}>
+      <UnlinkIcon size={13} />
+    </button>
+  </Row>;
 }
 
 export function IntegrationSettings({ workspaceId }) {
@@ -118,11 +155,11 @@ export function IntegrationSettings({ workspaceId }) {
             hint={isClaude ? "Start Claude Code, run /mcp, select gamma, and authenticate. Sign in to Gamma in your browser and approve a workspace."
               : "Follow your assistant's sign-in prompt. Approve read-only access in Gamma. No token to create or paste."} />
           {isClaude ? <>
-            <Step n={3} title="Use the Gamma plugin"
-              hint="In Claude Code, open /plugin to see installed plugins. Start a new session and run /gamma:gamma, then paste a Gamma page or share link with your question.">
-              <p className="settingDesc">The plugin provides the Gamma workflow. The MCP connection above gives it access to your library.</p>
+            <Step n={3} title="Ask about your papers"
+              hint="Start a new session and paste a Gamma page or share link with your question, or mention a paper by name. With the Gamma plugin installed, /gamma:gamma starts the workflow.">
+              <p className="settingDesc">The MCP connection above is all Claude Code needs to read your library. The plugin (optional) adds the /gamma:gamma workflow and the Gamma identity.</p>
               <details>
-                <summary>Install the plugin if it is missing</summary>
+                <summary>Install the plugin (once)</summary>
                 <p>Download the Claude Code plugin ZIP from <a href="https://github.com/tim4431/Gamma/releases/latest" target="_blank" rel="noreferrer">Gamma's latest release</a> and extract it into a permanent folder.
                   Open a terminal in the folder containing <code>gamma-marketplace</code> and run:</p>
                 <CopyField label="Claude Code plugin install commands" value={claudePluginInstallCommands} action="Copy plugin install commands" rows={3} />
@@ -147,13 +184,12 @@ export function IntegrationSettings({ workspaceId }) {
         </>}
       </div> : !loadError ? <p role="status">Loading connection settings…</p> : null}
     </Section>
-    <Section title="Workspace access" action={<button className="uiBtn sm" onClick={() => refresh()}>Refresh connections</button>}>
-      {data ? data.tokens.length ? data.tokens.map((item) =>
-        <Row key={item.id} label={item.name}
-          hint={`${item.expires_at * 1000 <= Date.now() ? "Expired" : `${item.scope === "write" ? "Read and write" : "Read-only"} · Expires`} ${new Date(item.expires_at * 1000).toLocaleDateString()}`}>
-          <button className="uiBtn" disabled={busy} onClick={() => revoke(item)}>Disconnect</button>
-        </Row>) : <div className="integrationDetails"><p>No assistants have access to this workspace yet.</p>
-          </div> : null}
+    <Section title="Workspace access" action={
+      <button type="button" className="uiBtn sm iconSq" aria-label="Refresh connections" title="Refresh connections" onClick={() => refresh()}>
+        <RefreshIcon size={13} />
+      </button>}>
+      {data ? data.tokens.length ? data.tokens.map((item) => <ConnectionRow key={item.id} item={item} busy={busy} onRevoke={revoke} />)
+        : <div className="integrationDetails"><p>No assistants have access to this workspace yet.</p></div> : null}
     </Section>
     {message ? <p role="status">{message}</p> : null}
     <details className="integrationAdvanced">
@@ -168,7 +204,7 @@ export function IntegrationSettings({ workspaceId }) {
         </div>
       </Row>
       <Row label="Scope" hint={scope === "write"
-        ? "Read and write: what an offline copy on another Gamma (Settings → Workspaces → Offline copies there) signs in with. Assistants only need read."
+        ? "Read and write: what an offline copy on another Gamma (Settings → Workspaces → Clones there) signs in with. Assistants only need read."
         : "Read-only: assistants. Choose “Read and write” for an offline copy of this workspace on another Gamma."}>
         <Segmented value={scope} onChange={setScope} options={[["read", "Read-only"], ["write", "Read and write"]]} />
       </Row>

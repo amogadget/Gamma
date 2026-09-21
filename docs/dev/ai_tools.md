@@ -41,6 +41,7 @@ scope.
 | `list_pages` | List pages | folder | List the folder's pages: id, title, attachments (`[pdf]` when the page carries a PDF, `[]` for text-only), folder paths, labels, cached metadata (first author, year, venue), last-update date |
 | `read_page` | Read pages | folder + page | Read one page: title, properties, the user's highlights and notes, and — when it carries a PDF — a windowed excerpt of the attachment's extracted text |
 | `read_block` | Read note blocks | folder + page | Read a page's notes as an id-prefixed outline — the ids the editing tools take |
+| `view_pdf_page` | View PDF pages | folder + page | Look at one page of the page's PDF as a picture — a scan with no usable text layer, a figure, a table's layout |
 | `search_library` | Search library | folder + page | Full-text search over the reachable pages' notes AND PDF text; hits carry a `source` (note hits: block id + page, PDF hits: page number). `search_pdfs` is its deprecated alias (replay only) |
 | `search_papers` | Search papers online | folder + page | Scholarly search outside the library — Crossref + arXiv (keyless), or a direct DOI / arXiv-id lookup — returning registry records with the `doi:` / `arXiv:` string `fetch_paper` takes |
 | `fetch_paper` | Fetch documents | folder + page | Read a document that is not in the library by DOI, arXiv id or URL: the PDF behind it (same resolver as opening a link, open-access fallback included) in `read_page`-style windows, else the web page's readable text; nothing is stored |
@@ -103,6 +104,30 @@ contents are snipped per line with an explicit "read_block this id for the
 full text" marker, and the listing stops at the read-window budget naming how
 many blocks were left out. (`read_page` shows the same notes without ids —
 context for answering; `read_block` is the editing view.)
+
+### view_pdf_page (both scopes)
+
+The model's eyes on a PDF: `page_id` + 1-based `pdf_page` rasterize that
+page through pdfium (`pdf_text.render_page`, under the same lock as every
+other pdfium walk) with its longer side at `RENDER_MAX_SIDE` px (1568 —
+past that providers downscale anyway), JPEG through Pillow when it is
+installed, else a PNG written in-process. The result text names the page,
+the document's page count and the picture's size; the picture itself rides
+on the action as `images` (`[(media_type, base64)]`). `run_agent_tool` keeps
+it there and the chat loop moves it onto the model's tool result
+(`{"role": "tool", …, "images"}`) before the chip is streamed — so the
+picture reaches the model once and is never saved into the chat or replayed
+(the result text says so; a later turn calls again). On the wire an
+Anthropic `tool_result` carries the image blocks after the text; the OpenAI
+chat-completions and Responses wires only take text in a tool result, so
+their pictures follow the round's results as one user turn ("Pictures
+returned by the tool calls above, in call order"; `ai_client.py`
+`_tool_image_turns`) — never the turn the user's own attachments ride on.
+The armed prompt tells the model when a picture is worth its tokens
+(missing or garbled extracted text, a figure, handwriting) and to say when
+an answer was read from one. A page without a PDF, a page number past the
+end (the count is named) and a file pdfium can't open are refused in text.
+Its chip is 👁 "Looked at p. N of …", carrying `page_id` + `pdf_page`.
 
 ### search_papers / fetch_paper (both scopes, one permission each)
 
@@ -225,7 +250,7 @@ refuses to execute them if called. Output/argument sizes are capped
 rounds and a ≤200-mutation guard, detailed in [ai.md](ai.md).
 
 **Every tool call is shown in the reply** — reads included: listing, reading
-and searching render as ☰/📖/🔍 lines, the web tools as 🌐/⬇ lines; renames, moves and note edits/creates
+and searching render as ☰/📖/🔍 lines, a viewed PDF page as a 👁 line, the web tools as 🌐/⬇ lines; renames, moves and note edits/creates
 as ✎/📁/＋ lines — so there is always a visible record of what the agent
 looked at and changed (clicking a chip expands the arguments and the output
 the model got).

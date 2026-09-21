@@ -18,9 +18,9 @@
 // edit waits (the page's collab session raises `gamma:local-edit` when it
 // queues ops); the log too while open.
 import React from "react";
-import { API, apiJson } from "../shared/lib/utils";
+import { API, apiJson, fmtBytes } from "../shared/lib/utils";
 import { Row, Segmented, Toggle } from "../settings/SettingsKit";
-import { ConflictCard, Marked, wordDiff } from "./MergeResolver";
+import { ConflictCard, Marked, useConflicts, wordDiff } from "./MergeResolver";
 import {
   ActivityIcon, AlertCircleIcon, ArrowDownIcon, ArrowLeftIcon, ArrowUpDownIcon, ArrowUpIcon, CheckIcon,
   ClockIcon, CloudDownloadIcon, ExternalLinkIcon, HandIcon, HistoryIcon, LinkIcon, PenIcon, RefreshIcon,
@@ -58,13 +58,6 @@ export function clock(iso) {
 
 export function n(count, word) {
   return `${count || 0} ${word}${count === 1 ? "" : "s"}`;
-}
-
-export function bytes(b) {
-  if (!b && b !== 0) return "";
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
-  return `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
 
 // The git-style block counts of a log row or a round: "+3 −1 ~2" ("" when
@@ -186,7 +179,7 @@ export function Progress({ progress: p }) {
         <div className="mirrorFile" title={f.dir === "up" ? "Pushing to the remote" : "Pulling from the remote"}>
           {f.dir === "up" ? <ArrowUpIcon size={12} /> : <ArrowDownIcon size={12} />}
           <span className="mirrorEllipsis">{f.name}</span>
-          <span className="mirrorFileBytes">{bytes(f.done)}{f.total ? ` / ${bytes(f.total)}` : ""}</span>
+          <span className="mirrorFileBytes">{fmtBytes(f.done)}{f.total ? ` / ${fmtBytes(f.total)}` : ""}</span>
           {f.total ? <div className="mirrorBar thin"><span style={{ width: `${Math.round((100 * f.done) / f.total)}%` }} /></div> : null}
         </div>
       ) : null}
@@ -307,22 +300,7 @@ function SettingsView({ info, wsId, onBack, reload, onOpenSettings }) {
 
 // The conflicts, each a card resolved here or opened on its block.
 function ReviewView({ wsId, onBack, jumpTo }) {
-  const [items, setItems] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  React.useEffect(() => {
-    apiJson(`${API}/mirrors/${encodeURIComponent(wsId)}/conflicts`).then((d) => setItems(d.conflicts || [])).catch(() => setItems([]));
-  }, [wsId]);
-  async function resolve(c, choice) {
-    setBusy(true);
-    try {
-      await apiJson(`${API}/mirrors/${encodeURIComponent(wsId)}/conflicts/${c.id}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }),
-      });
-      setItems((prev) => (prev || []).filter((x) => x.id !== c.id));
-    } catch {}
-    setBusy(false);
-    window.dispatchEvent(new CustomEvent("gamma:mirror"));
-  }
+  const [items, busy, resolve] = useConflicts(wsId);
   return (
     <>
       <div className="mirrorPopHead">

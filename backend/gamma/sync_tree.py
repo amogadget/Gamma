@@ -131,32 +131,6 @@ def diff(base: dict, target: dict, page_id: str, *, with_base: bool = True) -> l
     return ops
 
 
-def apply_to_snapshot(snapshot: dict, ops: list[dict]) -> dict:
-    """What the server would hold after ``ops`` (positions taken as sent) —
-    for tests and for keeping a base current without a refetch."""
-    out = {k: {**v, "props": dict(v["props"])} for k, v in snapshot.items()}
-    for op in ops:
-        kind, bid = op["op"], op["id"]
-        if kind == "insert":
-            out[bid] = {"parent": op["parent"], "position": op.get("position") or "",
-                        "content": op.get("content") or "", "props": dict(op.get("props") or {})}
-        elif kind == "move" and bid in out:
-            out[bid]["parent"] = op["parent"]
-            out[bid]["position"] = op.get("position") or out[bid]["position"]
-        elif kind == "set" and bid in out:
-            if op.get("content") is not None:
-                out[bid]["content"] = op["content"]
-            for k, v in (op.get("props") or {}).items():
-                if v is None:
-                    out[bid]["props"].pop(k, None)
-                else:
-                    out[bid]["props"][k] = v
-        elif kind == "delete":
-            for gone in subtree_ids(out, bid) if bid in out else ():
-                out.pop(gone, None)
-    return out
-
-
 def upload_refs(blocks) -> set[str]:
     """The upload file names a set of blocks (snapshot values or op dicts)
     reference: ``/api/uploads/<hash>.<ext>`` in content or properties, and

@@ -109,3 +109,13 @@ export function mermaidFence(source) {
   const ticks = "`".repeat(Math.max(3, ...Array.from(source.matchAll(/`+/g), (m) => m[0].length + 1)));
   return `${ticks}mermaid\n${source}\n${ticks}`;
 }
+
+// Mermaid typesets only `$$…$$` labels (its katexRegex), while notes write
+// math as `$…$`. Upgrade a note-style span to the form Mermaid reads: a
+// same-line pair whose content hugs both dollars and is not followed by a
+// digit, so prices ("$5 and $6") and escaped `\$` stay text; existing
+// `$$…$$` spans pass through untouched.
+export function mermaidMath(source) {
+  return (source || "").replace(/\$\$[^$\n]*\$\$|\\\$|\$([^$\s][^$\n]*?[^$\s]|[^$\s])\$(?!\d)/g,
+    (m, inner) => inner == null ? m : `$$${inner}$$`);
+}

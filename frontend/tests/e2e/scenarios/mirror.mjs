@@ -1,7 +1,7 @@
 // Clones (docs/dev/mirror.md): Settings → Workspaces → Clones. The server
 // clones one of its own workspaces over its real HTTP API with a write
-// token made through the API: the dialog, the row and its status, Pull &
-// push, the (empty) conflicts list, opening the clone, the sync pill with
+// token made through the API: the dialog, the row and its status, Sync,
+// the (empty) conflicts list, opening the clone, the sync pill with
 // its settings (cadence, detach, reattach), a merge conflict resolved on its
 // block, removing the origin.
 import { Account } from "../harness.mjs";

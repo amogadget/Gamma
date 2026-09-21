@@ -133,6 +133,8 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
     await page.waitForSelector(".pdfInkSub[data-ink-options='tool']");
     await page.click(".pdfInkSub button[aria-label='Colour #dc2626']");
     await page.click(".pdfInkSub button[aria-label='Width 4 pt']");
+    await page.getByRole("button", { name: "Monoline", exact: true }).click();
+    assertEq(await page.getByRole("button", { name: "Monoline", exact: true }).getAttribute("aria-pressed"), "true");
     await page.click(".pdfInkSub button[aria-label='Duplicate tool']");
     await until(async () => (await page.$$(".pdfInkBar .inkToolInk")).length === 8, { what: "a duplicated preset" });
     assert(await page.$(".pdfInkSub[data-ink-options='tool']"), "the copy stays open for editing");
@@ -152,6 +154,7 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
       return null;
     }, { what: "a stroke in the copy's colour on the server" });
     assertEq(red.size, 4, "the copy drew with its width");
+    assertEq(red.brush, "monoline", "the duplicated preset saved the monoline brush");
     assertEq(red.tool, "pen", "…as a pen");
     await page.click(".pdfInkSub button[aria-label='Remove tool']");
     await until(async () => (await page.$$(".pdfInkBar .inkToolInk")).length === 7, { what: "the copy removed" });
@@ -163,6 +166,12 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
     await page.waitForSelector(".pdfInkBar");
     assertEq(await page.$eval(".pdfInkBar .inkToolInk", (el) => getComputedStyle(el).backgroundColor), "rgb(220, 38, 38)",
       "the first preset kept its colour");
+    await page.keyboard.press("1");
+    await page.click(".pdfInkBar .inkToolBtn.modeActive");
+    assertEq(await page.getByRole("button", { name: "Monoline", exact: true }).getAttribute("aria-pressed"), "true",
+      "the first preset kept its brush across reload");
+    await page.getByRole("button", { name: "Pen", exact: true }).click();
+    assertEq(await page.getByRole("button", { name: "Pen", exact: true }).getAttribute("aria-pressed"), "true");
     // The lasso's box mode: a dragged rectangle selects what it covers.
     await page.keyboard.press("l");
     await page.click(".pdfInkBar button[title^='Lasso']");

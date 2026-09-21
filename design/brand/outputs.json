@@ -100,12 +100,6 @@
     "theme": "light"
   },
   {
-    "source": "compositions/hero-dark.svg",
-    "destination": "docs/assets/branding/gamma-hero-dark.svg",
-    "kind": "hero",
-    "theme": "dark"
-  },
-  {
     "source": "compositions/logo.svg",
     "destination": "docs/assets/branding/gamma-logo.svg",
     "kind": "logo",

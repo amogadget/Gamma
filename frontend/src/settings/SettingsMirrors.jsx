@@ -2,22 +2,22 @@
 // workspaces that follow a workspace on another Gamma server, in git's
 // words a clone and its origin (docs/dev/mirror.md, GUI for /api/mirrors*).
 // A row per clone, its avatar the clone's state (syncing, up to date, a
-// problem, detached): Open, Pull & push (Reattach when detached), the
+// problem, detached): Open, Sync (Reattach when detached), the
 // conflicts, and a "more" menu with force pull / force push, detach and
 // remove origin. The conflicts view lists the same cards as the row chips,
 // each resolved here or opened on its block. "Clone a remote workspace"
 // asks for the server address and a write token made there (Settings →
 // Integrations on that server), into a new workspace or an existing one.
 import React from "react";
-import { API, apiJson } from "../shared/lib/utils";
+import { API, apiJson, fmtBytes } from "../shared/lib/utils";
 import { Section, SubDialog, Field, IconChoices, Segmented, Empty } from "./SettingsKit";
 import { ActionMenu, MenuSelect } from "../shared/ui/Menus";
 import {
   AlertCircleIcon, ArrowDownIcon, ArrowUpDownIcon, CheckIcon, CloudDownloadIcon, HardDriveIcon, LinkIcon, MoreIcon,
   PlusIcon, RefreshIcon, TrashIcon, UnlinkIcon, UploadIcon,
 } from "../shared/ui/Icons";
-import { bytes, clock, hostOf, isPullOnly, mirrorState, roundSummary } from "../collaboration/MirrorPopover";
-import { ConflictCard } from "../collaboration/MergeResolver";
+import { clock, hostOf, isPullOnly, mirrorState, roundSummary } from "../collaboration/MirrorPopover";
+import { ConflictCard, useConflicts } from "../collaboration/MergeResolver";
 
 // The account's mirrors (null while loading). `enabled` false (a guest, or
 // signed out) reads nothing: the endpoint would refuse.
@@ -39,7 +39,7 @@ export function mirrorStatusLine(m) {
   const st = mirrorState(m);
   if (m.detached || m.mode === "off") return `detached${s.detached_at ? ` ${clock(s.detached_at)}` : ""} · reattach to merge what both sides did meanwhile`;
   if (st.tone === "busy") {
-    const file = p?.file ? ` · ${p.file.dir === "up" ? "pushing" : "pulling"} ${p.file.name} ${bytes(p.file.done)}${p.file.total ? ` / ${bytes(p.file.total)}` : ""}` : "";
+    const file = p?.file ? ` · ${p.file.dir === "up" ? "pushing" : "pulling"} ${p.file.name} ${fmtBytes(p.file.done)}${p.file.total ? ` / ${fmtBytes(p.file.total)}` : ""}` : "";
     return `${p?.total ? `${p.first ? "cloning" : "syncing"} ${p.done} of ${p.total} pages…` : "syncing…"}${file}`;
   }
   if (s.last_error) return `problem: ${s.last_error}`;
@@ -102,27 +102,8 @@ export function MirrorDialog({ busy, error, onSubmit, onClose, candidates = [] }
 }
 
 export function MirrorConflicts({ mirror, onClose, setStatus, closeSettings }) {
-  const [items, setItems] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const ws = mirror.workspace_id;
-  const load = React.useCallback(() => {
-    apiJson(`${API}/mirrors/${encodeURIComponent(ws)}/conflicts`).then((d) => setItems(d.conflicts || [])).catch(() => setItems([]));
-  }, [ws]);
-  React.useEffect(() => { load(); }, [load]);
-  async function resolve(c, choice) {
-    setBusy(true);
-    try {
-      await apiJson(`${API}/mirrors/${encodeURIComponent(ws)}/conflicts/${c.id}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }),
-      });
-      setItems((prev) => (prev || []).filter((x) => x.id !== c.id));
-    } catch (err) {
-      setStatus?.(`Could not resolve: ${err.message}`);
-    } finally {
-      setBusy(false);
-      window.dispatchEvent(new CustomEvent("gamma:mirror"));
-    }
-  }
+  const onError = React.useCallback((message) => setStatus?.(`Could not resolve: ${message}`), [setStatus]);
+  const [items, busy, resolve] = useConflicts(mirror.workspace_id, { onError });
   function open(c) {
     closeSettings?.();
     window.dispatchEvent(new CustomEvent("gamma:jump", { detail: { page: c.page_id, block: c.block_id } }));

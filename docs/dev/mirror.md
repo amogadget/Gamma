@@ -12,12 +12,12 @@ Code: `gamma/sync_engine.py` (the engine and the mirror registry),
 `gamma/routers/sync.py` (the change feed and `whoami`, what a mirror reads
 on the remote), `gamma/routers/mirrors.py` (the mirror API on the server
 that holds the copy), `frontend/src/settings/SettingsMirrors.jsx` (Settings →
-Workspaces → Offline copies), `frontend/src/collaboration/MirrorPopover.jsx`
+Workspaces → Clones), `frontend/src/collaboration/MirrorPopover.jsx`
 (the header's sync pill, its settings and review views),
 `frontend/src/collaboration/MergeResolver.jsx` (the merge chip on a block
-row), `desktop/main.js` `keepOffline` (the shell's one-click flow). Research: [research/collaboration.md](../research/collaboration.md)
-for why the model is ops plus a three-way merge and not a CRDT; the study
-that led here is the upstream feature audit in `todos/`.
+row), `desktop/main.js` `keepOffline` (the shell's one-click flow). Why the
+model is ops plus a three-way merge and not a CRDT:
+[research/collaboration.md](../research/collaboration.md).
 
 ## The model in one paragraph
 
@@ -111,7 +111,7 @@ Three more rules keep the two trees identical in the odd cases
   to push.
 - **The same edit made on both sides** (or a retried batch) is one edit: an
   op whose content already is the block's text merges nothing (`ops.py`,
-  `textmerge.merge`), where patching the change in again used to double it.
+  `textmerge.merge`).
 
 Every decision the engine takes on its own is a row of `sync_conflicts`
 (`merged`, `kept_local_edit`, `restored_remote_edit`, `page_restored`,
@@ -189,103 +189,122 @@ the row's `stats` JSON; `list_log` hands `changes` out as its own key.
 The UI speaks git: the mirror is a **clone**, the workspace it follows is
 its **origin** (the **remote**), a round **pulls** then **pushes** but the
 UI only ever says **Sync** (the direction is *Two-way* or *Receive only*),
-a block both sides changed is a **conflict**
-resolved between **local** and **remote**, a force is **force pull** /
-**force push**, pausing is **detach** / **reattach**, and dropping the link
-is **remove origin**. (The code and the API keep *mirror*, *remote*,
-*mine* / *theirs*.)
+a block both sides changed is a **conflict** resolved between **local** and
+**remote**, a force is **force pull** / **force push**, pausing is
+**detach** / **reattach**, and dropping the link is **remove origin**. (The
+code and the API keep *mirror*, *remote*, *mine* / *theirs*.)
 
-- **The header's sync pill** (`MirrorPopover.jsx`), shown while a clone is
-  open, in the desktop app and in a browser alike, is an icon whose state
-  is drawn on it, like the background-tasks button: the refresh glyph
-  spinning while a round runs; a count badge when conflicts wait; a dot —
-  accent for local edits not synced yet (the icon spins instead when
-  *Sync after an edit* is on, until the round is confirmed done), green
-  when up to date, red on a problem; an unlink glyph when detached; a cloud while the first fill
-  has not run. No words on it: the state's sentence (and the last sync
-  time) is the tooltip, and `data-state` (`busy`, `conflicts`, `error`,
-  `pending`, `ok`, `detached`, `new`) is what the browser test reads. The
-  pending state is known before the server says so: the page's collab
-  session raises `gamma:local-edit` when it queues ops, the pill shows the
+### The header's sync pill (`MirrorPopover.jsx`)
+
+Shown while a clone is open, in the desktop app and in a browser alike.
+
+- An icon whose state is drawn on it, like the background-tasks button: the
+  refresh glyph spinning while a round runs; a count badge when conflicts
+  wait; a dot, accent for local edits not synced yet, green when up to date,
+  red on a problem; an unlink glyph when detached; a cloud while the first
+  fill has not run. With *Sync after an edit* on, the icon spins instead of
+  showing the accent dot, until the round is confirmed done.
+- No words on it: the state's sentence and the last sync time are the
+  tooltip. `data-state` (`busy`, `conflicts`, `error`, `pending`, `ok`,
+  `detached`, `new`) is what the browser test reads.
+- The pending state is known before the server says so: the page's collab
+  session raises `gamma:local-edit` when it queues ops. The pill shows the
   dot at once and polls every 2 s until a poll after a short grace reports
-  `pending_local` false. Click: a popover of icons and numbers — the
-  clone's name with *remote · host*, a **Sync** icon button and the gear
-  in the head; the state line (the last
-  round's `+3 −1 ~2`, the progress bars while a round runs, a *Resolve*
-  button when conflicts wait → the conflict cards, each resolved in place
-  or opened on its block); and the **Log** — a direction arrow per row and
-  its `+3 −1 ~2` block counts; clicking a row opens its changes block by
-  block as a diff (`ChangeList`: added blocks tinted green with `+`,
-  removed ones struck red with `−`, a changed block as a word diff of old
-  → new with `~`, moves and property changes named), and the arrow at the
-  row's end opens the page. The gear turns the popover into the clone's
-  **sync settings**, built from the settings kit's rows: *Automatic sync*
-  (Live / 30 s / 5 min / Manual, a `Segmented`), the *Sync after an edit*
-  toggle, *Direction* (*Two-way* / *Receive only*), then *Force pull* /
-  *Force push* (confirmed inline; a receive-only clone cannot force push),
-  *Detach* / *Reattach*, and a danger *Remove origin*.
-  `mirrorState(info, {busy, pending})` is the one reading of the status —
-  state, icon, tone, line, tooltip, badge or dot — that the pill, the
-  popover and the Settings row share. Polls the mirror every 20 s, every
-  2 s while a round runs or an edit is pending (the log too while open);
-  when a poll sees the numbers move it raises `gamma:mirror-changed` so the
-  page's conflict chips refresh.
-- **The conflict card** (`MergeResolver.jsx`, `ConflictCard`): one surface
-  for every list — the chip on a block row, the pill's conflicts view,
-  Settings. A kind line (a merge glyph for *Auto-merged*, an arrow for a
-  restore, the long story as the hint), then the versions: **Local** (this
-  clone) and **Remote** (origin) side by side, and for an auto-merge the
-  **Merged** text under them. With the row's `base` each panel is a
-  git-style word diff (`wordDiff`, an LCS over word and space tokens):
-  local shows what local changed against the base — its added words in
-  the local colour, the words it removed struck through — remote likewise
-  in the remote colour, and the merged text shows what the merge did, each
-  added word coloured by the side that wrote it (dotted when both did).
-  Without a base (a *diverged* block, or a row from before it was kept)
-  the two texts are shown against each other and the merged text by
-  attribution. Every version carries a radio (clicking the panel picks it
-  too); the one in the block now is tagged *in the block* and preselected,
-  and one **Apply** confirms — on the preselected version it marks the
-  conflict resolved as it is, on another it writes that text. The
-  non-textual kinds (*Kept local*, *Restored
-  remote*, the page restores) show the one text involved and an *OK*.
-  **The chip**: a block the sync merged or had to decide on carries a
-  small chip at its row's right end; its popover is the card, and App owns
-  which chip is open (`mergeOpen`) and the page's conflicts in tree order
-  (`mergeOrder`): the card's ‹ n / N › step through them, and a decision
-  opens the next one down the page, so a page of conflicts is worked
-  through in one pass. App reads the page's conflicts (`GET
-  /api/mirrors/{ws}/conflicts?page=`) on open, every 15 s and on
-  `gamma:mirror` / `gamma:mirror-changed`; a decision is an ordinary edit
-  the next round pushes. The lists in the pill and in Settings jump to the
-  block (`gamma:jump`).
-- **Settings → Workspaces → Clones** (`SettingsMirrors.jsx`): one row per
-  clone whose avatar is its state (the same reading as the pill: a spinning
-  refresh while a round runs, a check when up to date, a warning on a
-  problem, an unlink glyph when detached), the name with its tags (*open*,
-  *receive only*, *detached*, *problem*, *N conflicts*), *clone of X · origin
-  host* and one short status line (progress and the file in flight while a
-  round runs; *up to date 14:37 · 2 pages pulled* after; *local edits not
-  pushed yet* with an *unpushed edits* tag while `pending_local`). Actions:
-  Open, *Sync* (*Reattach* when detached),
-  *Conflicts* (the same cards,
-  each resolved there or opened on its block) and a "more" `ActionMenu` —
-  *Force pull*, *Force push* (off on a pull-only clone), *Detach*, and a
-  danger *Remove origin* — the forces and the removal confirmed by the
-  shared confirm box. (Force push is off on a receive-only clone.) No intro paragraph: the empty state's one sentence
-  says what a clone is. *Clone a remote workspace* asks for the origin
-  server's address, a write token made there, *Into* (a new workspace, or
-  one of yours — an imported backup, a clone whose origin was removed —
-  with *If a page differs*: take remote's or keep local), a name and the
-  direction as two `IconChoices` tiles.
-- **The desktop switcher**: on a remote server every workspace row carries
-  a *clone* chip on hover; once a clone exists the chip reads *open clone*
-  and opens it (one clone per workspace — a second *clone* opens the
-  existing one); on the local server the clone's row reads *clone* and its
-  *origin* chip opens the workspace it follows. The shell keeps a map of
-  clones in its registry and starts the local servers that hold them when
-  the app launches, so clones sync in the background whichever server the
-  window shows ([desktop/docs/architecture.md](../../desktop/docs/architecture.md)).
+  `pending_local` false.
+- `mirrorState(info, {busy, pending})` is the one reading of the status
+  (state, icon, tone, line, tooltip, badge or dot) that the pill, the
+  popover and the Settings row share.
+- Polls the mirror every 20 s, every 2 s while a round runs or an edit is
+  pending (the log too while open). When a poll sees the numbers move it
+  raises `gamma:mirror-changed` so the page's conflict chips refresh.
+
+Click: a popover of icons and numbers.
+
+- The head: the clone's name with *remote · host*, a **Sync** icon button
+  and the gear.
+- The state line: the last round's `+3 −1 ~2`, the progress bars while a
+  round runs, a *Resolve* button when conflicts wait (it opens the conflict
+  cards, each resolved in place or opened on its block).
+- The **Log**: a direction arrow per row and its `+3 −1 ~2` block counts.
+  Clicking a row opens its changes block by block as a diff (`ChangeList`:
+  added blocks tinted green with `+`, removed ones struck red with `−`, a
+  changed block as a word diff of old → new with `~`, moves and property
+  changes named). The arrow at the row's end opens the page.
+- The gear turns the popover into the clone's **sync settings**, built from
+  the settings kit's rows: *Automatic sync* (Live / 30 s / 5 min / Manual, a
+  `Segmented`), the *Sync after an edit* toggle, *Direction* (*Two-way* /
+  *Receive only*), then *Force pull* / *Force push* (confirmed inline; a
+  receive-only clone cannot force push), *Detach* / *Reattach*, and a danger
+  *Remove origin*.
+
+### The conflict card (`MergeResolver.jsx`, `ConflictCard`)
+
+One surface for every list: the chip on a block row, the pill's conflicts
+view, Settings.
+
+- A kind line (a merge glyph for *Auto-merged*, an arrow for a restore, the
+  long story as the hint), then the versions: **Local** (this clone) and
+  **Remote** (origin) side by side, and for an auto-merge the **Merged**
+  text under them.
+- With the row's `base` each panel is a git-style word diff (`wordDiff`, an
+  LCS over word and space tokens). Local shows what local changed against
+  the base, its added words in the local colour and the words it removed
+  struck through; remote likewise in the remote colour. The merged text
+  shows what the merge did, each added word coloured by the side that wrote
+  it (dotted when both did).
+- Without a base (a *diverged* block, or a row from before it was kept) the
+  two texts are shown against each other and the merged text by
+  attribution.
+- Every version carries a radio (clicking the panel picks it too). The one
+  in the block now is tagged *in the block* and preselected, and one
+  **Apply** confirms: on the preselected version it marks the conflict
+  resolved as it is, on another it writes that text.
+- The non-textual kinds (*Kept local*, *Restored remote*, the page
+  restores) show the one text involved and an *OK*.
+- `useConflicts(wsId)` loads a clone's open conflicts and posts a decision;
+  the pill's review view and Settings share it.
+
+**The chip.** A block the sync merged or had to decide on carries a small
+chip at its row's right end; its popover is the card. App owns which chip is
+open (`mergeOpen`) and the page's conflicts in tree order (`mergeOrder`):
+the card's ‹ n / N › step through them, and a decision opens the next one
+down the page, so a page of conflicts is worked through in one pass. App
+reads the page's conflicts (`GET /api/mirrors/{ws}/conflicts?page=`) on
+open, every 15 s and on `gamma:mirror` / `gamma:mirror-changed`; a decision
+is an ordinary edit the next round pushes. The lists in the pill and in
+Settings jump to the block (`gamma:jump`).
+
+### Settings → Workspaces → Clones (`SettingsMirrors.jsx`)
+
+- One row per clone. Its avatar is its state (the same reading as the pill:
+  a spinning refresh while a round runs, a check when up to date, a warning
+  on a problem, an unlink glyph when detached), then the name with its tags
+  (*open*, *receive only*, *detached*, *problem*, *unpushed edits*, *N
+  conflicts*), *clone of X · origin host* and one short status line
+  (progress and the file in flight while a round runs; *up to date 14:37 ·
+  2 pages pulled* after; *local edits not pushed yet* while `pending_local`).
+- Actions: Open, *Sync* (*Reattach* when detached), *Conflicts* (the same
+  cards, each resolved there or opened on its block) and a "more"
+  `ActionMenu`: *Force pull*, *Force push* (off on a receive-only clone),
+  *Detach*, and a danger *Remove origin*. The forces and the removal are
+  confirmed by the shared confirm box.
+- No intro paragraph: the empty state's one sentence says what a clone is.
+- *Clone a remote workspace* asks for the origin server's address, a write
+  token made there, *Into* (a new workspace, or one of yours: an imported
+  backup, a clone whose origin was removed, with *If a page differs*: take
+  remote's or keep local), a name and the direction as two `IconChoices`
+  tiles.
+
+### The desktop switcher
+
+On a remote server every workspace row carries a *clone* chip on hover.
+Once a clone exists the chip reads *open clone* and opens it (one clone per
+workspace: a second *clone* opens the existing one). On the local server the
+clone's row reads *clone* and its *origin* chip opens the workspace it
+follows. The shell keeps a map of clones in its registry and starts the
+local servers that hold them when the app launches, so clones sync in the
+background whichever server the window shows
+([desktop/docs/architecture.md](../../desktop/docs/architecture.md)).
 
 ## Credentials
 
@@ -397,4 +416,6 @@ of `desktop/test/e2e.js`.
   cross-page moves, imports).
 - A mirror of a mirror works but doubles the delay; a workspace mirrored
   from two servers into one copy is refused (one remote per copy).
-- No end-to-end browser step yet: the Playwright suite runs one server.
+- Every automated test runs both sides in one process (the backend suite's
+  TestClient transport; the browser scenario clones a workspace of the same
+  server). Two real servers are not exercised.

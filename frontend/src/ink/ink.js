@@ -76,7 +76,8 @@ export function normalizeTools(list) {
     let id = typeof t.id === "string" && /^[A-Za-z0-9_-]{1,24}$/.test(t.id) ? t.id : toolId();
     while (seen.has(id)) id = toolId();
     seen.add(id);
-    out.push({ id, kind, color: t.color.toLowerCase(), size: Math.round(size * 100) / 100 });
+    out.push({ id, kind, color: t.color.toLowerCase(), size: Math.round(size * 100) / 100,
+      ...(kind === "pen" && t.brush === "monoline" ? { brush: "monoline" } : {}) });
     if (out.length >= MAX_TOOLS) break;
   }
   return out.length ? out : DEFAULT_TOOLS.map((t) => ({ ...t }));
@@ -85,14 +86,15 @@ export function normalizeTools(list) {
 export function toolStyle(preset) {
   return preset.kind === "highlighter"
     ? { tool: "highlighter", color: preset.color, size: preset.size, opacity: HIGHLIGHTER_OPACITY }
-    : { tool: "pen", color: preset.color, size: preset.size, opacity: 1 };
+    : { tool: "pen", color: preset.color, size: preset.size, opacity: 1,
+      ...(preset.brush === "monoline" ? { brush: "monoline" } : {}) };
 }
 
 
 // --- codec -----------------------------------------------------------------
 
 // samples: [{x, y, p?, t?}] with x/y in points and t in ms since t0.
-export function encodeStroke({ id, tool = "pen", color = PEN_COLORS[0], size = 2, opacity = 1,
+export function encodeStroke({ id, tool = "pen", brush, color = PEN_COLORS[0], size = 2, opacity = 1,
   pen = true, t0 = null, samples, ch = "xyp" }) {
   const pts = [];
   let px = 0, py = 0, pt = 0;
@@ -107,6 +109,7 @@ export function encodeStroke({ id, tool = "pen", color = PEN_COLORS[0], size = 2
     }
   }
   const out = { id: id || strokeId(), tool, color, size, opacity, pen, ch, pts };
+  if (tool === "pen" && brush === "monoline") out.brush = "monoline";
   if (t0 != null) out.t0 = t0;
   return out;
 }
@@ -137,7 +140,7 @@ export function decodeStroke(stroke) {
 }
 
 export function strokeWidth(stroke, p) {
-  if (stroke.tool !== "pen" || stroke.pen === false) return stroke.size;
+  if (stroke.tool !== "pen" || stroke.pen === false || stroke.brush === "monoline") return stroke.size;
   return stroke.size * (1 + THINNING * (p - 0.5));
 }
 
@@ -308,7 +311,7 @@ export function transformStrokes(ink, ids, { cx, cy, scale = 1, angle = 0 }) {
 
 // A stroke's samples → a stroke of the same look (fresh id).
 function restroke(stroke, samples) {
-  return encodeStroke({ tool: stroke.tool, color: stroke.color, size: stroke.size, opacity: stroke.opacity,
+  return encodeStroke({ tool: stroke.tool, brush: stroke.brush, color: stroke.color, size: stroke.size, opacity: stroke.opacity,
     pen: stroke.pen !== false, t0: stroke.t0 ?? null, samples, ch: stroke.ch });
 }
 
@@ -394,7 +397,7 @@ export function svgPathFromPoints(points) {
 // Outline options in page units — thickness is size, so zoom scales ink
 // like ink on paper.
 export function outlineOptions(stroke) {
-  return { size: stroke.size, thinning: stroke.pen === false ? 0 : THINNING, smoothing: 0.5,
+  return { size: stroke.size, thinning: stroke.pen === false || stroke.brush === "monoline" ? 0 : THINNING, smoothing: 0.5,
     streamline: 0.4, simulatePressure: false, last: true };
 }
 

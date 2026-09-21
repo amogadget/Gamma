@@ -174,8 +174,8 @@ export async function settingsScenarios(env) {
       await page.getByRole("button", { name: "Copy connection command", exact: true }).click();
       await page.getByText("Copied. You can paste it now.", { exact: true }).waitFor();
       await page.getByText(/Start Claude Code, run \/mcp/).waitFor();
-      await page.getByText(/Start a new session and run \/gamma:gamma/).waitFor();
-      await page.getByText("Install the plugin if it is missing", { exact: true }).click();
+      await page.getByText(/\/gamma:gamma starts the workflow/).waitFor();
+      await page.getByText("Install the plugin (once)", { exact: true }).click();
       const pluginCommands = await page.getByRole("textbox", { name: "Claude Code plugin install commands", exact: true }).inputValue();
       assert(pluginCommands.includes("claude plugin marketplace add ./gamma-marketplace"));
       assert(pluginCommands.includes("claude plugin install gamma@gamma-local --scope user"));

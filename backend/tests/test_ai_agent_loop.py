@@ -116,7 +116,7 @@ def test_chat_page_scope_arms_read_tools(org, monkeypatch):
                                      "agent_scope": "page", "page_id": ids["a"], "stream": True})
     assert r.status_code == 200
     assert [t["name"] for t in seen["tools"]] == [
-        "read_page", "read_block", "search_library", "search_papers", "fetch_paper",
+        "read_page", "read_block", "view_pdf_page", "search_library", "search_papers", "fetch_paper",
         "edit_block", "create_block", "move_block"]
     assert f'page_id "{ids["a"]}"' in seen["system"]
     lines = [json.loads(l) for l in r.text.splitlines() if l.strip()]
@@ -332,7 +332,7 @@ def test_chat_permissions_gate_tools_and_execution(org, monkeypatch):
                                                      "block_edit": False}})
     assert r.status_code == 200
     assert [t["name"] for t in seen["tools"]] == [
-        "list_pages", "read_page", "read_block", "search_library", "search_papers", "fetch_paper"]
+        "list_pages", "read_page", "read_block", "view_pdf_page", "search_library", "search_papers", "fetch_paper"]
     assert seen["blocked"].startswith("error: tool not enabled")
     assert props(c, ids["a"])["content"] == before  # nothing was renamed
 
@@ -396,3 +396,46 @@ def test_chat_agent_history_replay_reaches_provider(org, monkeypatch):
     r = c.post("/api/ai/chat", json={"prompt": "hello", "history": history, "stream": True})
     assert r.status_code == 200
     assert all(not m.get("tool_calls") and m["role"] != "tool" for m in seen["messages"])
+
+
+def test_view_pdf_page_picture_reaches_the_next_round_not_the_chip(org, monkeypatch, tmp_path):
+    """The picture a view_pdf_page call answers with goes to the model as
+    part of the tool result; the streamed (and therefore saved) chip carries
+    only the text."""
+    c, ids = org
+    import gamma.routers.ai as ai_mod
+    from PyPDF2 import PdfWriter
+
+    pdf = tmp_path / "one.pdf"
+    w = PdfWriter()
+    w.add_blank_page(width=100, height=100)
+    with open(pdf, "wb") as f:
+        w.write(f)
+    monkeypatch.setattr("gamma.ai_tools.pdf_path", lambda ws, doc: pdf)
+    opened = []
+
+    def fake_open(messages, system, entry, rt, pdf_b64s=None, **kw):
+        opened.append([dict(m) for m in messages])
+        if len(opened) == 1:
+            return FakeResp([
+                {"type": "content_block_start", "content_block":
+                    {"type": "tool_use", "id": "t1", "name": "view_pdf_page"}},
+                {"type": "content_block_delta", "delta": {"type": "input_json_delta",
+                    "partial_json": json.dumps({"page_id": ids["a"], "pdf_page": 1})}},
+                {"type": "content_block_stop"},
+            ])
+        return FakeResp([{"type": "content_block_delta",
+                           "delta": {"type": "text_delta", "text": "a blank page"}}])
+
+    monkeypatch.setattr(ai_mod, "_open_ai", fake_open)
+    r = c.post("/api/ai/chat", json={"prompt": "what is on page 1?",
+                                     "agent_scope": "page", "page_id": ids["a"], "stream": True})
+    assert r.status_code == 200, r.text
+    result_turn = opened[1][-1]
+    assert result_turn["role"] == "tool" and result_turn["content"].startswith("PDF page 1 of 1")
+    (media_type, data), = result_turn["images"]
+    assert media_type.startswith("image/") and len(data) > 100
+    lines = [json.loads(l) for l in r.text.splitlines() if l.strip()]
+    chip, = [l["action"] for l in lines if "action" in l]
+    assert chip["kind"] == "view" and chip["tool"] == "view_pdf_page"
+    assert "images" not in chip and chip["pdf_page"] == 1

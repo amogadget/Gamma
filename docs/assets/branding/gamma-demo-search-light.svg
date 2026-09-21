@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Search notes, highlights and every PDF at once</title>
+  <desc id="desc">Ctrl+F opens the search; “3000 qubit” is typed and results appear grouped as titles, this paper's notes and the full text of every PDF, each match badged; a folder chip “qc/” narrows them; one hit is picked and the paper opens with the match highlighted.</desc>
+  <defs>
+<g id="gammaMark"><svg width="48" height="48" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-favicon-32">
+        <rect id="gamma-background" width="32" height="32" rx="7" fill="#1e1e1c"/>
+        <!-- both branches of standing wave -->
+        <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+        <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+      </svg></g><g id="gammaLogo">
+  <g transform="scale(2)"><svg width="48" height="48" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-favicon-32">
+        <rect id="gamma-background" width="32" height="32" rx="7" fill="#1e1e1c"/>
+        <!-- both branches of standing wave -->
+        <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+        <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+      </svg></g>
+  <text x="122" y="83" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="100" font-weight="700" letter-spacing="-2.7" fill="#1a1a18">Gamma<tspan font-weight="400" fill="#e8a020" dx="23">PDF</tspan></text>
+</g>
+    <filter id="shadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000000" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="1000" fill="#f6f4ef"/>
+  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.2" transform="scale(1.0000 1.0000)">
+    <path d="M-60 880 C220 1100 560 1000 820 940 S1300 900 1660 1010"/>
+  </g>
+  <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+    <text x="100" y="80" font-size="34" font-weight="600" fill="#1a1a18">Search everything</text>
+    <text x="100" y="116" font-size="20" fill="#6b6a65">Titles, notes, highlights and the text of every PDF — “3000” finds “3,000-qubit” across a line break.</text>
+    <rect x="100" y="160" width="700" height="780" rx="14" fill="#ffffff" stroke="#e3e0d8" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="130" y="200" width="640" height="58" rx="14" fill="#f2f0ea" stroke="#e3e0d8"/>
+    <g fill="none" stroke="#6b6a65" stroke-width="2.3" stroke-linecap="round"><circle cx="156" cy="226" r="9"/><path d="M163 233 172 242"/></g>
+    <text x="740" y="236" text-anchor="end" font-size="15" fill="#6b6a65">Aa · ab · .*</text>
+    <text x="180" y="236" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="26" fill="#1a1a18" textLength="121.2" lengthAdjust="spacing" xml:space="preserve"><tspan opacity="0">3<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.0776;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">0<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.0926;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">0<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.1067;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">0<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.1228;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0"> <animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.1411;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">q<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.1690;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">u<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.1797;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">b<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.1958;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">i<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.2073;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan><tspan opacity="0">t<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.2200;0.9700;1" dur="10s" repeatCount="indefinite"/></tspan></text><g opacity="0"><rect x="180" y="212" width="2.5" height="32" fill="#e8a020"><animate attributeName="x" calcMode="discrete" values="180.0;180.0;194.0;208.1;222.1;236.2;243.4;257.5;271.5;285.6;293.4;301.2;180.0;180.0" keyTimes="0.0000;0.0600;0.0776;0.0926;0.1067;0.1228;0.1411;0.1690;0.1797;0.1958;0.2073;0.2200;0.9700;1" dur="10s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;0.5;0.55;1" dur="1.1s" repeatCount="indefinite"/></rect><animate attributeName="opacity" calcMode="discrete" values="0;1;0;0" keyTimes="0;0.0350;0.3000;1" dur="10s" repeatCount="indefinite"/></g><g><rect x="330" y="212" width="86" height="34" rx="17" fill="#ecdfc4"/><text x="373" y="236" text-anchor="middle" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5a4a24">qc/</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.4600;0.4750;1.0000" dur="10s" repeatCount="indefinite"/></g><g><text x="140" y="280" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" letter-spacing="1.8" fill="#6b6a65">TITLES</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2400;0.2550;1.0000" dur="10s" repeatCount="indefinite"/></g><g><rect x="140" y="296" width="640" height="50" rx="10" fill="#f6f4ef"/><text x="158" y="327" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a18">A quantum processor based on coherent transport…</text><rect x="647" y="308" width="111" height="26" rx="13" fill="#ffe28f" opacity="0.8"/><text x="702.5" y="326" text-anchor="middle" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a4a24">3,000-qubit</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2500;0.2650;1.0000" dur="10s" repeatCount="indefinite"/></g><g><text x="140" y="372" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" letter-spacing="1.8" fill="#6b6a65">THIS PAPER · NOTES</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2400;0.2550;1.0000" dur="10s" repeatCount="indefinite"/></g><g><rect x="140" y="388" width="640" height="50" rx="10" fill="#f6f4ef"/><text x="158" y="419" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a18">“…the 3,000-qubit array holds its coherence…”</text><rect x="647" y="400" width="111" height="26" rx="13" fill="#ffe28f" opacity="0.8"/><text x="702.5" y="418" text-anchor="middle" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a4a24">3,000-qubit</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2500;0.2650;1.0000" dur="10s" repeatCount="indefinite"/></g><g><text x="140" y="464" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" letter-spacing="1.8" fill="#6b6a65">LIBRARY · PDF TEXT</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2400;0.2550;1.0000" dur="10s" repeatCount="indefinite"/></g><g><rect x="140" y="480" width="640" height="50" rx="10" fill="#f6f4ef"/><text x="158" y="511" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a18">Continuous operation of a coherent 3,000-qubit system</text><rect x="710" y="492" width="48" height="26" rx="13" fill="#ffe28f" opacity="0.8"/><text x="734.0" y="510" text-anchor="middle" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a4a24">p. 2</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2500;0.2650;1.0000" dur="10s" repeatCount="indefinite"/></g><g><rect x="140" y="540" width="640" height="50" rx="10" fill="#f6f4ef"/><text x="158" y="571" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a18">…scaling toward 3000 qubits requires…</text><rect x="710" y="552" width="48" height="26" rx="13" fill="#ffe28f" opacity="0.8"/><text x="734.0" y="570" text-anchor="middle" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a4a24">p. 7</text><animate attributeName="opacity" values="0;0;1;1;0.25;0.25" keyTimes="0.0000;0.2650;0.2850;0.4600;0.4800;1.0000" dur="10s" repeatCount="indefinite"/></g><g><rect x="140" y="600" width="640" height="50" rx="10" fill="#f6f4ef"/><text x="158" y="631" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#1a1a18">…arrays of 3,000 atoms in tweezers…</text><rect x="710" y="612" width="48" height="26" rx="13" fill="#ffe28f" opacity="0.8"/><text x="734.0" y="630" text-anchor="middle" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" fill="#5a4a24">p. 1</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.2800;0.2950;1.0000" dur="10s" repeatCount="indefinite"/></g><g><rect x="140" y="480" width="640" height="50" rx="10" fill="none" stroke="#e8a020" stroke-width="2.5"/><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.6200;0.6350;1.0000" dur="10s" repeatCount="indefinite"/></g><g><rect x="860" y="160" width="640" height="780" rx="12" fill="#ffffff" filter="url(#shadow)"/>
+<rect x="910" y="214" width="352" height="14" rx="4" fill="#8d8a82"/>
+<rect x="910" y="240" width="256" height="9" rx="4" fill="#8d8a82"/>
+<rect x="910" y="290" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="314" width="508" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="338" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="362" width="378" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="386" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="410" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="434" width="464" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="458" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="482" width="508" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="506" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="530" width="378" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="554" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="578" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="602" width="464" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="626" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="650" width="508" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="674" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="698" width="378" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="722" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="746" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="770" width="464" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="794" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="818" width="508" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="842" width="540" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="866" width="378" height="9" rx="4.5" fill="#cfccc4"/>
+<rect x="910" y="890" width="540" height="9" rx="4.5" fill="#cfccc4"/><rect x="905" y="384" width="320" height="23" rx="4" fill="#ffe28f" opacity="0.85"/><text x="1500" y="985" text-anchor="end" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#6b6a65">Opened at the match, re-found in the PDF text layer.</text><animate attributeName="opacity" values="0;0;1;1" keyTimes="0.0000;0.6800;0.6950;1.0000" dur="10s" repeatCount="indefinite"/></g><g><circle r="9" fill="#e8a020" opacity="0.9"/><circle r="4" fill="#ffffff"/><animateTransform attributeName="transform" type="translate" values="700 236;700 236;460 505;460 505;1120 420;1120 420;700 236" keyTimes="0.0000;0.5400;0.6200;0.6800;0.7400;0.9400;1.0000" dur="10s" repeatCount="indefinite"/></g>
+  </g>
+</svg>

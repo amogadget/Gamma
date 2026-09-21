@@ -20,6 +20,29 @@ from .logbuf import log
 # carry two agentic extensions beyond {role, content-str}: an assistant message
 # with `tool_calls` ([{id, name, arguments-dict}]) and a {"role": "tool",
 # "call_id", "content"} result entry; each builder maps them to its wire shape.
+# A tool result may also carry `images` ([(media_type, base64)] — a rendered
+# PDF page): Anthropic takes image blocks inside the tool_result; the OpenAI
+# wires only accept text there, so the pictures follow the round's results
+# as one user turn (_TOOL_IMAGES_NOTE) the model reads in call order.
+
+_TOOL_IMAGES_NOTE = "Pictures returned by the tool calls above, in call order:"
+
+
+def _tool_image_turns(messages, make_turn):
+    """The common turn list with every run of tool results followed by one
+    user turn carrying their pictures — ``make_turn(images)`` builds it in
+    the wire's shape. Yields (message, is_image_turn)."""
+    pending = []
+    for m in messages:
+        if m["role"] != "tool" and pending:
+            yield make_turn(pending), True
+            pending = []
+        yield m, False
+        if m["role"] == "tool":
+            pending.extend(m.get("images") or [])
+    if pending:
+        yield make_turn(pending), True
+
 
 def _attach_index(messages) -> int:
     """Index of the message attachments ride on: the last plain user turn
@@ -92,6 +115,10 @@ def _anthropic_messages(messages) -> list:
     for m in messages:
         if m["role"] == "tool":
             block = {"type": "tool_result", "tool_use_id": m["call_id"], "content": m["content"]}
+            if m.get("images"):
+                block["content"] = [{"type": "text", "text": m["content"]}] + [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+                    for media_type, data in m["images"]]
             prev = out[-1] if out else None
             if (prev and prev["role"] == "user" and isinstance(prev["content"], list)
                     and prev["content"] and prev["content"][0].get("type") == "tool_result"):
@@ -159,8 +186,14 @@ def openai_request(
             {"type": "text", "text": last["content"]},
         ]
     wire = [{"role": "system", "content": system}] if system else []
-    for m in messages:
-        if m["role"] == "tool":
+    image_turn = lambda imgs: {"role": "user", "content": [  # noqa: E731
+        {"type": "text", "text": _TOOL_IMAGES_NOTE},
+        *[{"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}}
+          for media_type, data in imgs]]}
+    for m, is_image_turn in _tool_image_turns(messages, image_turn):
+        if is_image_turn:
+            wire.append(m)
+        elif m["role"] == "tool":
             wire.append({"role": "tool", "tool_call_id": m["call_id"], "content": m["content"]})
         elif m["role"] == "assistant" and m.get("tool_calls"):
             wire.append({"role": "assistant", "content": m.get("content") or None,
@@ -214,8 +247,16 @@ def _responses_input(messages, pdf_b64s=None, images=None) -> list:
     """Map the common turn list to Responses API input items (shared by the
     ChatGPT/codex backend and OpenAI's platform /v1/responses)."""
     items = []
-    for message in messages:
-        if message["role"] == "tool":
+    image_turn = lambda imgs: {"type": "message", "role": "user", "content": [  # noqa: E731
+        {"type": "input_text", "text": _TOOL_IMAGES_NOTE},
+        *[{"type": "input_image", "image_url": f"data:{media_type};base64,{data}"}
+          for media_type, data in imgs]]}
+    image_turns = []  # never the turn the user's own attachments ride on
+    for message, is_image_turn in _tool_image_turns(messages, image_turn):
+        if is_image_turn:
+            items.append(message)
+            image_turns.append(message)
+        elif message["role"] == "tool":
             items.append({"type": "function_call_output", "call_id": message["call_id"],
                           "output": message["content"]})
         elif message["role"] == "assistant":
@@ -230,7 +271,8 @@ def _responses_input(messages, pdf_b64s=None, images=None) -> list:
             items.append({"type": "message", "role": "user", "content": content})
     if pdf_b64s or images:
         last = next((item for item in reversed(items)
-                     if item.get("type") == "message" and item.get("role") == "user"), items[-1])
+                     if item.get("type") == "message" and item.get("role") == "user"
+                     and not any(item is turn for turn in image_turns)), items[-1])
         last["content"] = [
             *[
                 {

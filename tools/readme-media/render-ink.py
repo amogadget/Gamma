@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from media_output import ROOT, encode_webp, publish
+from media_output import ROOT, FRAME, encode_webp, publish
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--scratch', type=Path, default=ROOT / 'artifacts/readme-media')
@@ -12,7 +12,7 @@ args = parser.parse_args()
 timeline = json.loads((args.scratch / 'ink-timeline.json').read_text(encoding='utf-8'))
 m = timeline['marks']
 filters = (f'trim=start={m["start"]:.3f}:end={m["end"]:.3f},setpts=PTS-STARTPTS,'
-           'fps=25,pad=1488:948:24:24:color=0xe8edf5,scale=1120:-2:flags=lanczos')
+           f'fps=25,{FRAME},scale=1120:-2:flags=lanczos')
 output = args.scratch / 'rendered-ink.webp'
 report = {'name': 'ink', 'fps': 25, 'width': 1120, **encode_webp(timeline['video'], output, filters)}
 (args.scratch / 'ink-render.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

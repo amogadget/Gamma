@@ -1,14 +1,16 @@
-"""Regenerate the light/dark workspace illustrations."""
-from branding import MARK, DARK_PALETTE, to_dark, write_svg
+"""Regenerate the light workspace illustrations: two people typing into the same
+page at the same time, each in their own block, while a third reads along."""
+from branding import MARK, write_svg, typewriter, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
 
-svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+LOOP = 8  # seconds per loop: both edits are typed, held, then the page resets
+K = lambda *ts: ';'.join(f'{t / LOOP:.4f}' for t in ts)
+
+svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: your space, a shared place</title>
-  <desc id="desc">Keep Reading list and Project notes in separate personal workspaces. In the shared Quantum lab workspace, you are an owner, Maya is an editor, and Sam is a viewer. Organize papers in folders and collaborate on linked highlights and notes with live edits and cursors. Personal workspaces have one owner; individual pages can be shared by link.</desc>
+  <desc id="desc">Keep Reading list and Project notes in separate personal workspaces. In the shared Quantum lab workspace, you are an owner, Maya is an editor, and Sam is a viewer. Organize papers in folders and collaborate on linked highlights and notes with live edits and cursors: you and Maya type into two blocks of the same page at the same time. Personal workspaces have one owner; individual pages can be shared by link.</desc>
   <defs>
 MARK
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.10"/>
-    </filter>
+    {SCENE_SHADOW}
     <g id="folder" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round">
       <path d="M1 7 V3 H12 L17 7 H29 V25 H1 Z"/>
     </g>
@@ -20,16 +22,11 @@ MARK
       <path d="M6 11 V7 A6 6 0 0 1 18 7 V11"/>
     </g>
   </defs>
-  <rect width="1920" height="1080" fill="#f6f4ef"/>
-  <!-- Warm paper, amber curves and floating cards match the opening hero. -->
-  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.24">
-    <path d="M-60 860 C190 1120 550 1030 800 960 S1430 900 1980 1040"/>
-    <path d="M-60 920 C220 1160 590 1080 850 1010 S1510 970 1980 1100"/>
-  </g>
+  {SCENE_BACKGROUND}
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaLogo" transform="translate(120 132) scale(0.6)"/>
-    <text x="120" y="332" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">Your space.</text>
-    <text x="120" y="424" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">A shared place.</text>
+    {SCENE_LOGO}
+    <text x="120" y="332" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">Your space.</text>
+    <text x="120" y="424" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">A shared place.</text>
     <text x="122" y="494" font-size="28" fill="#6b6a65">Keep personal libraries. Build knowledge together.</text>
     <text x="122" y="536" font-size="28" fill="#6b6a65">Papers, highlights and notes, organized by workspace.</text>
 
@@ -76,7 +73,7 @@ MARK
     <text x="904" y="374" font-size="32" font-weight="600" fill="#1a1a18">Quantum lab</text>
     <rect x="1130" y="344" width="214" height="42" rx="21" fill="#ecdfc4"/>
     <text x="1237" y="372" text-anchor="middle" font-size="22" font-weight="500" fill="#5a4a24">Shared workspace</text>
-    <circle cx="1624" cy="366" r="6" fill="#43a77c"/>
+    <circle cx="1624" cy="366" r="6" fill="#43a77c"><animate attributeName="opacity" values="1;0.35;1" dur="2.4s" repeatCount="indefinite"/></circle>
     <text x="1640" y="374" font-size="22" fill="#6b6a65">3 online</text>
     <path d="M870 406 H1800 M1114 406 V920" stroke="#e3e0d8" stroke-width="1.5"/>
 
@@ -101,27 +98,19 @@ MARK
     <rect x="1150" y="547" width="6" height="92" rx="3" fill="#f3c65f"/>
     <text x="1172" y="582" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-style="italic" fill="#6b6a65">“Repeated measurements reveal</text>
     <text x="1172" y="615" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-style="italic" fill="#6b6a65">the coherence time of the array.”</text>
+    <!-- You type in one block while Maya types in the next: both carets move at once. -->
     <circle cx="1160" cy="679" r="5" fill="#a5a197"/>
-    <text x="1180" y="687" font-size="24" fill="#1a1a18">Compare the two trapping geometries.</text>
-    <path d="M1596 663 V694" stroke="#9a6b18" stroke-width="2.5"/>
-    <rect x="1584" y="700" width="64" height="29" rx="6" fill="#9a6b18"/>
-    <text x="1616" y="721" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">You</text>
+    {typewriter('Compare the two trapping geometries.', 1180, 687, LOOP, 0.4, 3.6, label=('You', '#9a6b18'))}
     <path d="M1160 704 V794" stroke="#d8d4ca" stroke-width="2"/>
     <circle cx="1186" cy="765" r="5" fill="#a5a197"/>
-    <text x="1205" y="773" font-size="24" fill="#1a1a18">Add the lifetime data</text>
-    <path d="M1429 747 V781" stroke="#287956" stroke-width="2.5"/>
-    <path d="M1461 783 V809 L1468 801 1478 800 Z" fill="#287956" stroke="#ffffff" stroke-width="1.5"/>
-    <rect x="1476" y="805" width="81" height="30" rx="6" fill="#287956"/>
-    <text x="1516" y="827" text-anchor="middle" font-size="18" font-weight="600" fill="#ffffff">Maya</text>
+    {typewriter('Add the lifetime data', 1205, 773, LOOP, 1.2, 3.9, label=('Maya', '#287956'))}
     <path d="M1150 853 H1764" stroke="#e3e0d8"/>
     <circle cx="1160" cy="883" r="6" fill="#43a77c"/>
     <text x="1178" y="891" font-size="22" fill="#6b6a65">Live edits and cursors</text>
     <text x="1764" y="891" text-anchor="end" font-size="21" fill="#6b6a65">Sam is viewing</text>
-    <text x="1335" y="984" text-anchor="middle" font-size="26" fill="#6b6a65">One library. Everyone on the same page.</text>
+    <text x="1335" y="984" text-anchor="middle" font-size="28" fill="#6b6a65">One library. Everyone on the same page.</text>
   </g>
 </svg>
 '''.replace('MARK', MARK)
 
 write_svg('gamma-workspaces-light', svg)
-palette = {**DARK_PALETTE, '#e8e5f5': '#373044', '#7562a9': '#b6a2e4', '#d8d4ca': '#4c4a43'}
-write_svg('gamma-workspaces-dark', to_dark(svg, palette, '0.10'))

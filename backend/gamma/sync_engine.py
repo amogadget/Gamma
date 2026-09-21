@@ -102,12 +102,7 @@ class Remote:
             raise RemoteError(0, f"cannot reach {self.url}: {e}") from e
 
     def request(self, method, path, *, body=None, content_type=None, ok=(200,)):
-        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
-        if self.ws:
-            headers["X-Gamma-Workspace"] = self.ws
-        if content_type:
-            headers["Content-Type"] = content_type
-        status, data = self.fetch(method, path, body, headers)
+        status, data = self.fetch(method, path, body, self._headers(content_type))
         if status not in ok:
             try:
                 detail = json.loads(data.decode("utf-8")).get("detail", "")
@@ -116,9 +111,9 @@ class Remote:
             raise RemoteError(status, str(detail))
         return status, data
 
-    def get(self, path, ok=(200,)):
-        status, data = self.request("GET", path, ok=ok)
-        return json.loads(data) if data and status == 200 else (status if status != 200 else None)
+    def get(self, path):
+        _, data = self.request("GET", path)
+        return json.loads(data) if data else None
 
     def post(self, path, payload, ok=(200, 201)):
         _, data = self.request("POST", path, body=json.dumps(payload).encode("utf-8"),
@@ -143,6 +138,17 @@ class Remote:
     def _streaming(self) -> bool:
         return self.fetch == self._urllib_fetch
 
+    def _open(self, req, timeout: int):
+        """``urlopen`` for the streaming paths, every failure a RemoteError
+        (``_urllib_fetch`` keeps an HTTP error's status and body instead, for
+        ``request`` to read the detail from)."""
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            raise RemoteError(e.code, (e.read() or b"")[:200].decode("utf-8", "replace")) from e
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise RemoteError(0, f"cannot reach {self.url}: {e}") from e
+
     def get_bytes(self, path, progress=None) -> bytes:
         """A file's bytes; ``progress(done, total)`` as they arrive (total 0
         when the remote sends no length). Only the real transport streams —
@@ -153,23 +159,18 @@ class Remote:
                 progress(len(data), len(data))
             return data
         req = urllib.request.Request(self.url + path, headers=self._headers())
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                total = int(resp.headers.get("Content-Length") or 0)
-                chunks, done = [], 0
-                while True:
-                    chunk = resp.read(STREAM_CHUNK)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    done += len(chunk)
-                    if progress:
-                        progress(done, total)
-                return b"".join(chunks)
-        except urllib.error.HTTPError as e:
-            raise RemoteError(e.code, (e.read() or b"")[:200].decode("utf-8", "replace")) from e
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise RemoteError(0, f"cannot reach {self.url}: {e}") from e
+        with self._open(req, 60) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            chunks, done = [], 0
+            while True:
+                chunk = resp.read(STREAM_CHUNK)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                done += len(chunk)
+                if progress:
+                    progress(done, total)
+            return b"".join(chunks)
 
     def post_file(self, path, name: str, data: bytes, progress=None):
         boundary = "gammaMirror" + str(int(time.time() * 1000))
@@ -194,13 +195,8 @@ class Remote:
         headers = self._headers(content_type)
         headers["Content-Length"] = str(total)
         req = urllib.request.Request(self.url + path, data=Reader(body), method="POST", headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                out = resp.read()
-        except urllib.error.HTTPError as e:
-            raise RemoteError(e.code, (e.read() or b"")[:200].decode("utf-8", "replace")) from e
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise RemoteError(0, f"cannot reach {self.url}: {e}") from e
+        with self._open(req, 600) as resp:
+            out = resp.read()
         return json.loads(out) if out else None
 
 
@@ -230,6 +226,19 @@ def list_mirrors(owner: str) -> list[dict]:
     with connect_users_db() as conn:
         rows = conn.execute(f"SELECT {_COLS} FROM mirrors WHERE owner = ? ORDER BY created_at", (owner,)).fetchall()
     return [_row_info(r) for r in rows]
+
+
+def _seal(token: str) -> str:
+    """The token as stored: Fernet-encrypted with the data directory's key."""
+    return cipher().encrypt(token.encode("utf-8")).decode("ascii")
+
+
+def _clear_bases(ws: str) -> None:
+    """Forget every page's base tree: the next round has nothing to merge
+    from and adopts one side's version (a link, a re-link elsewhere, a force)."""
+    with connect_pages_db(ws) as conn:
+        conn.execute("DELETE FROM sync_pages")
+        conn.commit()
 
 
 def _save(ws: str, **fields) -> None:
@@ -299,17 +308,14 @@ def create_mirror(owner: str, remote_url: str, token: str, *, name: str = "", mo
         if get_mirror(workspace_id):
             raise ValueError("that workspace already mirrors something — detach or forget it first")
         status["adopt"] = adopt
-        with connect_pages_db(workspace_id) as conn:
-            conn.execute("DELETE FROM sync_pages")
-            conn.commit()
+        _clear_bases(workspace_id)
     else:
         info = workspaces.create(name or f"{remote_name} (offline copy)", owner)
     with connect_users_db() as conn:
         conn.execute(
             "INSERT INTO mirrors (workspace_id, remote_url, remote_ws, remote_name, token, owner, mode, "
             "remote_cursor, local_cursor, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)",
-            (info["id"], remote_url, remote_ws, remote_name, cipher().encrypt(token.encode("utf-8")).decode("ascii"),
-             owner, mode, json.dumps(status), page_now()))
+            (info["id"], remote_url, remote_ws, remote_name, _seal(token), owner, mode, json.dumps(status), page_now()))
         conn.commit()
     return get_mirror(info["id"])
 
@@ -372,12 +378,10 @@ def relink_mirror(ws: str, *, token: str = "", remote_url: str = "", adopt: str 
     status = {k: v for k, v in mirror["status"].items() if k not in ("detached_at", "detached_mode", "last_error")}
     status.update(remote_user=me.get("user"), remote_role=me.get("role"))
     fields = {"mode": mode, "remote_url": remote_url, "remote_ws": remote_ws, "remote_name": remote_name,
-              "token": cipher().encrypt(token.encode("utf-8")).decode("ascii")}
+              "token": _seal(token)}
     if remote_url != mirror["remote_url"] or remote_ws != mirror["remote_ws"]:
         # a different original: the saved bases mean nothing, its pages are adopted
-        with connect_pages_db(ws) as conn:
-            conn.execute("DELETE FROM sync_pages")
-            conn.commit()
+        _clear_bases(ws)
         fields.update(remote_cursor="", local_cursor="")
         status["adopt"] = adopt
     _save(ws, status=status, **fields)
@@ -400,9 +404,7 @@ def force_sync(ws: str, direction: str) -> None:
         raise ValueError("the copy is detached — link it again first")
     if direction == "push" and mirror["mode"] != "two-way":
         raise ValueError("a read-only copy cannot replace the original")
-    with connect_pages_db(ws) as conn:
-        conn.execute("DELETE FROM sync_pages")
-        conn.commit()
+    _clear_bases(ws)
     status = {**mirror["status"], "adopt": "theirs" if direction == "pull" else "mine", "prune": True}
     _save(ws, remote_cursor="", local_cursor="", status=status)
     sync_in_background(ws)
@@ -520,10 +522,8 @@ def _note(ws: str, page_id: str, action: str, title: str = "", *, stats: dict | 
         report["blocks_added"] = report.get("blocks_added", 0) + stats["add"]
         report["blocks_removed"] = report.get("blocks_removed", 0) + stats["del"]
         report["blocks_changed"] = report.get("blocks_changed", 0) + stats["mod"]
+    title = title or _title_of(ws, page_id)
     with connect_pages_db(ws) as conn:
-        if not title:
-            row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
-            title = (row[0] if row else "") or ""
         blob = {**stats, "changes": changes} if stats and changes else stats
         conn.execute("INSERT INTO sync_log (at, page_id, title, action, stats) VALUES (?, ?, ?, ?, ?)",
                      (page_now(), page_id, title[:200], action, json.dumps(blob) if blob else ""))
@@ -801,6 +801,53 @@ def _reconcile_remote_ops(conn, page_id: str, base: dict, local: dict, remote: d
     return out
 
 
+def _pull_whole(ws: str, remote: Remote, page_id: str, remote_tree: dict, seq: int, report: dict, action: str) -> None:
+    """A page that comes here whole (new here, or restored): created under
+    its id, the remote tree laid in, its files fetched, the state saved."""
+    with connect_pages_db(ws) as conn:
+        create_page(conn, remote_tree[page_id]["content"], remote_tree[page_id]["props"], block_id=page_id)
+    _pull_files(ws, remote, upload_refs(remote_tree.values()), report)
+    _apply_local(ws, page_id, diff({page_id: remote_tree[page_id]}, remote_tree, page_id, with_base=False))
+    with connect_pages_db(ws) as conn:
+        _save_state(conn, page_id, seq, remote_tree)
+    _note(ws, page_id, action, remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"),
+          changes=_whole_changes(remote_tree, "add", page_id), report=report)
+    report["pages_pulled"] += 1
+
+
+def _push_whole(ws: str, remote: Remote, page_id: str, local: dict, report: dict, action: str) -> None:
+    """A page that goes there whole (new there, or restored): created under
+    its id, the local tree pushed, its files uploaded, the remote's answer
+    saved as the base."""
+    _create_remote_page(remote, page_id, local)
+    _push_files(ws, remote, upload_refs(local.values()), report)
+    _push(remote, page_id, diff({page_id: local[page_id]}, local, page_id, with_base=False))
+    remote_after, seq = _remote_tree(remote, page_id)
+    with connect_pages_db(ws) as conn:
+        _save_state(conn, page_id, seq, remote_after or local)
+    _note(ws, page_id, action, local[page_id]["content"], stats=_whole(local, "add"),
+          changes=_whole_changes(local, "add", page_id), report=report)
+    report["pages_pushed"] += 1
+
+
+def _delete_here(ws: str, page_id: str, local: dict, report: dict) -> None:
+    with connect_pages_db(ws) as conn:
+        delete_page(ws, conn, page_id, actor=ACTOR, client=CLIENT)
+        _drop_state(conn, page_id)
+    _note(ws, page_id, "deleted here", local[page_id]["content"], stats=_whole(local, "del"),
+          changes=_whole_changes(local, "del", page_id), report=report)
+    report["pages_deleted"] += 1
+
+
+def _delete_there(ws: str, remote: Remote, page_id: str, remote_tree: dict, report: dict) -> None:
+    remote.delete(f"/api/blocks/{page_id}")
+    with connect_pages_db(ws) as conn:
+        _drop_state(conn, page_id)
+    _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"),
+          changes=_whole_changes(remote_tree, "del", page_id), report=report)
+    report["pages_pushed"] += 1
+
+
 def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | None, remote_gone: bool,
                local_gone: bool, mode: str, report: dict) -> None:
     with connect_pages_db(ws) as conn:
@@ -824,25 +871,12 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             return
         if state and diff(base, local, page_id):
             if push_allowed:
-                _create_remote_page(remote, page_id, local)
-                _push_files(ws, remote, upload_refs(local.values()), report)
-                _push(remote, page_id, diff({page_id: local[page_id]}, local, page_id, with_base=False))
-                remote_after, seq = _remote_tree(remote, page_id)
+                _push_whole(ws, remote, page_id, local, report, "restored there")
                 with connect_pages_db(ws) as conn:
-                    _save_state(conn, page_id, seq, remote_after or local)
                     _conflict(conn, page_id, page_id, "page_restored", mine=local[page_id]["content"],
                               result="the other side deleted this page; it was edited here, so it came back there")
-                _note(ws, page_id, "restored there", local[page_id]["content"], stats=_whole(local, "add"),
-                      changes=_whole_changes(local, "add", page_id), report=report)
-                report["pages_pushed"] += 1
             return
-        title = local[page_id]["content"]
-        with connect_pages_db(ws) as conn:
-            delete_page(ws, conn, page_id, actor=ACTOR)
-            _drop_state(conn, page_id)
-        _note(ws, page_id, "deleted here", title, stats=_whole(local, "del"),
-              changes=_whole_changes(local, "del", page_id), report=report)
-        report["pages_deleted"] += 1
+        _delete_here(ws, page_id, local, report)
         return
     if local_gone and local is None:
         if not state:
@@ -853,25 +887,13 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
                 _drop_state(conn, page_id)
             return
         if seq == state["remote_seq"] and push_allowed:
-            remote.delete(f"/api/blocks/{page_id}")
-            with connect_pages_db(ws) as conn:
-                _drop_state(conn, page_id)
-            _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"),
-                  changes=_whole_changes(remote_tree, "del", page_id), report=report)
-            report["pages_pushed"] += 1
+            _delete_there(ws, remote, page_id, remote_tree, report)
             return
         # the remote edited it since (or we may not delete there): it comes back here
+        _pull_whole(ws, remote, page_id, remote_tree, seq, report, "restored here")
         with connect_pages_db(ws) as conn:
-            create_page(conn, remote_tree[page_id]["content"], remote_tree[page_id]["props"], block_id=page_id)
-        _pull_files(ws, remote, upload_refs(remote_tree.values()), report)
-        _apply_local(ws, page_id, diff({page_id: remote_tree[page_id]}, remote_tree, page_id, with_base=False))
-        with connect_pages_db(ws) as conn:
-            _save_state(conn, page_id, seq, remote_tree)
             _conflict(conn, page_id, page_id, "page_restored_from_remote", theirs=remote_tree[page_id]["content"],
                       result="this page was deleted here but edited on the other side, so it came back")
-        _note(ws, page_id, "restored here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"),
-              changes=_whole_changes(remote_tree, "add", page_id), report=report)
-        report["pages_pulled"] += 1
         return
 
     # --- both exist (or the remote one is new here / the local one is new there)
@@ -883,43 +905,20 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
     if remote_tree is None:
         if state is None and local is not None and prune and adopt == "theirs":
             # a force pull: a page the original does not have goes
-            with connect_pages_db(ws) as conn:
-                delete_page(ws, conn, page_id, actor=ACTOR)
-            _note(ws, page_id, "deleted here", local[page_id]["content"], stats=_whole(local, "del"),
-                  changes=_whole_changes(local, "del", page_id), report=report)
-            report["pages_deleted"] += 1
+            _delete_here(ws, page_id, local, report)
             return
         if state is None and local is not None and push_allowed:
             # new here, unknown there: it goes over whole
-            _create_remote_page(remote, page_id, local)
-            _push_files(ws, remote, upload_refs(local.values()), report)
-            _push(remote, page_id, diff({page_id: local[page_id]}, local, page_id, with_base=False))
-            remote_after, seq = _remote_tree(remote, page_id)
-            with connect_pages_db(ws) as conn:
-                _save_state(conn, page_id, seq, remote_after or local)
-            _note(ws, page_id, "created there", local[page_id]["content"], stats=_whole(local, "add"),
-                  changes=_whole_changes(local, "add", page_id), report=report)
-            report["pages_pushed"] += 1
+            _push_whole(ws, remote, page_id, local, report, "created there")
         # else: the feed said it changed, but it is gone now (deleted after the feed): next round's tombstone
         return
     if local is None and prune and adopt == "mine" and push_allowed:
         # a force push: a page this copy does not have goes from the original
-        remote.delete(f"/api/blocks/{page_id}")
-        _note(ws, page_id, "deleted there", remote_tree[page_id]["content"], stats=_whole(remote_tree, "del"),
-              changes=_whole_changes(remote_tree, "del", page_id), report=report)
-        report["pages_pushed"] += 1
+        _delete_there(ws, remote, page_id, remote_tree, report)
         return
     if local is None:
         # new here: create it and lay the remote tree in
-        with connect_pages_db(ws) as conn:
-            create_page(conn, remote_tree[page_id]["content"], remote_tree[page_id]["props"], block_id=page_id)
-        _pull_files(ws, remote, upload_refs(remote_tree.values()), report)
-        _apply_local(ws, page_id, diff({page_id: remote_tree[page_id]}, remote_tree, page_id, with_base=False))
-        with connect_pages_db(ws) as conn:
-            _save_state(conn, page_id, seq, remote_tree)
-        _note(ws, page_id, "created here", remote_tree[page_id]["content"], stats=_whole(remote_tree, "add"),
-              changes=_whole_changes(remote_tree, "add", page_id), report=report)
-        report["pages_pulled"] += 1
+        _pull_whole(ws, remote, page_id, remote_tree, seq, report, "created here")
         return
 
     if state is None:

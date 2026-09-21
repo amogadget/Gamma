@@ -176,10 +176,12 @@ The scenarios live in `tests/e2e/scenarios/`:
 - `chatNavigation.mjs`: a library or PDF chat reply keeps streaming and is
   saved while the user navigates away and back, before or after it finishes.
   `--only "chat navigation"`.
-- `mirror.mjs`: Settings → Workspaces → Offline copies — the server mirrors
-  one of its own workspaces through the dialog with a write token made via
-  the API, Sync now, the empty merges list, opening the copy, stopping it
-  ([mirror.md](mirror.md)). `--only mirror`.
+- `mirror.mjs`: Settings → Workspaces → Clones — the server clones one of
+  its own workspaces through the dialog with a write token made via the
+  API: Sync, the empty conflicts list, opening the clone, the sync pill's
+  log and settings (cadence, detach, reattach), a same-block conflict
+  resolved on its row chip, Remove origin ([mirror.md](mirror.md)).
+  `--only mirror`.
 
 - `notes.mjs`: New page → title → first block (the seed-block insert),
   Shift+Enter / Tab / Shift+Tab / Backspace, Enter as a line break vs the

@@ -68,7 +68,11 @@ AI:
   plugin setup and address-change commands, the Codex setup
   command and the manual-token fallback ([mcp.md](mcp.md)) — a token's
   scope is a `Segmented` (read-only for assistants, read and write for an
-  offline copy on another Gamma, [mirror.md](mirror.md)).
+  offline copy on another Gamma, [mirror.md](mirror.md)). Each command box
+  carries its copy button in its corner (a check for two seconds after a
+  copy); each connection row shows how it signed in (browser sign-in — the
+  `(OAuth)` suffix the provider mints — or token), its scope, the connected
+  and expiry dates, and an icon-only Disconnect.
 
 Manage:
 
@@ -80,10 +84,11 @@ Manage:
   Personal and Shared, **Clones**
   ([SettingsMirrors.jsx](../../frontend/src/settings/SettingsMirrors.jsx)):
   the account's mirrors of remote workspaces in git's words (each row:
-  status line, Open, Pull & push or Reattach, Conflicts — an inline list of
-  the blocks both sides changed with Keep merged / Use ours / Use theirs —,
-  Detach, Remove origin) and "Clone a remote workspace" (a `SubDialog`:
-  origin server, write token, name, direction) — [mirror.md](mirror.md).
+  status line, Open, Sync or Reattach, Conflicts — the conflict cards, each
+  resolved there or opened on its block — and a "more" `ActionMenu` with
+  Force pull / Force push, Detach, Remove origin) and "Clone a remote
+  workspace" (a `SubDialog`: origin server, write token, into a new or an
+  existing workspace, name, direction) — [mirror.md](mirror.md).
   The same state sits in the header as the sync pill
   (`collaboration/MirrorPopover.jsx`) while a clone is open; the clone's
   own settings (cadence, direction, force pull / push, detach / reattach,

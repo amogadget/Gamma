@@ -24,8 +24,9 @@ and unpacked extension installs use committed outputs; they need no generator.
 
 Open `marks/favicon.svg` in a browser or SVG editor to edit the mark. Keep the
 32 by 32 viewBox and the `gamma-background` ID on its background rectangle:
-the generators use that ID to omit the plate for monochrome masks and unplated
-Windows assets. Geometry, stroke weights and icon colors come from this file.
+the generators use that ID to omit the plate for monochrome masks and the
+transparent Windows tiles (`Square150x150Logo` and friends, which the MSIX
+manifest's `backgroundColor` paints instead). Geometry, stroke weights and icon colors come from this file.
 
 The generator changes only size, positioning and presentation. Desktop, MCP,
 plugin and extension icons share the same amber design. Disabled extension
@@ -49,7 +50,8 @@ and their templates have been removed.
 
 `outputs.json` maps direct copies and SVG templates to existing consumer paths.
 Store sizes/layouts live in `tools/branding/store-layouts.mjs`; README scenes
-remain in the three Python illustration generators. `generated.json` records
+are the `tools/branding/build-*.py` generators (connections, workspaces,
+library, anywhere, and the light-only demo scenes), each writing its light SVG to `docs/assets/branding/`. `generated.json` records
 every generated destination, recipe, dimensions and SHA-256, plus hashes of
 the sources and rendering toolchain. Do not edit this ledger manually.
 

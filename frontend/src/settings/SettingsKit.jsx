@@ -264,13 +264,20 @@ export function PasswordInput({ className = "aiKeyInput", ...props }) {
 // values: typing "25" into a 1–32 field must not snap at "2").
 export function UnitInput({ value, onChange, onCommit, unit, placeholder, min, onEnter }) {
   const [draft, setDraft] = React.useState(null); // non-null only while editing deferred
+  // The draft stays on screen until the commit settles (an async save), then
+  // the stored value shows — the parent never needs a `key` remount to reset
+  // the box, which would drop a value typed while the save was landing.
+  const commit = async () => {
+    if (draft == null) return;
+    try { await onCommit(draft); } finally { setDraft(null); }
+  };
   return (
     <span className="unitInput">
       <input
         className="aiKeyInput" type="number" min={min}
         placeholder={placeholder} value={onCommit ? (draft ?? String(value ?? "")) : value}
         onChange={(event) => (onCommit ? setDraft(event.target.value) : onChange(event.target.value))}
-        onBlur={onCommit ? () => { if (draft != null) { onCommit(draft); setDraft(null); } } : undefined}
+        onBlur={onCommit ? commit : undefined}
         onKeyDown={(event) => {
           if (event.key !== "Enter") return;
           if (onCommit) event.currentTarget.blur(); // commit via onBlur

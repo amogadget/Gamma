@@ -9,7 +9,9 @@ search indexer, so extraction fixes land once.
 
 import re
 import io
+import struct
 import threading
+import zlib
 
 from .logbuf import log
 
@@ -212,3 +214,71 @@ def page_count(src) -> int:
         except Exception as e:
             log.warning(f"[pdf-text] page count failed: {e}")
             return 0
+
+
+# Longest side, in pixels, of a page picture handed to a vision model (past
+# ~1.6k px providers downscale anyway; below it small print gets unreadable).
+RENDER_MAX_SIDE = 1568
+
+
+def _png(width: int, height: int, channels: int, rows) -> bytes:
+    """A plain PNG (8-bit RGB / RGBA, filter 0) — no Pillow needed."""
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return (struct.pack(">I", len(body)) + tag + body
+                + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF))
+    raw = b"".join(b"\x00" + bytes(row) for row in rows)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6 if channels == 4 else 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6))
+            + chunk(b"IEND", b""))
+
+
+def _encode_bitmap(bitmap) -> tuple[bytes, str]:
+    """``(bytes, media type)`` of a rendered pdfium bitmap: JPEG through
+    Pillow when it is installed (a scan is a photo — several times smaller),
+    else a PNG written here."""
+    try:
+        from PIL import Image  # noqa: F401 — optional
+    except ImportError:
+        width, height, stride = bitmap.width, bitmap.height, bitmap.stride
+        channels = bitmap.n_channels
+        data = bytes(bitmap.buffer)
+        rows = (data[y * stride:y * stride + width * channels] for y in range(height))
+        return _png(width, height, channels, rows), "image/png"
+    buf = io.BytesIO()
+    bitmap.to_pil().convert("RGB").save(buf, "JPEG", quality=85)
+    return buf.getvalue(), "image/jpeg"
+
+
+def render_page(src, page_no: int, max_side: int = RENDER_MAX_SIDE):
+    """Rasterize one page (1-based) for a vision model: ``(image, pages)``
+    where image is ``(bytes, media_type, width, height)`` — the page scaled
+    so its longer side is ``max_side`` px — or None when the page number is
+    out of range; ``(None, 0)`` when the file can't be rendered (unreadable,
+    or only PyPDF2 could open it). Holds the pdfium lock like every walk."""
+    with _lock:
+        try:
+            kind, pdf = _open(src)
+            if kind == "pypdf2":
+                return None, 0
+            try:
+                total = len(pdf)
+                if page_no < 1 or page_no > total:
+                    return None, total
+                page = pdf[page_no - 1]
+                try:
+                    w, h = page.get_size()
+                    scale = max_side / max(w, h, 1)
+                    bitmap = page.render(scale=scale, rev_byteorder=True)
+                    try:
+                        data, media_type = _encode_bitmap(bitmap)
+                        return (data, media_type, bitmap.width, bitmap.height), total
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+            finally:
+                pdf.close()
+        except Exception as e:
+            log.warning(f"[pdf-text] page render failed: {e}")
+            return None, 0

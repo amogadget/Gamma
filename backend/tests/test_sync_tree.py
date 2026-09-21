@@ -1,9 +1,34 @@
 """gamma/sync_tree.py: snapshots and the ops between them (the pure half of
 the mirror)."""
 
-from gamma.sync_tree import apply_to_snapshot, diff, snapshot_from_tree, upload_refs
+from gamma.sync_tree import diff, snapshot_from_tree, subtree_ids, upload_refs
 
 P = "page1"
+
+
+def apply_to_snapshot(snapshot: dict, ops: list[dict]) -> dict:
+    """What the server would hold after ``ops``, positions taken as sent."""
+    out = {k: {**v, "props": dict(v["props"])} for k, v in snapshot.items()}
+    for op in ops:
+        kind, bid = op["op"], op["id"]
+        if kind == "insert":
+            out[bid] = {"parent": op["parent"], "position": op.get("position") or "",
+                        "content": op.get("content") or "", "props": dict(op.get("props") or {})}
+        elif kind == "move" and bid in out:
+            out[bid]["parent"] = op["parent"]
+            out[bid]["position"] = op.get("position") or out[bid]["position"]
+        elif kind == "set" and bid in out:
+            if op.get("content") is not None:
+                out[bid]["content"] = op["content"]
+            for k, v in (op.get("props") or {}).items():
+                if v is None:
+                    out[bid]["props"].pop(k, None)
+                else:
+                    out[bid]["props"][k] = v
+        elif kind == "delete":
+            for gone in subtree_ids(out, bid) if bid in out else ():
+                out.pop(gone, None)
+    return out
 
 
 def _snap(*blocks, root_content="Title", root_props=None):

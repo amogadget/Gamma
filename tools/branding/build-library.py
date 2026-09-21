@@ -1,14 +1,12 @@
-"""Build the Link and organize story in Gamma's light/dark branding style."""
-from branding import MARK, DARK_PALETTE, to_dark, write_svg
+"""Build the Link and organize story in Gamma's light branding style."""
+from branding import MARK, write_svg, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
 
 SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: find your papers, follow your ideas</title>
   <desc id="desc">Download a paper and Gamma automatically fills its title, authors, journal and year. Organize papers with hierarchical folders and cross-cutting labels, and search titles, notes and full PDF text. While reading, follow a reference to another paper, then use Back to return to your previous reading position.</desc>
   <defs>
 MARK
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.09"/>
-    </filter>
+    SCENE_SHADOW
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M2 2 8 5 2 8" fill="none" stroke="#9a6b18" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
@@ -25,15 +23,11 @@ MARK
       <path d="M2 9 7 14 18 3"/>
     </g>
   </defs>
-  <rect width="1920" height="1080" fill="#f6f4ef"/>
-  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.22">
-    <path d="M-60 920 C200 1160 510 1070 810 1000 S1400 920 1980 1080"/>
-    <path d="M-60 985 C240 1210 590 1110 920 1055 S1530 1010 1980 1150"/>
-  </g>
+  SCENE_BACKGROUND
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaLogo" transform="translate(100 92) scale(0.45)"/>
-    <text x="100" y="255" font-size="76" font-weight="600" letter-spacing="-2" fill="#1a1a18">Find your papers. Follow your ideas.</text>
-    <text x="103" y="313" font-size="29" fill="#6b6a65">From the first download to the next connection — without losing your place.</text>
+    SCENE_LOGO
+    <text x="120" y="235" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">Find your papers. Follow your ideas.</text>
+    <text x="122" y="288" font-size="28" fill="#6b6a65">From the first download to the next connection — without losing your place.</text>
 
     <!-- Three stages, connected in reading order. -->
     <g font-size="25" font-weight="600" fill="#1a1a18">
@@ -127,8 +121,6 @@ MARK
     <text x="960" y="1013" text-anchor="middle" font-size="25" fill="#6b6a65">A library you can find your way around. A reading trail you can retrace.</text>
   </g>
 </svg>
-'''.replace('MARK', MARK)
+'''.replace('MARK', MARK).replace('SCENE_LOGO', SCENE_LOGO).replace('SCENE_SHADOW', SCENE_SHADOW).replace('SCENE_BACKGROUND', SCENE_BACKGROUND)
 
 write_svg('gamma-library-light', SVG)
-palette = {**DARK_PALETTE, '#d8d4ca': '#555248', '#faf4e8': '#332d22', '#ffe4a0': '#5a4524'}
-write_svg('gamma-library-dark', to_dark(SVG, palette, '0.09'))

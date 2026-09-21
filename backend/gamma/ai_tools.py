@@ -37,6 +37,7 @@ is a comma-separated list of ``/``-nested paths, folders exist only through the
 tags in use, and ``properties.category`` holds the flat labels.
 """
 
+import base64
 import json
 import re
 import secrets
@@ -44,13 +45,14 @@ import sqlite3
 
 from fractional_indexing import generate_key_between
 
-from .ai_context import DEPRECATED_TOOLS, canonical_tool, page_report_section
+from .ai_context import DEPRECATED_TOOLS, canonical_tool, page_report_section, pdf_path
 from .blocks_store import fetch_subtree, page_attachment, page_root_id, root_pages
 from .db import connect_pages_db, page_now, ws_db_path
 from .ops import after_commit, apply_ops, note_reload, record_ops
 from .foldertags import add_tag, clean_path, parse_tags, path_within
 from .logbuf import log
 from .pdf_index import pdf_missing, search_pdf
+from .pdf_text import RENDER_MAX_SIDE, render_page
 
 # Runaway guards for the tool loop, not workload caps: MAX_TOOL_ACTIONS bounds
 # the real work (mutations only), while the round limit stops a loop that
@@ -334,6 +336,40 @@ def _run_read_page(conn, ws: str, scope: dict, args: dict):
     if not section:
         return f'"{title}" has no readable content', None
     return section, {"kind": "read", "page_id": page_id, "summary": f"Read “{title[:60]}”"}
+
+
+def _run_view_pdf_page(conn, ws: str, scope: dict, args: dict):
+    """One page of the page's PDF as a picture for a vision model — the way
+    to read a scan with no usable text layer, or a figure. The image rides on
+    the action under ``images`` (``[(media_type, base64)]``); run_agent_tool
+    lifts it off the chip so it reaches the model's tool result but never the
+    saved chat."""
+    loaded, error = _load_scoped_page(conn, scope, args)
+    if error:
+        return error, None
+    page_id, title, props, _ = loaded
+    attachment = page_attachment(props)
+    if not attachment:
+        return f'"{title}" has no PDF attachment to look at', None
+    try:
+        page_no = max(1, int(args.get("pdf_page", 1)))
+    except (TypeError, ValueError):
+        page_no = 1
+    path = pdf_path(ws, attachment["id"])
+    if not path:
+        return "error: the PDF file is not available on this server", None
+    image, total = render_page(str(path), page_no, RENDER_MAX_SIDE)
+    if not total:
+        return "error: the PDF could not be rendered", None
+    if image is None:
+        return f'error: PDF page {page_no} does not exist — "{title}" has {total} pages', None
+    data, media_type, width, height = image
+    result = (f'PDF page {page_no} of {total} of "{title}" is attached as a {width}×{height} px '
+              "picture: read it visually and cite it as PDF page "
+              f"{page_no}. The picture is not kept in the chat history — call again to look at it later.")
+    return result, {"kind": "view", "page_id": page_id, "pdf_page": page_no,
+                    "summary": f"Looked at p. {page_no} of “{title[:60]}”",
+                    "images": [(media_type, base64.b64encode(data).decode("ascii"))]}
 
 
 def _run_read_block(conn, ws: str, scope: dict, args: dict):
@@ -845,6 +881,24 @@ TOOLS = [
         },
     },
     {
+        "perm": "view", "kind": "view", "scopes": ("folder", "page"), "mutating": False, "run": _run_view_pdf_page,
+        "spec": {
+            "name": "view_pdf_page",
+            "description": (
+                "Look at one page of a page's PDF attachment as a picture. Use it when "
+                "the extracted text is missing or garbled (a scanned document with no "
+                "usable text layer), or when a figure, table, diagram, equation layout "
+                "or handwriting matters and the text alone cannot answer. `pdf_page` is "
+                "1-based. A picture costs many tokens, so find the right page first "
+                "(search_library, read_page) and look only at the pages you need."),
+            "parameters": {
+                "type": "object",
+                "properties": {**_PAGE_ID_ARG, "pdf_page": {"type": "integer"}},
+                "required": ["page_id", "pdf_page"],
+            },
+        },
+    },
+    {
         "perm": "search", "kind": "search", "scopes": ("folder", "page"), "mutating": False, "run": _run_search_library,
         "spec": {
             "name": "search_library",
@@ -1122,6 +1176,12 @@ def agent_system(scope: dict, perms: dict | None = None, base: str = "") -> str:
             "user's notes or from a PDF (with its page number); if you cannot find "
             "it, say it is not in their pages — never present a value from memory as "
             "the document's.")
+    if "view_pdf_page" in names:
+        text += (
+            "\nview_pdf_page shows you a PDF page as a picture. Reach for it when a "
+            "page's extracted text is empty or garbled (a scan), or when the answer is "
+            "in a figure, a table's layout or handwriting; otherwise the text tools "
+            "are cheaper. Say when an answer was read from the picture.")
     if "search_papers" in names or "fetch_paper" in names:
         text += (
             "\nWeb reach: " + " and ".join(n for n in ("search_papers", "fetch_paper") if n in names)
@@ -1181,7 +1241,10 @@ def run_agent_tool(ws: str, scope: dict, name: str, args: dict,
     call (reads and failures included), so nothing the agent does is invisible.
     Failures carry ``error: True``; the executors' own actions are enriched
     with the same raw-call fields. A deprecated name runs its current tool
-    and the action carries the current name.
+    and the action carries the current name. A tool that answers with
+    pictures (view_pdf_page) puts them on the action as ``images``
+    (``[(media_type, base64)]``): the caller moves them onto the model's tool
+    result and must drop them before the chip is streamed or saved.
     """
     name = canonical_tool(name)
     tool = _BY_NAME.get(name)
@@ -1211,7 +1274,11 @@ def run_agent_tool(ws: str, scope: dict, name: str, args: dict,
         failed = result.startswith("error")
         action = {"kind": "error" if failed else tool["kind"],
                   "summary": result.split("\n")[0][:200], "error": failed}
-    return result, tool_action(action["kind"], action["summary"], name, args, result,
-                               error=bool(action.get("error")),
-                               **{k: v for k, v in action.items()
-                                  if k not in ("kind", "summary", "error")})
+    images = action.pop("images", None)
+    chip = tool_action(action["kind"], action["summary"], name, args, result,
+                       error=bool(action.get("error")),
+                       **{k: v for k, v in action.items()
+                          if k not in ("kind", "summary", "error")})
+    if images:
+        chip["images"] = images
+    return result, chip

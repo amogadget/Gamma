@@ -3,9 +3,10 @@ import { closeEditor, newPageViaUi } from "./notes.mjs";
 
 const flow = 'flowchart LR\n  A["Start $a|b$ \\(x\\)"] --> B[Finish]';
 const sequence = "sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi";
+// Note-style `$…$` next to Mermaid's own `$$…$$`: both typeset.
 const quantum = String.raw`flowchart LR
-  S(("$$S_z$$")) -. "$$\chi$$" .- A(("$$a_1$$"))
-  A <-->|"$$J$$"| B(("$$a_2: |\alpha\rangle$$"))`;
+  S(("$S_z$")) -. "$\chi$" .- A(("$$a_1$$"))
+  A <-->|"$J$"| B(("$$a_2: |\alpha\rangle$$"))`;
 const fence = (source) => "```mermaid\n" + source + "\n```";
 
 export async function mermaidScenarios(env) {
