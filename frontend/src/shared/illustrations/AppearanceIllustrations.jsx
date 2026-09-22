@@ -1,7 +1,8 @@
 import React from "react";
 
 // Small, abstract reading scenes: the same shapes make palettes easy to compare.
-export function ThemePreview({ theme }) {
+// `dark` is the Dark row of the same table, for the System card's right half.
+export function ThemePreview({ theme, dark }) {
   const [id, , , ground, paper, ink, accent] = theme;
   const clipId = React.useId();
   return (
@@ -17,15 +18,15 @@ export function ThemePreview({ theme }) {
       <path d="M61 38h23" stroke={accent} strokeWidth="4" strokeLinecap="round" opacity=".55" />
       <circle cx="134" cy="37" r="12" fill={accent} opacity=".18" />
       <path d="M119 56l13-19 16 19z" fill={accent} opacity=".48" />
-      {id === "system" ? <g clipPath={`url(#${clipId})`}>
-        <rect width="180" height="72" fill="#181818" />
-        <rect x="19" y="14" width="142" height="64" rx="5" fill="#292929" />
-        <g stroke="#eee" strokeWidth="3" strokeLinecap="round" opacity=".3">
+      {id === "system" && dark ? <g clipPath={`url(#${clipId})`}>
+        <rect width="180" height="72" fill={dark[3]} />
+        <rect x="19" y="14" width="142" height="64" rx="5" fill={dark[4]} />
+        <g stroke={dark[5]} strokeWidth="3" strokeLinecap="round" opacity=".3">
           <path d="M61 49h38M61 56h49M61 63h32" />
         </g>
-        <path d="M61 29h35" stroke="#eee" strokeWidth="4" strokeLinecap="round" opacity=".8" />
-        <circle cx="134" cy="37" r="12" fill="#5b9bd5" opacity=".3" />
-        <path d="M119 56l13-19 16 19z" fill="#5b9bd5" opacity=".6" />
+        <path d="M61 29h35" stroke={dark[5]} strokeWidth="4" strokeLinecap="round" opacity=".8" />
+        <circle cx="134" cy="37" r="12" fill={dark[6]} opacity=".3" />
+        <path d="M119 56l13-19 16 19z" fill={dark[6]} opacity=".6" />
       </g> : null}
     </svg>
   );

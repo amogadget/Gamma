@@ -93,6 +93,7 @@ from .native_ink import (
     preserve_native_properties,
     restored_native_properties,
 )
+from .logbuf import log
 from .storage import cleanup_orphan_uploads
 
 MAX_OPS = 500
@@ -339,7 +340,10 @@ class _Batch:
             raise OpError(413, "content too long")
         base = op.get("base")
         if (content is not None and base is not None and len(base) <= MAX_CONTENT
-                and base != (row[0] or "") and base != content):
+                and base != (row[0] or "") and base != content and content != (row[0] or "")):
+            # (a client whose edit is already the text — the same change made
+            # twice, a retried batch — has nothing to merge: patching it in
+            # again would double it)
             # Someone else changed the block since this client read it:
             # apply the client's edit as a patch on the current text.
             merged, _clean = textmerge.merge(base, content, row[0] or "")
@@ -576,6 +580,20 @@ def apply_ops(conn, page_id: str, ops: list[dict], *, actor: str, client: str = 
     return result
 
 
+# Called after every committed write with ``(ws, client)`` — what an offline
+# copy's engine listens to for its sync-on-change (sync_engine.request_sync).
+# Registered at import by the listener, so this module never imports it.
+commit_listeners: list = []
+
+
+def _notify(ws: str, client: str = "") -> None:
+    for fn in commit_listeners:
+        try:
+            fn(ws, client)
+        except Exception as e:  # noqa: BLE001 — a listener must never break a write
+            log.warning(f"[ops] commit listener: {e}")
+
+
 def after_commit(ws: str, conn, result: dict) -> dict:
     """Derived data after a committed batch: the orphan-upload sweep when a
     reference may have gone, the data.db purge for deleted blocks, and the
@@ -585,6 +603,7 @@ def after_commit(ws: str, conn, result: dict) -> dict:
     if result["deleted_ids"]:
         block_index.purge_page_data(ws, conn, result["deleted_ids"])
     collab.publish_ops(ws, result)
+    _notify(ws, result.get("client") or "")
     return result
 
 
@@ -603,6 +622,28 @@ def commit_ops(ws: str, page_id: str, ops: list[dict], *, actor: str, client: st
         return after_commit(ws, conn, result)
 
 
+def delete_page(ws: str, conn, page_id: str, *, actor: str, client: str = "") -> dict:
+    """Delete a page: the subtree, its op log, then a ``deleted_pages``
+    tombstone (so a copy of the workspace can later tell a deleted page
+    from one it never had). Commits, sweeps orphan uploads, purges the
+    page's data.db rows, and tells the page's room to reload (which
+    surfaces the 404). Returns ``{deleted_ids, removed_uploads}``. Pages
+    are not blocks of any page, so this is the one writer outside the op
+    batches — every other block write goes through ``apply_ops``.
+    ``client`` names the writer to the commit listeners like a batch's."""
+    deleted_ids = [r[0] for r in fetch_subtree(conn, page_id)]
+    delete_subtree(conn, page_id)
+    conn.execute("DELETE FROM page_ops WHERE page_id = ?", (page_id,))
+    conn.execute("INSERT OR REPLACE INTO deleted_pages (page_id, deleted_at, actor) VALUES (?, ?, ?)",
+                 (page_id, page_now(), actor))
+    conn.commit()
+    removed = cleanup_orphan_uploads(conn, ws_uploads_dir(ws))
+    block_index.purge_page_data(ws, conn, deleted_ids)
+    collab.publish_reload(ws, page_id)
+    _notify(ws, client)
+    return {"deleted_ids": deleted_ids, "removed_uploads": removed}
+
+
 def record_ops(ws: str, conn, page_id: str, ops: list[dict], *, actor: str) -> int:
     """Log + publish ops a writer performed with its own SQL (a cross-page
     move, whose two halves are a delete on one page and an arrival on the
@@ -612,6 +653,7 @@ def record_ops(ws: str, conn, page_id: str, ops: list[dict], *, actor: str) -> i
     conn.commit()
     collab.publish(ws, page_id, {"t": "ops", "seq": seq, "at": now, "actor": actor,
                                    "client": "", "ops": ops})
+    _notify(ws)
     return seq
 
 
@@ -621,14 +663,18 @@ def note_reload(ws: str, conn, page_id: str, actor: str) -> int:
     seq = log_reload(conn, page_id, actor)
     conn.commit()
     collab.publish_reload(ws, page_id, seq)
+    _notify(ws)
     return seq
 
 
 def log_reload(conn, page_id: str, actor: str) -> int:
     """Log a change ops can't express (a subtree replace, an import into an
-    existing page) so a catching-up client knows to refetch. Caller commits
-    and publishes (``collab.publish_reload``)."""
-    return _log(conn, page_id, actor, "", page_now(), [{"op": "reload"}])
+    existing page) so a catching-up client knows to refetch, and stamp the
+    page root like any batch (the home feed and the change feed read it).
+    Caller commits and publishes (``collab.publish_reload``)."""
+    now = page_now()
+    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
+    return _log(conn, page_id, actor, "", now, [{"op": "reload"}])
 
 
 def latest_seq(conn, page_id: str) -> int:

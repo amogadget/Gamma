@@ -157,8 +157,79 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     return src;
   });
 
+  await step("notes: in the editor an untouched image shows the picture, the caret on it shows the source", async () => {
+    const up = await alice2.upload("/api/upload-image", PNG_1PX, "dot2.png", "image/png");
+    await editRow(page, "buy milk");
+    await page.keyboard.press("Enter"); // a line break; list continuation makes line 2 a new todo item
+    await page.keyboard.type(`![](${up.url})`);
+    const widgets = () => page.$$eval(".blockEditorCm .cmImgWidget img", (els) => els.map((e) => [e.getAttribute("src"), e.naturalWidth]));
+    // The caret sits at the end of the image it just typed: raw source.
+    assertEq((await widgets()).length, 0, "typed image stays raw under the caret");
+    await page.keyboard.press("Control+Home"); // line 1: the image is untouched now
+    await until(async () => {
+      const imgs = await widgets();
+      return imgs.length === 1 && imgs[0][0].includes(`ws=${second.id}`) && imgs[0][1] === 1;
+    }, { what: "image widget in the editor" });
+    await page.keyboard.press("Control+End"); // back onto the image: raw again
+    await until(async () => {
+      const raw = await page.$eval(".blockEditorCm .cm-content", (el) => el.textContent);
+      return (await widgets()).length === 0 && raw.includes("![](");
+    }, { what: "raw image source under the caret" });
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(alice2, pageId)).includes(`- [ ] ![](${up.url})`), { what: "image line saved" });
+    assertNoProblems(page);
+  });
+
+  await step("notes: one blank line is a paragraph break, a second one renders as an empty line", async () => {
+    await editRow(page, "third");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("after gap");
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(alice2, pageId)).includes("third\\n\\n\\nafter gap"), { what: "blank lines saved" });
+    const paras = await row(page, "after gap").locator(".blockRendered p").allTextContents();
+    assertEq(JSON.stringify(paras), JSON.stringify(["third", "\u00a0", "after gap"]), "an empty paragraph between the two");
+    assertNoProblems(page);
+  });
+
+  await step("notes: colored text via the / menu and a foldable [!note]- callout", async () => {
+    await editRow(page, "after gap");
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("/red");
+    await page.getByRole("button", { name: /Red text/ }).click();
+    // The command lands through a React round trip that sets the content
+    // first and the caret a beat later; type once the caret sits inside the
+    // span (the mermaid step waits for its selection the same way).
+    await page.waitForFunction(() => {
+      const sel = document.getSelection();
+      const ed = document.activeElement?.closest(".cm-content");
+      if (!ed || !sel?.anchorNode || !ed.contains(sel.anchorNode)) return false;
+      const r = document.createRange(); r.setStart(ed, 0); r.setEnd(sel.anchorNode, sel.anchorOffset);
+      return r.toString().endsWith('#e5484d">');
+    }, null, { timeout: 5000 });
+    await page.keyboard.type("hot");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("> [!note]- Proof");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("hidden body");
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(alice2, pageId)).includes('<span style=\\"color:#e5484d\\">hot</span>'), { what: "the color span saved as inline HTML" });
+    const colored = row(page, "hot").locator('.blockRendered span[style*="color"]');
+    assertEq(await colored.innerText(), "hot", "the rendered view colors the run");
+    const details = row(page, "Proof").locator("details.callout");
+    assertEq(await details.count(), 1, "the fold flag renders a <details>");
+    assertEq(await details.evaluate((el) => el.open), false, "'-' starts collapsed");
+    await details.locator("summary").click();
+    assertEq(await details.evaluate((el) => el.open), true, "the title toggles it");
+    assertEq(await page.locator(".blockEditorCm").count(), 0, "toggling never opens the editor");
+    assertNoProblems(page);
+  });
+
   await step("notes: Export… as an Obsidian vault downloads a zip", async () => {
-    await page.click("button[aria-label='Settings']");
+    await page.click("button[aria-label='View']");
     await page.locator(".popoverItem", { hasText: "Export…" }).click();
     const dialog = page.getByRole("dialog", { name: "Export", exact: true });
     await dialog.waitFor();

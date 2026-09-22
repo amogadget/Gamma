@@ -3,17 +3,19 @@
 // pasted figures, the "+" context picker, and the per-message PDF attach.
 // App provides context (open paper, library, selections) and the model/effort/
 // prompt preferences it also needs elsewhere.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { API, apiJson, copyText, isPdfFile, readNdjson } from "../shared/lib/utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "../shared/ui/Widgets";
 import PaperMentionInput from "./PaperMentionInput";
 import { MAX_CHAT_REFERENCES } from "./paperMentions";
+import { addUsage, cachedPercent, conversationUsage, fmtTokens, liveUsage, usageDetail } from "./tokenUsage";
 import { createTitleScorer } from "../library/librarySearch";
 import { pageAttachment } from "../library/libraryUtils";
 import { MenuSelect } from "../shared/ui/Menus";
+import { guideEvents } from "../guide/events.js";
 import { CharSlider, approxPages } from "../settings/SettingsKit";
 import { AgentToolPicker, CHAT_KIND_ROWS } from "../settings/SettingsDialog";
-import { AlertCircleIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
+import { AlertCircleIcon, ArrowDownIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, EyeIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -43,7 +45,7 @@ function relAge(iso) {
 // that changed the library (they trigger the home-feed refresh). Every chip
 // carries the raw call the server ran (tool/args/result, both truncated), so
 // clicking one expands the arguments and the output the model saw.
-const ACTION_ICONS = { rename: PencilIcon, move: FolderIcon, search: SearchIcon, read: BookIcon, list: ListIcon, edit: PencilIcon, create: PlusIcon, websearch: GlobeIcon, fetch: CloudDownloadIcon, error: XIcon };
+const ACTION_ICONS = { rename: PencilIcon, move: FolderIcon, search: SearchIcon, read: BookIcon, view: EyeIcon, list: ListIcon, edit: PencilIcon, create: PlusIcon, websearch: GlobeIcon, fetch: CloudDownloadIcon, error: XIcon };
 // What the model was given for a reply, per document — streamed by
 // /api/ai/chat as its first line and saved on the message. Shown only when
 // it matters: the paper was truncated, or the PDF file was requested but the
@@ -81,6 +83,26 @@ function ContextCoverage({ items }) {
   );
 }
 
+// The token line under a reply, Claude Code style: prompt in, reply out,
+// and the share of the prompt the provider served from its cache. Every
+// count comes from the provider's own report ({"usage"} lines of the chat
+// stream, summed over an agent reply's rounds); a reply without one shows
+// nothing. While the reply streams the same line ticks up next to the
+// "Responding" pill: exact counts for the rounds already reported, a "~"
+// estimate from the characters received for the one still arriving.
+function UsageLine({ usage, className = "chatMsgUsage" }) {
+  if (!usage || !(usage.input || usage.output)) return null;
+  const cached = cachedPercent(usage);
+  const live = !!usage.estimate;
+  return (
+    <span className={className} title={live ? "Counting while the reply streams — the provider's own count replaces the estimate when it finishes" : usageDetail(usage)}>
+      {usage.input ? <span className="chatMsgUsagePart"><ArrowUpIcon size={9} />{fmtTokens(usage.input)}</span> : null}
+      <span className="chatMsgUsagePart"><ArrowDownIcon size={9} />{live ? "~" : ""}{fmtTokens(usage.output)}</span>
+      {cached && !live ? <span className="chatMsgUsagePart">{cached}% cached</span> : null}
+    </span>
+  );
+}
+
 const MUTATING_KINDS = new Set(["rename", "move", "edit", "create"]);
 // The note-block mutators: their actions carry the page id(s) they touched,
 // so the open page's block tree can reload and show the change.
@@ -105,6 +127,8 @@ function SelChip({ kind, label, labelTitle, text, title, onRemove, removeTitle }
 }
 
 export default function ChatDock({
+  session,
+  readOnly = false,
   docId, pageAttach, focusedBlockId, homeBlocks, pageTitle, openTabs,
   pdfSelections, setPdfSelections,
   // Note chips ([{kind: "block", id, text} | {kind: "note", text}], App
@@ -131,18 +155,20 @@ export default function ChatDock({
   onOpenPage,
   onGrip, onGripDoubleClick, collapsed, onClose,
 }) {
-  const [chatMessages, setChatMessages] = useState([]);
+  const [loadedMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  // Tracks which block we've finished loading from the server, so the save
-  // effect doesn't fire (and clobber the stored chat) before the load lands.
-  const chatLoadedForRef = useRef("");
+  const [loadError, setLoadError] = useState("");
   // Chat history is per page; the home view buckets per folder ("home" at the
   // library root, "home:<path>" inside a folder) — switching folders switches
   // conversations, so the organizer never drags one folder's context into
   // another. App migrates the buckets on folder rename/move/delete
   // (POST /api/chats/folder-rename).
   const chatKey = focusedBlockId || (organizeFolder ? `home:${organizeFolder}` : "home");
+  const sessionState = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const chatMessages = sessionState.replies.get(chatKey)?.messages || loadedMessages;
+  // A reply is streaming into THIS conversation. Other buckets stream on
+  // their own — asking one paper never waits for another's answer.
+  const busyHere = sessionState.active.has(chatKey);
   const folderChat = organizeFolder != null;
   // Which of the three chat kinds this is — each has its own tool permission
   // map in Settings → Assistant (prefs.js CHAT_KINDS): the folder chat, a
@@ -155,7 +181,7 @@ export default function ChatDock({
   const perm = (key) => chatToolPerms?.[key] !== false;
   const toggleTools = () => setAgentEnabled(!agentEnabled);
   // What the agent may do here after applying the shared permissions.
-  const agentReads = perm("list") || perm("read") || perm("block_read") || perm("search")
+  const agentReads = perm("list") || perm("read") || perm("block_read") || perm("view") || perm("search")
     || perm("web_search") || perm("web_read");
   const agentWrites = perm("rename") || perm("move") || perm("block_edit");
   // Agent fields riding on /api/ai/chat ({} = plain chat): folder chats reach
@@ -165,7 +191,7 @@ export default function ChatDock({
     if (!toolsEnabled) return {};
     const scope = organizeFolder != null && (agentReads || agentWrites)
       ? { agent_scope: "folder", folder: organizeFolder }
-      : focusedBlockId && (perm("read") || perm("block_read") || perm("search")
+      : focusedBlockId && (perm("read") || perm("block_read") || perm("view") || perm("search")
                            || perm("web_search") || perm("web_read") || perm("block_edit"))
         ? { agent_scope: "page", page_id: focusedBlockId }
         : null;
@@ -191,10 +217,6 @@ export default function ChatDock({
   const agentAsk = agentIntro ? (agentWrites ? `Ask, or organize ${agentScopeName}…` : `Ask across ${agentScopeName}…`) : null;
   const chatKeyRef = useRef(chatKey);
   chatKeyRef.current = chatKey;
-  // Which conversation the in-flight request belongs to (typing indicator
-  // shows there, and a reply landing after a page switch is saved there).
-  const [chatLoadingKey, setChatLoadingKey] = useState("");
-  const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
   // chatImages (pasted/area-selection figures pending send) lives in App —
   // like pdfSelections — so the PDF viewer can attach into it.
   const [editingMsg, setEditingMsg] = useState(null); // {idx, text} — editing a sent user message
@@ -278,36 +300,30 @@ export default function ChatDock({
   // Load chat from backend whenever the chat bucket changes.
   useEffect(() => {
     let cancelled = false;
-    chatLoadedForRef.current = "";
     setChatDocs([]);
     setChatIncludeNotes(false);
     setChatInput("");
     setDocPicker(false);
-    fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : { messages: [] })
+    const reply = session.getSnapshot().replies.get(chatKey);
+    const reloadSaved = session.isSaved(chatKey);
+    showLoaded(reply?.messages || [], reply?.title);
+    setLoadError("");
+    apiJson(`${API}/chats/${encodeURIComponent(chatKey)}`)
       .then(data => {
         if (cancelled) return;
-        showLoaded(data.messages || [], data.title);
-        chatLoadedForRef.current = chatKey;
+        const latest = session.getSnapshot().replies.get(chatKey);
+        // Once a reply was saved before this GET, the server is authoritative
+        // again (another tab or a folder rename may have changed the bucket).
+        if (reloadSaved && latest === reply && session.isSaved(chatKey)) {
+          showLoaded(data.messages || [], data.title);
+          session.forget(chatKey);
+        } else {
+          showLoaded(latest?.messages || data.messages || [], data.title);
+        }
       })
-      .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
+      .catch((err) => { if (!cancelled && !session.getSnapshot().replies.has(chatKey)) setLoadError(`Could not load chat: ${err.message}`); });
     return () => { cancelled = true; };
-  }, [chatKey, docId]);
-
-  // Save chat to backend (debounced) when chatMessages changes, but only
-  // after the load for the current chat bucket completed.
-  useEffect(() => {
-    if (chatLoadedForRef.current !== chatKey) return;
-    const timer = setTimeout(() => {
-      fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ messages: chatMessages }),
-      }).catch(() => {});
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [chatMessages, chatKey]);
+  }, [chatKey, docId, readOnly, session]);
 
   // History: the bucket's earlier conversations (server `chat_history`).
   // "New chat" archives the current one there instead of deleting it, and
@@ -322,15 +338,14 @@ export default function ChatDock({
   const historyOpen = openPopover === "chathistory";
   useEffect(() => { setHistory(null); setHistoryQuery(""); setRenaming(null); }, [chatKey]);
   useEffect(() => {
-    if (!historyOpen || history != null) return;
+    if (readOnly || !historyOpen || history != null) return;
     let cancelled = false;
     apiJson(`${API}/chat-history?bucket=${encodeURIComponent(chatKey)}`)
       .then((data) => { if (!cancelled) setHistory(data.sessions || []); })
       .catch((err) => { if (!cancelled) { setHistory([]); setStatus(`Chat history: ${err.message}`); } });
     return () => { cancelled = true; };
-  }, [historyOpen, history, chatKey]);
+  }, [historyOpen, history, chatKey, readOnly]);
   const activeTitle = chatTitle || deriveTitle(chatMessages) || "Untitled";
-  const busyHere = chatLoading && chatLoadingKey === chatKey; // a reply is streaming into this conversation
   // Reserve the reply's bubble before the first stream event. This placeholder
   // is display-only; tool activity and answer text replace it in the same row.
   const visibleMessages = busyHere && (!chatMessages.length || chatMessages.at(-1).role === "user")
@@ -338,9 +353,18 @@ export default function ChatDock({
     : chatMessages;
   const currentPayload = () => ({ bucket: chatKey, messages: chatMessages, title: chatTitle });
 
-  function newChat() {
+  async function newChat() {
     if (busyHere) return;
     const payload = currentPayload();
+    try {
+      await session.flush(chatKey);
+      await apiJson(`${API}/chat-history/archive`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(payload) });
+    } catch (err) {
+      setStatus(`Couldn't keep the conversation in history: ${err.message}`);
+      return;
+    }
+    session.forget(chatKey);
+    if (chatKeyRef.current !== chatKey) return;
     setChatMessages([]);
     setChatDocs([]);
     setChatInput("");
@@ -349,15 +373,16 @@ export default function ChatDock({
     attachPdfManualRef.current = false;
     setAttachPdf(nativePdf); // new chat: first question carries the full PDF again (where the provider takes it)
     setHistory(null);
-    apiJson(`${API}/chat-history/archive`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(payload) })
-      .catch((err) => setStatus(`Couldn't keep the conversation in history: ${err.message}`));
   }
 
   async function openHistory(id) {
     if (busyHere) return;
     try {
+      await session.flush(chatKey);
       const data = await apiJson(`${API}/chat-history/${id}/open`,
         { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(currentPayload()) });
+      session.forget(chatKey);
+      if (chatKeyRef.current !== chatKey) return;
       showLoaded(data.messages || [], data.title);
       setHistory(null);
       setOpenPopover(null);
@@ -377,6 +402,7 @@ export default function ChatDock({
     try {
       if (edit.id === "") {
         setChatTitle(title);
+        await session.flush(chatKey);
         await apiJson(`${API}/chats/${encodeURIComponent(chatKey)}`,
           { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ messages: chatMessages, title }) });
       } else {
@@ -499,14 +525,16 @@ export default function ChatDock({
       chatProgScrollRef.current = true;
       el.scrollTop = target;
     }
-  }, [chatMessages, chatLoading]);
+  }, [chatMessages, busyHere]);
 
   // Core chat send. baseMessages overrides the history (used when re-sending
   // an edited message: everything after the edited message is discarded,
   // ChatGPT-style).
   async function sendChat(rawText, { baseMessages, referenceMessage } = {}) {
+    if (readOnly) return;
     const text = (rawText || "").trim();
-    if (!text || chatLoading) return;
+    if (!text || busyHere) return;
+    guideEvents.emit("chat.sent");
     const selectedDocs = referenceMessage ? (referenceMessage.contextPages || []).map((p) => p.id) : chatDocs;
     const includeNotes = referenceMessage ? !!referenceMessage.includeNotes : chatIncludeNotes;
     if (referenceMessage) { setChatDocs(selectedDocs); setChatIncludeNotes(includeNotes); }
@@ -552,35 +580,26 @@ export default function ChatDock({
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
     const showReply = (aiMsg, final) => {
-      if (chatKeyRef.current === sendKey) {
-        setChatMessages([...prevMessages, userMsg, aiMsg]);
-      } else if (final) {
-        // The user switched pages mid-request — save straight to the
-        // original conversation instead of the one on screen.
-        fetch(`${API}/chats/${encodeURIComponent(sendKey)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ messages: [...prevMessages, userMsg, aiMsg] }),
-        }).catch(() => {});
-      }
+      const saved = session.update(sendKey, [...prevMessages, userMsg, aiMsg], final);
+      saved?.catch((err) => setStatus(`Couldn't save the conversation: ${err.message}`));
     };
     chatStickRef.current = true; // sending always snaps back to the bottom
-    setChatMessages([...prevMessages, userMsg]);
-    setChatLoading(true);
-    setChatLoadingKey(sendKey);
+    const ctrl = new AbortController();
+    if (!session.start(sendKey, [...prevMessages, userMsg], chatTitle, ctrl)) return;
     // One-shot semantics: the PDF went with this message; don't silently
     // re-upload (and re-bill) it on every follow-up.
     if (sendingPdf) setAttachPdf(false);
-    const ctrl = new AbortController();
-    chatAbortRef.current = ctrl;
     let acc = ""; // streamed reply so far — kept on Stop
     const actions = []; // organizer mutations streamed for this reply
     let coverage = null; // {"context": [...]} — what the model was given, per document
+    let usage = null; // the provider's token report, summed over the reply's rounds
+    let liveChars = 0; // characters received since the last report — the running estimate
+    const liveArgs = new Map(); // tool call id -> argument chars previewed so far (cumulative)
     const aiMsg = (extra = {}) => ({
       role: "ai", text: acc,
       ...(actions.length ? { actions: [...actions] } : {}),
       ...(coverage ? { context: coverage } : {}),
+      ...(usage ? { usage } : {}),
       ...extra,
     });
     try {
@@ -628,17 +647,31 @@ export default function ChatDock({
           } else if (ev.progress) {
             // The agent is still writing a note edit — the block types it in.
             onAgentEvent?.({ type: "progress", ...ev.progress });
+            const seen = liveArgs.get(ev.progress.id) || 0;
+            const now = (ev.progress.content || "").length;
+            if (now > seen) { liveChars += now - seen; liveArgs.set(ev.progress.id, now); }
           } else if (ev.context) {
             coverage = ev.context;
+          } else if (ev.usage) {
+            // The round is counted for real now; the estimate starts over.
+            usage = addUsage(usage, ev.usage);
+            liveChars = 0;
+            liveArgs.clear();
           } else {
             acc += ev.delta || "";
+            liveChars += (ev.delta || "").length;
           }
         }
-        if (acc || actions.length) showReply(aiMsg({ partial: true }));
+        if (acc || actions.length || usage) showReply(aiMsg({ partial: true, live: liveChars }));
       });
       showReply(aiMsg({ text: acc || (actions.length ? "" : "(no response)") }), true);
     } catch (err) {
       const stopped = err?.name === "AbortError";
+      // fetch's own TypeError ("Failed to fetch", or the body reader's
+      // "network error") means the connection to the server was lost, not
+      // that the provider failed — the server says that in-band.
+      const reason = err?.name === "TypeError"
+        ? `lost the connection to the server (${err.message})` : err.message;
       // A reply that never started is an error bubble (`error: true`): shown
       // and saved so the failure is visible after a reload, but rendered
       // apart from answers and never replayed to the model as one. A reply
@@ -646,14 +679,12 @@ export default function ChatDock({
       showReply(aiMsg({
         text: stopped
           ? (acc ? `${acc}\n\n*(stopped)*` : "*(stopped)*")
-          : (acc ? `${acc}\n\n**Error:** ${err.message}` : `Error: ${err.message}`),
+          : (acc ? `${acc}\n\n**Error:** ${reason}` : `Error: ${reason}`),
         ...(!stopped && !acc ? { error: true } : {}),
       }), true);
     } finally {
-      setChatLoading(false);
-      setChatLoadingKey("");
-      chatAbortRef.current = null;
-      onAgentEvent?.({ type: "done" });
+      session.finish(sendKey);
+      onAgentEvent?.({ type: "done", key: sendKey });
       // Agent tools changed the library — reload the home feed. Read-only
       // tool calls (list/read/search) render as chips but change nothing.
       if (actions.some((a) => MUTATING_KINDS.has(a.kind))) onLibraryChange?.();
@@ -670,13 +701,13 @@ export default function ChatDock({
 
   function sendChatMessage() {
     const text = chatInput;
-    if (!text.trim() || chatLoading) return;
+    if (!text.trim() || busyHere) return;
     setChatInput("");
     sendChat(text);
   }
 
   function stopChat() {
-    chatAbortRef.current?.abort();
+    session.stop(chatKey);
   }
 
   async function startDictation() {
@@ -837,6 +868,13 @@ export default function ChatDock({
   // ⚙ chat settings (model, reasoning effort, context size — the same prefs
   // Settings / AI edits, in a popover), Tools, Find, New chat.
   const settingsOpen = openPopover === "chatsettings";
+  const findBtn = (
+    <button type="button" className={`ctlBtn ${chatFindOpen ? "modeActive" : ""}`}
+      onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
+      title="Find in this conversation" aria-label="Find in this conversation">
+      <SearchIcon size={15} />
+    </button>
+  );
   const headerContent = (
     <>
       {aiInfo && !aiInfo.enabled && openAiKeysEditor ? (
@@ -855,11 +893,13 @@ export default function ChatDock({
           const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
           const currentId = models.some((m) => m.id === chatModel) ? chatModel : models[0].id;
           const currentModel = models.find((m) => m.id === currentId);
+          const totalUsage = conversationUsage(chatMessages);
+          const usageTitle = totalUsage ? `; this conversation: ${fmtTokens(totalUsage.input)} tokens in, ${fmtTokens(totalUsage.output)} out` : "";
           return (
             <span data-popover="chatsettings" className="popoverAnchor">
-              <button type="button" className={`ctlBtn ${settingsOpen ? "modeActive" : ""}`}
+              <button type="button" data-guide="chat.settings" className={`ctlBtn ${settingsOpen ? "modeActive" : ""}`}
                 onClick={() => setOpenPopover((p) => (p === "chatsettings" ? null : "chatsettings"))}
-                title={`Chat settings — ${currentModel?.model || "model"}${chatEffort ? `, effort: ${chatEffort}` : ""}, context ${chatContextChars.toLocaleString()} chars`}
+                title={`Chat settings — ${currentModel?.model || "model"}${chatEffort ? `, effort: ${chatEffort}` : ""}, context ${chatContextChars.toLocaleString()} chars${usageTitle}`}
                 aria-label="Chat settings" aria-expanded={settingsOpen}>
                 <SettingsIcon size={15} />
               </button>
@@ -905,6 +945,15 @@ export default function ChatDock({
                   <div className="popoverHint">
                     Applies to all {chatKindLabel.toLowerCase()} conversations in this browser.
                   </div>
+                  <div className="popoverSection">Tokens · this conversation</div>
+                  {totalUsage ? (
+                    <div className="chatUsageTotal" title={usageDetail(totalUsage)}>
+                      <UsageLine usage={totalUsage} className="chatMsgUsage inline" />
+                      <span className="popoverHint">{chatMessages.filter((m) => m.role === "ai" && m.usage).length} replies counted, as the provider reported them. Totals per day and model: Settings / AI / Token usage.</span>
+                    </div>
+                  ) : (
+                    <div className="popoverHint">No token counts yet — they appear under each reply once the provider reports them.</div>
+                  )}
                 </div>
               ) : null}
             </span>
@@ -913,6 +962,7 @@ export default function ChatDock({
         <button
           type="button"
           className={`ctlBtn ${toolsEnabled ? "modeActive" : ""}`}
+          data-guide="chat.tools"
           aria-pressed={toolsEnabled}
           aria-label={`Tools ${toolsEnabled ? "on" : "off"}`}
           onClick={() => { setOpenPopover(null); toggleTools(); }}
@@ -920,11 +970,7 @@ export default function ChatDock({
         >
           <SlidersIcon size={15} />
         </button>
-        <button type="button" className={`ctlBtn ${chatFindOpen ? "modeActive" : ""}`}
-          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
-          title="Find in this conversation" aria-label="Find in this conversation">
-          <SearchIcon size={15} />
-        </button>
+        {findBtn}
         <span data-popover="chathistory" className="popoverAnchor">
           <button type="button" className={`ctlBtn ${historyOpen ? "modeActive" : ""}`}
             onClick={() => setOpenPopover((p) => (p === "chathistory" ? null : "chathistory"))}
@@ -998,9 +1044,12 @@ export default function ChatDock({
 
   return (
     <DockWindow title="Chat" onGrip={onGrip} onGripDoubleClick={onGripDoubleClick}
-      collapsed={collapsed} onClose={onClose} headerContent={headerContent}>
+      collapsed={collapsed} onClose={onClose} headerContent={readOnly ? <>
+        <span className="uiTag">Read only</span>
+        {findBtn}
+      </> : headerContent}>
     <div className="chatPanel chatWindow">
-      {aiHealth && !aiHealth.ok ? (
+      {!readOnly && aiHealth && !aiHealth.ok ? (
         // The login connection check found the active provider broken — say so
         // here, where the failure would otherwise surface mid-conversation.
         <div className="chatHealthStrip" title={aiHealth.error || ""}>
@@ -1063,16 +1112,12 @@ export default function ChatDock({
         {chatTextScale.badge}
         {visibleMessages.length === 0 ? (
           <div className="chatEmpty">
-            {aiInfo && !aiInfo.enabled ? (
+            {loadError || (readOnly ? "No saved conversation for this page." : aiInfo && !aiInfo.enabled ? (
               openAiKeysEditor ? (
-                <>
-                  AI is not configured —{" "}
-                  <button className="chatEmptyLink" onClick={openAiKeysEditor}>add an AI provider</button>
-                  {" "}with your API key to enable it.
-                </>
+                <>Connect an AI provider to start — <button className="chatEmptyLink" onClick={openAiKeysEditor}>Set up AI</button>.</>
               ) : "AI is not configured."
             ) : focusedBlockId ? "Ask AI about this page…"
-              : agentIntro || "Ask AI anything, or generate a report from your pages…"}
+              : agentIntro || "Ask AI anything, or generate a report from your pages…")}
           </div>
         ) : (
           visibleMessages.map((m, i) => {
@@ -1102,7 +1147,7 @@ export default function ChatDock({
                       <div className="chatEditBtns">
                         <button type="button" className="uiBtn sm" onClick={() => setEditingMsg(null)}>Cancel</button>
                         <button type="button" className="uiBtn sm chatEditSend"
-                          disabled={!editingMsg.text.trim() || chatLoading}
+                          disabled={!editingMsg.text.trim() || busyHere}
                           onClick={() => {
                             const base = chatMessages.slice(0, i);
                             const text = editingMsg.text;
@@ -1179,22 +1224,26 @@ export default function ChatDock({
                       <div className="chatThinking" role="status" aria-label={m.text ? "AI is responding" : "AI is thinking"}>
                         <span aria-hidden="true">{m.text ? "Responding" : "Thinking"}</span>
                         <span className="chatTyping" aria-hidden="true"><span /><span /><span /></span>
+                        <UsageLine usage={liveUsage(m.usage, m.live)} className="chatMsgUsage live" />
                       </div>
                     ) : null}
                   </div>
-                  {!isResponding ? <div className="chatMsgActions">
+                  {!isResponding ? <div className="chatMsgFoot">
+                    {!isUser ? <UsageLine usage={m.usage} /> : null}
+                    <div className="chatMsgActions">
                     <button type="button" className="chatMsgActionBtn" title="Copy message"
                       onClick={() => copyChatMessage(i, m.text)}>
                       {copiedMsgIdx === i
                         ? <CheckIcon size={13} />
                         : <CopyIcon size={13} />}
                     </button>
-                    {isUser && !chatLoading ? (
+                    {!readOnly && isUser && !busyHere ? (
                       <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
                         onClick={() => setEditingMsg({ idx: i, text: m.text })}>
                         <PencilIcon size={13} />
                       </button>
                     ) : null}
+                    </div>
                   </div> : null}
                 </div>
               </div>
@@ -1202,6 +1251,7 @@ export default function ChatDock({
           })
         )}
       </div>
+      {!readOnly ? <>
       {pdfSelections.length || chatNotes?.length || cursorChip ? (
         <div className="chatSelChips">
           {cursorChip ? (
@@ -1248,7 +1298,7 @@ export default function ChatDock({
         </div>
       ) : null}
       {chatImages.length ? (
-        <div className="chatImgPreviewRow">
+        <div className="chatImgPreviewRow" data-guide="chat.imageContext">
           {chatImages.map((src, i) => (
             <span key={i} className="chatImgPreview">
               <img src={src} alt="pasted figure" />
@@ -1260,6 +1310,7 @@ export default function ChatDock({
       ) : null}
       <form
         className="chatInputRow"
+        data-guide="chat.composer"
         onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
       >
         {dictation === "rec" ? (
@@ -1285,6 +1336,7 @@ export default function ChatDock({
           <button
             type="button"
             className={`chatAttachToggle chatPlusBtn ${(chatDocs.length || chatIncludeNotes) ? "on" : ""}`}
+            data-guide="chat.context"
             onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
             title="Add photos & files, or pages from your library"
             aria-label="Add attachments or chat context"
@@ -1347,6 +1399,7 @@ export default function ChatDock({
           onAttach={(id) => setChatDocs((prev) => prev.includes(id) ? prev : [...prev, id])}
           onSend={sendChatMessage}
           className="chatInput chatInputArea"
+          data-guide="chat.input"
           rows={1}
           value={chatInput}
           onChange={setChatInput}
@@ -1359,12 +1412,12 @@ export default function ChatDock({
             : pdfSelections.length ? "Ask about the selection…"
             : chatNotes?.length > 1 ? `Ask about the ${chatNotes.length} attached notes…`
             : chatNotes?.length ? (chatNotes[0].kind === "block" ? "Ask about the attached block…" : "Ask about the selected note…")
-            : cursorChip ? "Ask about the block at your cursor…"
+            : cursorChip ? "Ask about this block…"
             : chatDocs.length ? `Ask about ${chatDocs.length} attached page${chatDocs.length > 1 ? "s" : ""}…`
             : agentAsk || "Ask…"
-          ) + " (@ to mention a paper)"}
+          ) + " (@ paper)"}
         />
-        {chatLoading ? (
+        {busyHere ? (
           <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
             <StopIcon size={11} />
           </button>
@@ -1374,7 +1427,7 @@ export default function ChatDock({
           </button>
         ) : (
           <>
-            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
+            <button className="uiBtn chatCircleBtn chatMicBtn" data-guide="chat.voice" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
               <MicIcon size={13} />
             </button>
             <button className="uiBtn primary chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
@@ -1385,6 +1438,7 @@ export default function ChatDock({
         </>
         )}
       </form>
+      </> : null}
       {docPicker ? (
         <div className="reportOverlay" onClick={() => setDocPicker(false)}>
           <div className="reportModal docPickerModal" onClick={(e) => e.stopPropagation()}>

@@ -12,8 +12,8 @@ documented in [the development guide](../dev/handwriting.md).
 
 ## Main finding: ink needs direct editing
 
-The user's example—touching existing writing to bring up edit buttons—is
-part of a larger selection workflow. A toolbar and a smooth pen do not
+Touching existing writing to bring up edit buttons is part of a larger
+selection workflow. A toolbar and a smooth pen do not
 complete that workflow. Users need to select existing marks, see what is
 selected, change them locally, and resume writing without a keyboard.
 
@@ -42,9 +42,10 @@ to every pointer-down would also interfere with writing and scrolling.
 
 ## Feature inventory
 
-Gamma status describes the working tree after the initial pen-input changes.
-“Missing” refers to Gamma's handwriting workflow, not unrelated text-block
-capabilities. Priorities below are recommendations, not completed features.
+The Gamma status column is the working tree of 2026-09-14, before the
+selection work that followed this survey; [handwriting.md](../dev/handwriting.md)
+describes the current behaviour. “Missing” refers to Gamma's handwriting
+workflow, not unrelated text-block capabilities.
 
 ### Writing and correction
 
@@ -95,10 +96,12 @@ capabilities. Priorities below are recommendations, not completed features.
 | Tape and presentation pointer | Notability offers revealable study tape and a laser pointer that leaves no stored ink. [Overview][n-start], [Laser][n-laser] | Missing. |
 | Page media and backgrounds | Notability includes text boxes, photos, stickers, sticky notes, scanned/PDF backgrounds, templates and multi-note viewing. [Overview][n-start] | PDF + ink overlay and notes-pane content; no mixed-object canvas or notebook paper tool. |
 
-## Gamma source audit: why an edit menu is more than a new button
+## Source audit before the selection work (2026-09-14)
 
 Reviewed `frontend/src/ink/InkLayer.jsx`, `ink/ink.js`, `ink/inkInput.js`, `app/App.jsx`,
-`pdf/PdfViewer.jsx`, `app/prefs.js`, `settings/SettingsDialog.jsx`, and the handwriting e2e scenarios.
+`pdf/PdfViewer.jsx`, `app/prefs.js`, `settings/SettingsDialog.jsx`, and the handwriting e2e scenarios,
+as they were before the selection menu, handles and touch controls were built.
+The findings shaped that work; the code they describe has changed since.
 
 1. **Hit testing currently serves erasing.** `hitStrokes` returns every
    stroke within a radius. Direct selection needs a deliberate nearest/topmost

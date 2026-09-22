@@ -30,7 +30,17 @@ All state is SQLite + files on disk under a data directory (env
     appearance, the active AI provider, the AI provider entries with their
     secrets), the workspace id for everything that names its pages (open
     tabs, recents, pinned folders, reading positions);
-  - `settings` — admin-tunable server settings (KV).
+  - `settings` — admin-tunable server settings (KV), including the
+    admin-confirmed `public_url`;
+  - `publisher_sessions` — encrypted publisher cookie snapshots per
+    `(username, host)`, imported by the Connector ([extension.md](extension.md));
+  - `integration_tokens` — hashed assistant tokens per account and workspace
+    (with a `scope`, read or write), and `mcp_oauth` — the OAuth flow's
+    expiring records ([mcp.md](mcp.md));
+  - `mirrors` — the offline copies of remote workspaces: the local workspace,
+    the remote's address and workspace, the write token (Fernet-encrypted
+    with the data directory's key), the feed cursors and the last round's
+    status ([mirror.md](mirror.md)).
 - `workspaces/<id>/pages.db` — the core data model: the `unified_blocks`
   table. Everything is a block (self-referential `parent_id`, fractional-index
   `position` strings like `a0`, `a0V` from the `fractional-indexing` package).
@@ -40,11 +50,17 @@ All state is SQLite + files on disk under a data directory (env
   `pdf_position` in their JSON `properties` column; free notes are blocks
   without. Next to it, `page_ops` — the per-page operation log (one row per
   applied batch, `seq` counting up per page, pruned to the newest 2000;
-  [collab.md](collab.md)). Open it ONLY through `db.connect_pages_db(ws)`:
+  [collab.md](collab.md)) and `deleted_pages` — a tombstone per deleted page
+  (`page_id`, `deleted_at`, `actor`; written by `ops.delete_page`, which also
+  drops the page's log rows, cleared when a page is created under the same
+  id — so a copy of the workspace can tell a deleted page from one it never
+  had), and `sync_pages` / `sync_conflicts` / `sync_log` — a mirror's
+  per-page base tree, the merges it decided on its own and what its rounds
+  did ([mirror.md](mirror.md); empty in a workspace that mirrors nothing). Open it ONLY through `db.connect_pages_db(ws)`:
   WAL journal mode (readers never wait on a writer — several browsers,
   several members), a 10 s busy timeout, and the schema statements (so a
-  restored backup gains `page_ops`). Backups copy it with the sqlite backup
-  API, which is WAL-safe.
+  restored backup gains `page_ops` and `deleted_pages`). Backups copy it with
+  the sqlite backup API, which is WAL-safe.
 - `workspaces/<id>/data.db` — the workspace's derived data: AI `chats` +
   `chat_history`, `page_snaps` (the recents-card cover thumbnails, synced via
   `/api/page-snaps` — too big for the prefs KV), the viewer's per-document
@@ -129,6 +145,9 @@ every account + missing files). Workspaces: `list-workspaces`,
 updates every row that names the account (users, sessions, shares,
 memberships, prefs) — no files move.
 
+`set-password` revokes the account's existing browser sessions and integration
+tokens, matching password changes through the admin API.
+
 ## User management GUI
 
 `gamma/routers/admin.py` (`/api/admin/users*`, `/api/admin/workspaces`),
@@ -173,12 +192,26 @@ own for a shared one), `workspace_bytes` (this workspace's), and `account`
 deliberately NOT part of `/api/session` (identity only). Backup-restore imports are unmetered.
 Details + UI in [settings.md](settings.md).
 
-## Server log
+## Server dashboard and log
+
+Settings → Server opens with a **Dashboard** (`GET /api/admin/server-info`,
+`gamma/version.py`, [api.md](api.md)): three tiles — the build (`v<version>`
+from `GAMMA_VERSION`, stamped by the Docker build and the desktop shell;
+"dev build" for a checkout), uptime, and warnings · errors logged since
+startup (`logbuf.counts()`) — plus an Updates row comparing the build with
+the newest GitHub release (cached; "Check now" refetches; `GAMMA_UPDATE_CHECK=off`
+for air-gapped servers). A Docker server cannot update itself, so an
+available update only says which image to pull; the desktop app updates
+on its own. Things worth an admin's eye are logged at WARNING — a
+share-link visitor over the write throttle, an address probing unknown
+share links ([api.md](api.md) "Link visitors") — so the tile turns amber
+and the log's "Warnings" filter shows them.
 
 `gamma/logbuf.py`, `GET /api/admin/logs?after=<seq>`: all backend logging goes
 through `logbuf.log` (a `logging` logger — use it, not `print()`), which tees
 to the console and a scrubbed in-memory ring buffer (2000 entries, gone on
-restart) shown admin-only in Settings → Server → "Log". Secret-shaped
+restart) shown admin-only in Settings → Server → "Log", with a level filter
+(All / Warnings / Errors) and a badge per non-info line. Secret-shaped
 substrings (Bearer/sk- keys, `password=`/`token=` pairs, 40+-char urlsafe runs
 — session/share tokens) are masked at insert time; the one-time seeded admin
 password in `seed.py` stays a raw `print()` on purpose and must never route

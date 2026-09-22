@@ -28,7 +28,8 @@ import { inkJumpPosition } from "../native/inkNavigation.js";
 import ReplayInkLayer from "../native/ReplayInkLayer.jsx";
 import { ChatMarkdown } from "../shared/ui/Widgets";
 import { PdfCitationOverlay } from "./PdfCitationOverlay";
-import { citationRuns } from "./pdfCitation.js";
+import { citationRuns, runChars } from "./pdfCitation.js";
+import { noteBadgeAnchor } from "./noteAnchor.js";
 import { COLORS } from "../shared/model/highlightColors.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 // One worker for every document. pdf.js otherwise starts a fresh worker per
@@ -293,11 +294,12 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
     onLoadState?.(url, { phase: "cached" });
     return disk;
   }
-  onLoadState?.(url, { phase: "start" });
   // Stall watchdog: abort when the connection goes silent — the proxy may sit
   // for a while before its upstream download produces the first byte, but a
-  // connection with no bytes for STALL_MS is dead, not slow.
+  // connection with no bytes for STALL_MS is dead, not slow. The same
+  // controller is the tasks popover's stop button (`cancel`).
   const ctrl = new AbortController();
+  onLoadState?.(url, { phase: "start", cancel: () => ctrl.abort() });
   let loaded = 0, total = 0, lastByteAt = Date.now(), lastReport = 0, stalled = false;
   const watchdog = setInterval(() => {
     if (Date.now() - lastByteAt > STALL_MS) { stalled = true; ctrl.abort(); }
@@ -346,7 +348,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-// Handwriting (inkLayer.jsx): inkBlocks are the page's ink groups (blocks
+// Handwriting (ink/InkLayer.jsx): inkBlocks are the page's ink groups (blocks
 // with properties.ink_url / pdf_page), inkTool the armed tool or null,
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
@@ -640,15 +642,7 @@ function PdfViewer({ url, viewportRef, citation = null, headerAction = null, hig
         const items = tc.items;
         // Page string: runs joined by their PDF line break or a space,
         // each char tagged with its source run (-1 = synthetic filler).
-        const chars = [];
-        for (let ii = 0; ii < items.length; ii++) {
-          const str = items[ii].str || "";
-          for (let k = 0; k < str.length; k++) chars.push({ ch: str[k], it: ii, off: k });
-          if (items[ii].hasEOL) chars.push({ ch: "\n", it: -1, off: 0 });
-          else if (str && !/\s$/.test(str) && items[ii + 1]?.str && !/^\s/.test(items[ii + 1].str)) {
-            chars.push({ ch: " ", it: -1, off: 0 });
-          }
-        }
+        const chars = runChars(items.map((it) => ({ text: it.str, hasEOL: it.hasEOL })), { fillSpaces: true });
         const { norm, src } = normalizeChars(chars);
         const pageStr = norm.join("");
         const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
@@ -1701,7 +1695,7 @@ function PdfViewer({ url, viewportRef, citation = null, headerAction = null, hig
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "") + (transPeek ? " transPeek" : "") + (inkTool ? " inkArmed" : "") + (inkTool && !inkPenOnly ? " inkTouchDraw" : "") + (inkTool?.tool === "select" ? " inkSelect" : "")}
+      <div ref={viewerRef} data-guide="pdf.viewer" className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "") + (transPeek ? " transPeek" : "") + (inkTool ? " inkArmed" : "") + (inkTool && !inkPenOnly ? " inkTouchDraw" : "") + (inkTool?.tool === "select" ? " inkSelect" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
@@ -1866,17 +1860,19 @@ function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
   }, [tip]);
   return (
     <>
-      <button ref={btnRef} type="button" className="pdfNoteBadge" data-hl-id={hlId} style={style}
-        onPointerDown={(e) => { touchRef.current = e.pointerType !== "mouse"; }}
-        onMouseEnter={show} onMouseLeave={hide}
-        onClick={(e) => {
-          if (touchRef.current) { e.stopPropagation(); clearTimeout(timerRef.current); if (tip) setTip(null); else place(); return; }
-          hideNow(); onClick(e);
-        }}
-        onContextMenu={(e) => { hideNow(); onContextMenu(e); }}
-      >
-        <MessageSquareIcon size={10} strokeWidth={2.2} />
-      </button>
+      <span className="pdfNoteAnchor" style={style}>
+        <button ref={btnRef} type="button" className="pdfNoteBadge" data-hl-id={hlId} aria-label="Show highlight note"
+          onPointerDown={(e) => { touchRef.current = e.pointerType !== "mouse"; }}
+          onMouseEnter={show} onMouseLeave={hide}
+          onClick={(e) => {
+            if (touchRef.current) { e.stopPropagation(); clearTimeout(timerRef.current); if (tip) setTip(null); else place(); return; }
+            hideNow(); onClick(e);
+          }}
+          onContextMenu={(e) => { hideNow(); onContextMenu(e); }}
+        >
+          <MessageSquareIcon size={10} strokeWidth={2.2} />
+        </button>
+      </span>
       {tip ? createPortal(
         <div ref={tipRef} className="pdfNoteTip" style={tip} onMouseEnter={hold} onMouseLeave={hide}>
           {text ? <ChatMarkdown text={text} /> : "This highlight has a note"}
@@ -2169,7 +2165,7 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
     && (transEntry.queued || transEntry.busy?.size > 0);
 
   return (
-    <div ref={wrapRef} data-page={pageNumber} className={"pdfPageWrap" + (transActive ? " transShown" : "")}
+    <div ref={wrapRef} data-page={pageNumber} data-guide="pdf.page" className={"pdfPageWrap" + (transActive ? " transShown" : "")}
       onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
@@ -2233,10 +2229,10 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
           })()}
         </div>
       ) : null}
-      <div ref={textRef} className="textLayer" style={{
+      <div ref={textRef} className="textLayer" data-guide="pdf.textLayer" style={{
         userSelect: readOnly || inkTool ? "none" : "text", WebkitUserSelect: readOnly || inkTool ? "none" : "text",
       }} />
-      <PdfCitationOverlay citation={citation} textRef={textRef} wrapRef={wrapRef}
+      <PdfCitationOverlay citation={citation} wrapRef={wrapRef}
         ready={textReady?.scale === scale && textReady?.pdfDoc === pdfDoc ? textReady : null} />
       {inkBlocks.length || onInkStroke ? (
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}
@@ -2360,8 +2356,11 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
         }
         // Speech-bubble badge at the end of the passage when the user typed a
         // note on the highlight — click behaves like clicking the highlight.
-        if (h.hasNote && rects.length) {
-          const r = rects[rects.length - 1];
+        // The end is found by geometry (noteBadgeAnchor), not by taking the
+        // last stored rect: imported highlights keep per-glyph rects in no
+        // particular order, and a stray sliver rect would put it anywhere.
+        const r = h.hasNote ? noteBadgeAnchor(rects) : null;
+        if (r) {
           elements.push(
             <NoteBadge key={h.id + "-note"} hlId={h.id}
               text={h.comment?.text?.trim() || ""}
@@ -2404,6 +2403,7 @@ function PlainTip({ onConfirm, onLink }) {
           <button
             key={c}
             className="colorBtn"
+            data-guide="pdf.highlightColor"
             style={{ background: c }}
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onConfirm("", c); }}
             type="button"

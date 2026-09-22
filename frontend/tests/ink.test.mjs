@@ -91,6 +91,36 @@ test("width follows pressure for pens only", () => {
   assert.equal(strokeWidth(mouse, 0.1), mouse.size);
 });
 
+test("monoline keeps pressure data but renders the same outline at any pressure", () => {
+  const input = samples(9).map((s, i) => ({ ...s, p: (i + 1) / 10 }));
+  const mono = encodeStroke({ id: "mono", brush: "monoline", samples: input, ch: "xypt", t0: 100 });
+  assert.deepEqual(decodeStroke(mono), input);
+  assert.equal(strokeWidth(mono, 0), mono.size);
+  assert.equal(strokeWidth(mono, 1), mono.size);
+  const hard = encodeStroke({ brush: "monoline", samples: input.map((s) => ({ ...s, p: 1 })) });
+  assert.equal(strokePath(mono).d, strokePath(hard).d);
+  const softPen = encodeStroke({ samples: input.map((s) => ({ ...s, p: 0 })) });
+  const hardPen = encodeStroke({ samples: input.map((s) => ({ ...s, p: 1 })) });
+  assert.notEqual(strokePath(softPen).d, strokePath(hardPen).d);
+  assert.equal("brush" in softPen, false, "legacy strokes keep the same encoding");
+  const ink = { ...newInk(1, 612, 792), strokes: [mono] };
+  const cut = eraseAt(ink, 140, 212, 3);
+  assert.equal(cut.ink.strokes.length, 2);
+  assert(cut.ink.strokes.every((s) => s.brush === "monoline" && s.ch === "xypt" && s.t0 === 100));
+  assert.equal(duplicateStrokes(ink, [mono.id], 10, 10).ink.strokes[1].brush, "monoline");
+  assert.equal(restyleStrokes(ink, [mono.id], { color: "#dc2626", size: 4 }).strokes[0].brush, "monoline");
+});
+
+test("monoline presets survive storage and switching back to pen", () => {
+  const mono = { ...DEFAULT_TOOLS[0], brush: "monoline" };
+  assert.deepEqual(normalizeTools(JSON.parse(JSON.stringify([mono]))), [mono]);
+  assert.equal(toolStyle(mono).brush, "monoline");
+  const pen = normalizeTools([{ ...mono, brush: "pen" }])[0];
+  assert.equal("brush" in toolStyle(pen), false);
+  const highlighter = normalizeTools([{ ...DEFAULT_TOOLS[4], brush: "monoline" }])[0];
+  assert.equal("brush" in toolStyle(highlighter), false);
+});
+
 test("bounds, pdf_position and stroke editing", () => {
   let ink = newInk(3, 612, 792);
   assert.equal(inkBounds(ink), null);

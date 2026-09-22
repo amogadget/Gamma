@@ -11,6 +11,7 @@ from pathlib import Path
 
 # Must happen BEFORE importing gamma — config reads the environment at import.
 os.environ["GAMMA_DATA_DIR"] = tempfile.mkdtemp(prefix="gamma-test-")
+os.environ["GAMMA_SYNC_INTERVAL"] = "0"  # mirror rounds run only when a test asks
 for var in ("GAMMA_STATIC_DIR", "GAMMA_AI_ANTHROPIC_API_KEY", "GAMMA_AI_OPENAI_API_KEY",
             "GAMMA_AI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GAMMA_AI_MODELS", "GAMMA_AI_MODEL",
             "GAMMA_ADMIN_USER", "GAMMA_ADMIN_PASSWORD"):

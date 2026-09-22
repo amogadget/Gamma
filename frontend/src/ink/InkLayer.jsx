@@ -12,12 +12,13 @@ import { createPortal } from "react-dom";
 import { ContextMenu } from "../shared/ui/Menus";
 import { getStroke } from "perfect-freehand";
 import {
-  CopyIcon, ErasePartialIcon, EraserIcon, EraseStrokeIcon, HandIcon, HighlightIcon, LassoIcon, PenIcon, PlusIcon,
-  FileTextIcon, LineWidthIcon, PaletteIcon, RectSelectIcon, RedoIcon, TrashIcon, UndoIcon, XIcon,
+  CopyIcon, ErasePartialIcon, EraserIcon, EraseStrokeIcon, HandIcon, HighlightIcon, LassoIcon, PenIcon,
+  FileTextIcon, LineWidthIcon, PaletteIcon, RectSelectIcon, RedoIcon, ResizeIcon, TrashIcon, UndoIcon, XIcon,
 } from "../shared/ui/Icons";
 import {
-  HIGHLIGHTER_COLORS, HIGHLIGHTER_OPACITY, MAX_TOOLS, PEN_COLORS, boundsOf, encodeStroke, hitStrokes, inkBounds,
-  nearestInkStroke, outlineOptions, sizesFor, strokePath, strokesInLasso, svgPathFromPoints, toolId, unionBox,
+  HIGHLIGHTER_COLORS, HIGHLIGHTER_OPACITY, MAX_STROKE_SIZE, MAX_TOOLS, PEN_COLORS, boundsOf, encodeStroke, hitStrokes,
+  inkBounds, nearestInkStroke, outlineOptions, sizesFor, strokePath, strokesInLasso, svgPathFromPoints, toolId,
+  transformPoint, unionBox,
 } from "./ink";
 import * as inkStore from "./inkStore";
 import { appendInkSample, predictedInkSamples } from "./inkInput.js";
@@ -197,7 +198,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       } else {
         ctx.fillStyle = use.color;
         const pts = getStroke([...d.samples, ...(d.predicted || [])].map((s) => [s.x, s.y, s.p]),
-          outlineOptions({ size: use.size, pen: d.pen }));
+          outlineOptions({ size: use.size, pen: d.pen, brush: use.brush }));
         ctx.fill(new Path2D(svgPathFromPoints(pts)));
       }
     };
@@ -373,7 +374,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       appendInkSample(d, e, true);
       const { use } = d;
       const stroke = encodeStroke({
-        tool: use.tool, color: use.color, size: use.size, opacity: use.opacity ?? 1, pen: d.pen,
+        tool: use.tool, brush: use.brush, color: use.color, size: use.size, opacity: use.opacity ?? 1, pen: d.pen,
         t0: d.t0, samples: d.samples, ch: d.pen ? "xypt" : "xyt",
       });
       L.onStroke?.(pageNumber, stroke, { width: L.width, height: L.height });
@@ -454,12 +455,8 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     : `translate(${dragOffset?.dx || 0} ${dragOffset?.dy || 0})`;
   // Controls follow the same preview as the ink, but retain their screen
   // size. Keep selBox unchanged: gesture math uses the original geometry.
-  const previewPoint = (x, y) => {
-    if (!transform) return [x + (dragOffset?.dx || 0), y + (dragOffset?.dy || 0)];
-    const { cx, cy, scale, angle } = transform, cos = Math.cos(angle), sin = Math.sin(angle);
-    return [cx + scale * ((x - cx) * cos - (y - cy) * sin),
-      cy + scale * ((x - cx) * sin + (y - cy) * cos)];
-  };
+  const previewPoint = (x, y) => transform ? transformPoint(x, y, transform)
+    : [x + (dragOffset?.dx || 0), y + (dragOffset?.dy || 0)];
   const handlePositions = selBox ? {
     resize: previewPoint(selBox[2], selBox[3]), rotate: previewPoint(selBox[2], selBox[1]),
   } : null;
@@ -503,7 +500,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
         onAction={onAction} onClose={() => onSelect(pageNumber, [])} /> : null}
       {selBox && onAction ? <InkTransformHandles wrapRef={wrapRef} box={selBox} width={width} height={height}
         positions={handlePositions}
-        maxScale={Math.min(10, 100 / Math.max(...groups.flatMap((g) => g.ink.strokes.filter((s) => selectedIds.has(s.id)).map((s) => s.size))))}
+        maxScale={Math.min(10, MAX_STROKE_SIZE / Math.max(...groups.flatMap((g) => g.ink.strokes.filter((s) => selectedIds.has(s.id)).map((s) => s.size))))}
         onPreview={setTransform} onCommit={(value) => onAction("transform", value)} /> : null}
       <canvas ref={canvasRef} className="inkCanvas" />
       <div ref={cursorRef} className="inkCursor" aria-hidden="true"><span /></div>
@@ -564,7 +561,7 @@ function InkTransformHandles({ wrapRef, box, width, height, positions, maxScale,
         onCommit({ cx: (box[0] + box[2]) / 2, cy: (box[1] + box[3]) / 2,
           scale: mode === "resize" ? Math.min(maxScale, sign > 0 ? 1.1 : 1 / 1.1) : 1,
           angle: mode === "rotate" ? sign * Math.PI / 12 : 0 });
-      }}>{mode === "resize" ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 11v6h6M11 7h6v6" /></svg> : <RedoIcon />}</button>)}
+      }}>{mode === "resize" ? <ResizeIcon /> : <RedoIcon />}</button>)}
   </>;
 }
 
@@ -648,7 +645,7 @@ function InkSelectionMenu({ wrapRef, box, width, strokes, onAction, onClose }) {
         {(kinds.every((k) => k === "highlighter") ? HIGHLIGHTER_COLORS : PEN_COLORS).map((color) =>
           <button key={color} className="colorBtn inkSwatch" style={{ background: color }} aria-label={`Ink color ${color}`}
             aria-pressed={strokes.every((s) => s.color === color)} onClick={() => onAction("style", { color })} />)}
-        <label className="colorBtn inkSwatch inkCustomColor" title="Custom color"><input type="color" aria-label="Selected ink custom color" value={strokes[0]?.color || "#1f1f1f"}
+        <label className="colorBtn inkSwatch inkCustomColor" title="Custom color"><input type="color" aria-label="Selected ink custom color" value={strokes[0]?.color || PEN_COLORS[0]}
           onChange={(e) => onAction("style", { color: e.target.value })} /></label>
       </div> : null}
       {options === "width" ? kinds.map((kind) => <div className="inkEditOptions" key={kind} aria-label={`${kind} width`}>
@@ -690,7 +687,7 @@ export function InkCard({ block, onJump }) {
 // `tools`: the presets; `active`: a preset id, "eraser", "select" or null
 // (the hand); `options`: whether the row is open.
 export function InkToolbar({ tools, active, options, eraserMode, eraserSize, lassoMode,
-  onPick, onToggleOptions, onChangeTools, onEraser, onLasso, onNewGroup, onClose, onUndo, onRedo, canUndo, canRedo }) {
+  onPick, onToggleOptions, onChangeTools, onEraser, onLasso, onClose, onUndo, onRedo, canUndo, canRedo }) {
   const preset = tools.find((t) => t.id === active) || null;
   const tap = (id) => (id === active ? onToggleOptions() : onPick(id));
   const btn = (id, label, icon, extra) => (
@@ -718,12 +715,10 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
   return (
     <InkTooltips className="pdfInkBar" role="toolbar" aria-label="Handwriting tools">
       <div className="pdfInkRow">
-        <button type="button" className="ctlBtn" aria-label="Undo ink" title="Undo handwriting" disabled={!canUndo} onClick={onUndo}><UndoIcon aria-hidden="true" /></button>
-        <button type="button" className="ctlBtn" aria-label="Redo ink" title="Redo handwriting" disabled={!canRedo} onClick={onRedo}><RedoIcon aria-hidden="true" /></button>
         {tools.map((t, i) => {
           const hl = t.kind === "highlighter";
           const sizes = sizesFor(t.kind), k = Math.max(0, sizes.indexOf(t.size));
-          const label = `${hl ? "Highlighter" : "Pen"} ${t.color}, ${t.size} pt (${i + 1})` + (active === t.id ? " — tap again for options" : "");
+          const label = `${hl ? "Highlighter" : t.brush === "monoline" ? "Monoline" : "Pen"} ${t.color}, ${t.size} pt (${i + 1})` + (active === t.id ? " — tap again for options" : "");
           return btn(t.id, label, hl ? <HighlightIcon size={15} /> : <PenIcon size={15} />,
             <span className="inkToolInk" style={{ background: t.color, height: hl ? 3 + Math.round(k / 2) : 2 + Math.round(k / 3),
               opacity: hl ? 0.85 : 1 }} />);
@@ -735,12 +730,19 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
           onClick={() => onPick(null)} title="Hand (V): scroll and select text; a stylus still writes" aria-label="Hand"
           aria-pressed={active === null}><HandIcon size={15} /></button>
         <span className="pdfInkSep" />
-        <button type="button" className="ctlBtn" onClick={onNewGroup}
-          title="Start a new handwriting note: the next strokes make their own block instead of joining the last one"><PlusIcon size={15} /></button>
         <button type="button" className="ctlBtn" onClick={onClose} title="Close the handwriting tools (Esc)"><XIcon size={15} /></button>
+        <span className="pdfInkHistory">
+          <button type="button" className="ctlBtn" aria-label="Undo ink" title="Undo handwriting" disabled={!canUndo} onClick={onUndo}><UndoIcon aria-hidden="true" /></button>
+          <button type="button" className="ctlBtn" aria-label="Redo ink" title="Redo handwriting" disabled={!canRedo} onClick={onRedo}><RedoIcon aria-hidden="true" /></button>
+        </span>
       </div>
       {options && preset ? (
         <div className="pdfInkSub" data-ink-options="tool">
+          {preset.kind === "pen" ? <>
+            {seg(preset.brush !== "monoline", "Pen", <PenIcon size={14} />, () => edit({ brush: "pen" }), "Pen: width follows stylus pressure")}
+            {seg(preset.brush === "monoline", "Monoline", <LineWidthIcon size={14} />, () => edit({ brush: "monoline" }), "Monoline: an even line at every pressure")}
+            <span className="pdfInkSep" />
+          </> : null}
           {palette.map((c) => (
             <button key={c} type="button" className={"colorBtn inkSwatch" + (preset.color === c ? " selected" : "")}
               style={{ background: c }} onClick={() => edit({ color: c })} title={c} aria-label={`Colour ${c}`} />

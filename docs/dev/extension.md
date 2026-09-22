@@ -40,7 +40,13 @@ and text selections. Server side: `gamma/routers/clip.py`. No build step
 6. **Ctrl+Shift+S** saves the current page with the default folder.
 7. **Options**: server URL, sign in / out, default folder + labels, *prefer
    open-access fallback* and *keep a PDF copy* (the app's `oaFallback` /
-   `pdfSaveLocal` prefs, sent as `allow_oa` / `save_copy`).
+   `pdfSaveLocal` prefs, sent as `allow_oa` / `save_copy`), and whether
+   connected publisher sessions refresh automatically.
+8. **Publisher sessions** — the cookie button in the popup's footer. On a
+   supported journal host over HTTPS it offers to send the browser's cookies
+   for that host to the signed-in Gamma account (`POST
+   /api/publisher-sessions`), so the *server* can download that journal's
+   PDFs later. Details below.
 
 Non-goals: reading or annotating inside the extension, a local library,
 syncing highlights back to the source page.
@@ -66,12 +72,12 @@ helpers — never re-implement it in the extension.
 | File | Role |
 |---|---|
 | `manifest.json` | MV3: module service worker, `<all_urls>` content script, popup, options, `save-to-gamma` command. `host_permissions: ["<all_urls>"]` — the same install warning the content script already carries, and it makes cookie-carrying fetches to the (user-configured) server origin and the PDF-from-tab fetch work without runtime permission prompts |
-| `worker.js` | per-tab state in `chrome.storage.session` (`tab:<id>` → `{candidate, hit, preview, auth, saving, error}`), badge/icon, `lookup` + `preview`, the save pipeline, context menus, keyboard command, notifications, and the message API (`get-state`, `save`, `clip-selection`, `auth-changed`, `open`) |
+| `worker.js` | per-tab state in `chrome.storage.session` (`tab:<id>` → `{candidate, hit, preview, auth, saving, error}`), badge/icon, `lookup` + `preview`, the save pipeline, context menus, keyboard command, notifications, the publisher-session status cache + automatic refresh (`publisher:auto`, `publisher:attempts` in session storage), and the message API (`get-state`, `save`, `clip-selection`, `auth-changed`, `publisher-status`, `open`) |
 | `doi.js` | the DOI-in-a-URL-path rule (`gammaDoiFromPath`), one file loaded by the content script and imported by the worker |
 | `detect.js` | content script (`document_idle`): identifier extraction, re-run on SPA URL changes; answers `get-detection` / `get-selection` / `fetch-pdf` (downloads a PDF from inside the page and relays it base64 — publisher bot checks that 403 the worker's fetch accept the page's own same-origin request) |
 | `api.js` | settings (`chrome.storage.sync`: `server, folder, labels, allowOa, saveCopy`), `api()` fetch wrapper (`credentials: "include"`, JSON `detail` → `ApiError{status}`), `login/logout/whoAmI` |
-| `publisherSessions.js` | Publisher-host validation and connection flow; requests optional cookie access, checks the active tab and account, then sends a snapshot to Gamma |
-| `popup.html/js/css` | setup (no server) → offline (server unreachable, with Retry) → sign-in → main view; the footer shows a connection dot (green signed in / amber signed out / red unreachable) beside `host · user` and an options gear (the app's SettingsIcon). The folder picker and label suggestions are plain-JS menus mirroring the app's MenuSelect/ctxMenu recipes; labels are the app's `categoryTag` chip input (comma/Enter commits a chip, Backspace removes, arrow keys + Enter pick a suggestion). Saving remembers the folder but not the labels — each popup prefills only the options-page default labels. `popup.css` copies the app's theme tokens (light/dark via `prefers-color-scheme`) — keep it in step with `shared/styles/app.css` when the control recipes change. `?tab=<id>` targets a specific tab when opened as a page (tests) |
+| `publisherSessions.js` | Publisher-host validation and the connection flow (checks the active tab and account, then sends a snapshot to Gamma); the automatic-refresh rule (`shouldAutoRefresh`, `REFRESH_AFTER` / `RETRY_AFTER`) and the status text (`describeSession`) — pure, tested in `tests/` |
+| `popup.html/js/css` | setup (no server) → offline (server unreachable, with Retry) → sign-in → main view; the footer shows a connection dot (green signed in / amber signed out / red unreachable) beside `host · user`, the publisher-session **cookie button** and an options gear (the app's SettingsIcon). The folder picker and label suggestions are plain-JS menus mirroring the app's MenuSelect/ctxMenu recipes; labels are the app's `categoryTag` chip input (comma/Enter commits a chip, Backspace removes, arrow keys + Enter pick a suggestion). Saving remembers the folder but not the labels — each popup prefills only the options-page default labels. `popup.css` copies the app's theme tokens (light/dark via `prefers-color-scheme`) — keep it in step with `shared/styles/app.css` when the control recipes change. `?tab=<id>` targets a specific tab when opened as a page (tests) |
 | `options.html/js` | server + host permission, account, saving defaults |
 | `icons/` | blue tile (paper detected) and grey tile (nothing) at 16/32/48/128, generated with Pillow |
 
@@ -190,7 +196,9 @@ Companions:
   `metadata.registry_record` (arXiv, then doi.org; a small in-memory cache,
   the data is public). 404 when neither registry answers.
 - `GET /api/library/folders` → `{folders, labels}` (folder paths plus their
-  ancestors).
+  ancestors). Folders rank by the account/workspace's latest `recent-views`
+  page timestamp, then latest page modification, with names breaking ties;
+  ancestors inherit their contained pages' timestamps. Labels stay alphabetical.
 - `POST /api/clip/note {text, source_url, title,
 page_id?}` — the explicit "clip selection INTO a page" append path (with
 `generate_key_between`; without `page_id` it uses/creates the root page
@@ -198,6 +206,40 @@ flagged `properties.web_clips = 1`), as opposed to `/api/clip`'s "make a page
 of this tab". All session-only, and — since the extension names no
 workspace — they land in the account's personal workspace
 ([workspaces.md](workspaces.md)).
+
+## Publisher sessions
+
+The popup's footer has a cookie button (hidden for guests, incognito tabs
+and servers without `/api/publisher-sessions`). Its state is this tab's
+journal host: grey *off* (not a supported publisher — the drawer still lists
+connected hosts), blue *ready* with a pulsing pip (a supported HTTPS host,
+not connected yet), green *connected*, and while a snapshot uploads the
+cookie wobbles inside a spinning ring, then a green check pops (*done*) or
+the pip turns red (*err*). Clicking opens a drawer above the footer: a card
+for this tab's host (status line "refreshed … ago · expires in …", **Connect
+this journal** / **Refresh now**), the other connected hosts with a
+disconnect ×, the **Refresh automatically** switch and a one-line privacy
+note. The drawer's data comes from the worker's `publisher-status` message
+(a 5-minute cache of `GET /api/publisher-sessions`; `force: true` after a
+connect or disconnect). The connect itself runs in the popup — the optional
+`cookies` permission must be requested from the user's click — through
+`connectPublisher`, and the popup re-renders when the worker's
+`publisher:auto` record changes.
+
+**Automatic refresh** (the `autoRefreshSessions` setting, default on, also on
+the options page). On every https tab load the worker checks whether the
+host is one the user already connected; a host that was never connected by
+hand is never imported on its own, and nothing happens without the
+`cookies` permission (never a prompt). A connected host is re-imported once
+the server's snapshot is `REFRESH_AFTER` (an hour) old, at most one attempt
+per host per `RETRY_AFTER` (ten minutes). Rationale: the browser's cookies
+are by definition the working ones and the server's copy can only be staler,
+so replacing it is never worse — except right after signing out of the
+publisher, which is why a fresh snapshot is left alone rather than rewritten
+on every page view. The outcome lands in `chrome.storage.session`
+(`publisher:auto` → `{host, at, ok, error}`); a failure shows in the drawer's
+card for that host, a success just as a newer "refreshed … ago". Server
+side and the security model: [paper_metadata.md](paper_metadata.md#connected-publisher-sessions).
 
 ## Auth and permissions
 
@@ -208,8 +250,15 @@ workspace — they land in the account's personal workspace
   signs in both — one cookie jar. No CORS middleware exists or is needed.
   Verified end-to-end (Playwright, headless Chromium, plain-HTTP origin).
 - The server origin is user-configured (self-hosted); `normalizeServer()`
-  adds `http://` when missing. Plain-HTTP LAN / Tailscale origins work — the
-  cookie isn't `Secure` on http.
+  keeps explicit schemes and adds `http://` when missing. Plain-HTTP LAN /
+  Tailscale origins work — the cookie isn't `Secure` on http.
+- After a successful `/api/session` check, the Connector
+  remembers an HTTP-to-HTTPS redirect to the exact same host, port and API path,
+  with the standard port changing from 80 to 443. The worker and options page
+  use that resolved origin. Other redirect destinations are never saved.
+  Publisher-session requests reject redirects so cookie snapshots
+  cannot be forwarded to another server. This avoids a misleading "Failed to
+  fetch" when ordinary account checks followed an HTTPS redirect successfully.
 - A 401 anywhere flips the tab state to `auth: false` (badge `!`) and the
   popup shows the sign-in view. Login rate limits apply unchanged; guest
   login is not offered.

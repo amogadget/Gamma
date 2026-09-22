@@ -3,8 +3,9 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
+import ImportReviewDialog from "../transfers/ImportReviewDialog";
 import { parsePdfCitation } from "../pdf/pdfCitation.js";
-import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
+import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -15,18 +16,19 @@ import {
   useTextScale,
 } from "../shared/ui/Widgets";
 import { BlockTree, _dragState } from "../editor/BlockTree";
-import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines } from "../transfers/FileChip";
+import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines, xhrUpload } from "../transfers/FileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "../library/FileBrowser";
 import BlankPDFDialog from "../library/BlankPDFDialog";
 import ChatDock from "../chat/ChatDock";
+import { createChatSession } from "../chat/chatSession";
 import SearchPanel from "../search/SearchPanel";
 import { ContextMenu, MenuItem, MenuLabel, MenuSelect, SubMenuItem } from "../shared/ui/Menus";
 import {
   ActivityIcon, AlertCircleIcon, ArrowLeftIcon, ArrowUpDownIcon, BookIcon, CheckIcon, CopyIcon, DatabaseIcon, DownloadIcon, ExportIcon,
   ExternalLinkIcon, EyeIcon, EyeOffIcon, FileGlyph, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
-  FilePlusIcon, PaperclipIcon, FolderIcon, FolderOpenIcon, FolderPlusIcon, GlobeIcon, HomeIcon, ImportIcon, InfoIcon, LabelGlyph, LabelIcon,
+  FilePlusIcon, PaperclipIcon, FolderIcon, FolderOpenIcon, FolderPlusIcon, GlobeIcon, HelpCircleIcon, HomeIcon, ImportIcon, InfoIcon, LabelGlyph, LabelIcon,
   LanguagesIcon, LanguagesOffIcon, LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PenIcon, PinIcon, PlusIcon,
-  RectSelectIcon, SearchIcon, SettingsIcon, ShieldIcon, SparklesIcon, TextCursorIcon, TrashIcon, TypeIcon, UploadIcon,
+  RectSelectIcon, RefreshIcon, SearchIcon, SettingsIcon, ShieldIcon, SparklesIcon, TextCursorIcon, TrashIcon, TypeIcon, UploadIcon,
   ScissorsIcon, UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
   ServerIcon,
 } from "../shared/ui/Icons";
@@ -60,7 +62,7 @@ import {
   findBlock,
 } from "../shared/model/blockModel";
 import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
-import { ROLE_LABEL, useAccounts, workspaceMeta } from "../settings/SettingsWorkspace";
+import { ROLE_LABEL, workspaceMeta } from "../settings/SettingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, WorkspaceUnavailablePage } from "../auth/LoginPage";
 import { McpAuthorization } from "../auth/McpConsent";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
@@ -75,8 +77,14 @@ import { nativePDFRequest } from "../native/nativeBridge.js";
 import NoteReplayPlayer, { useReplayAssets } from "../native/NoteReplayPlayer.jsx";
 import { applyOps, applyPatch, keepUiFlags } from "../shared/model/blockOps";
 import { PresenceBar } from "../collaboration/Presence";
+import { cleanLinkName, loadLinkName, saveLinkName, LINK_NAME_MAX } from "../collaboration/linkName";
 import SettingsDialog from "../settings/SettingsDialog";
-import { AccountPicker, QuotaMeter } from "../settings/SettingsKit";
+import { useGuide } from "../guide/useGuide";
+import GuideOverlay from "../guide/GuideOverlay";
+import { guideEvents } from "../guide/events";
+import { Empty, QuotaMeter, Section } from "../settings/SettingsKit";
+import { CopyBox, SharePopover } from "../sharing/SharePopover";
+import { MirrorPopover } from "../collaboration/MirrorPopover";
 import {
   addFolderTag,
   cleanFolderPath,
@@ -294,9 +302,37 @@ function CardCarousel({ label, children, className }) {
 
 // The share popover's invite box: the account directory as a picker, fetched
 // only while the popover is open (the box mounts with it).
-function ShareInviteBox({ exclude, value, onChange }) {
-  const accounts = useAccounts();
-  return <AccountPicker accounts={accounts} exclude={exclude} value={value} onChange={onChange} placeholder="Invite an account…" compact />;
+// One line of the background-tasks popover: status glyph, kind glyph, the
+// name (with a thin progress bar under it while the work can measure
+// itself), the info text, and a stop button while the work can be stopped.
+// The row clips long names and messages; hovering shows the whole thing
+// (a failed import's full reason, a long URL).
+function TransferRow({ status, icon, name, info, progress, onStop }) {
+  return (
+    <div className={`transferRow ${status}`} title={info ? `${name} — ${info}` : name}>
+      <span className={`transferStatus ${status}`}>
+        {status === "active" ? <span className="transferSpin inline" />
+          : status === "done" ? <CheckIcon size={12} strokeWidth={2.6} />
+            : status === "cancelled" ? <XIcon size={12} strokeWidth={2.4} />
+              : <AlertCircleIcon size={12} strokeWidth={2.4} />}
+      </span>
+      <span className="transferKind">{icon}</span>
+      <span className="transferMain">
+        <span className="transferName">{name}</span>
+        {status === "active" && typeof progress === "number" ? (
+          <span className="transferBar" role="progressbar" aria-valuemin={0} aria-valuemax={100}
+            aria-valuenow={Math.round(Math.max(0, Math.min(1, progress)) * 100)}>
+            <span style={{ width: `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%` }} />
+          </span>
+        ) : null}
+      </span>
+      <span className="transferInfo">{info || ""}</span>
+      {onStop ? (
+        <button type="button" className="uiClose uiCloseSm transferStop" title="Stop" aria-label={`Stop ${name}`}
+          onClick={(e) => { e.stopPropagation(); onStop(); }}>×</button>
+      ) : <span className="transferStopSlot" />}
+    </div>
+  );
 }
 
 export default function App() {
@@ -321,6 +357,8 @@ function LibraryApp() {
   const [readOnly, setReadOnly] = useState(shareMode);
   const [shareInfo, setShareInfo] = useState(null); // resolved share: {owner, role, canEdit, audience, viewer}
   const [shareGate, setShareGate] = useState(null); // "login" | "forbidden" | "missing" while the share can't open
+  const [linkName, setLinkNameState] = useState(""); // the share view's display name when the viewer has no account
+  const [renamingLink, setRenamingLink] = useState(false);
 
   // The workspace this tab works in and the ones the account may switch to
   // (from /api/session). Every API call carries the id (utils fetch
@@ -335,6 +373,15 @@ function LibraryApp() {
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
   const [authUser, setAuthUser] = useState(shareMode ? {user:"_public"} : null);
+  const chatSession = useMemo(() => createChatSession((key, messages) => {
+    if (getExpectedUser() !== authUser?.user || getCurrentWorkspace() !== wsId) {
+      throw new Error("The account or workspace changed.");
+    }
+    return apiJson(`${API}/chats/${encodeURIComponent(key)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+  }), [authUser?.user, wsId]);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -532,7 +579,8 @@ function LibraryApp() {
     });
   }
   async function downloadWorkspaceExport({ url, progressUrl, label }) {
-    const tid = addTransfer({ name: label, kind: "download", info: "preparing…" });
+    const ctl = new AbortController();
+    const tid = addTransfer({ name: label, kind: "download", info: "preparing…", cancel: () => ctl.abort() });
     postPill("backup", { msg: "Preparing export — the server is zipping your data…", spinner: true });
     // The response only starts once the server finished zipping; until then,
     // poll the zipping percent from the export-progress side-channel.
@@ -542,14 +590,15 @@ function LibraryApp() {
         if (p.active && p.total) {
           const pct = Math.min(99, Math.floor((p.done / p.total) * 100));
           postPill("backup", { msg: `Preparing export — zipping… ${pct}% (${fmtBytes(p.done)} of ${fmtBytes(p.total)})`, spinner: true });
-          updateTransfer(tid, { info: `zipping… ${pct}%` });
+          updateTransfer(tid, { info: `zipping… ${pct}%`, progress: p.done / p.total });
         }
       } catch {}
     }, 500);
     try {
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(url, { credentials: "include", signal: ctl.signal });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
       clearInterval(zipPoll);
+      updateTransfer(tid, { progress: undefined });
       const total = Number(res.headers.get("content-length")) || 0;
       const reader = res.body.getReader();
       const chunks = [];
@@ -573,7 +622,7 @@ function LibraryApp() {
             : `Downloading backup… ${fmtBytes(loaded)}`,
           spinner: true,
         });
-        updateTransfer(tid, { info: total ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : fmtBytes(loaded) });
+        updateTransfer(tid, { info: total ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : fmtBytes(loaded), progress: total ? loaded / total : undefined });
       }
       const blob = new Blob(chunks, { type: "application/zip" });
       const m = /filename="?([^";]+)/.exec(res.headers.get("content-disposition") || "");
@@ -589,7 +638,7 @@ function LibraryApp() {
       clearInterval(zipPoll);
       updateTransfer(tid, { status: "error", info: String(err.message || err) });
       postPill("backup", null);
-      setStatus(`Export failed: ${err.message}`);
+      if (!ctl.signal.aborted) setStatus(`Export failed: ${err.message}`);
     }
   }
 
@@ -1527,14 +1576,14 @@ function LibraryApp() {
   const [status, setStatusRaw] = useState("Ready.");
   // System log (Settings → Diagnostics): status messages, PDF load activity,
   // and uncaught errors from this session. In-memory only.
-  const [sysLog, setSysLog] = useState([]); // [{t, msg}], capped
-  const logSys = useCallback((msg) => {
-    setSysLog((prev) => [...prev.slice(-499), { t: Date.now(), msg: String(msg) }]);
+  const [sysLog, setSysLog] = useState([]); // [{t, msg, tone}], capped
+  const logSys = useCallback((msg, tone = "") => {
+    setSysLog((prev) => [...prev.slice(-499), { t: Date.now(), msg: String(msg), tone }]);
   }, []);
   useEffect(() => {
-    const onErr = (e) => logSys(`error: ${e.message || "unknown"}${e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : ""}`);
-    const onRej = (e) => logSys(`unhandled rejection: ${e.reason?.message || e.reason || "unknown"}`);
-    const onApi = (e) => { if (e.detail?.message) logSys(e.detail.message); };
+    const onErr = (e) => logSys(`error: ${e.message || "unknown"}${e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : ""}`, "error");
+    const onRej = (e) => logSys(`unhandled rejection: ${e.reason?.message || e.reason || "unknown"}`, "error");
+    const onApi = (e) => { if (e.detail?.message) logSys(e.detail.message, e.detail.tone); };
     window.addEventListener("error", onErr);
     window.addEventListener("unhandledrejection", onRej);
     window.addEventListener("gamma-api-log", onApi);
@@ -2092,19 +2141,43 @@ function LibraryApp() {
 
   // Background tasks: client-side transfers (downloads/uploads) plus
   // server-side work (library indexing), shown in one popover.
-  const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
+  // [{id, name, kind, status, info, progress?, cancel?}] — progress is 0..1
+  // when the work can measure itself (bytes, pages, papers), cancel a
+  // function when it can be stopped (the row then shows a stop button).
+  const [transfers, setTransfers] = useState([]);
   const [indexTask, setIndexTask] = useState(null); // {total, done, active} from /api/tasks
   // The server remembers the last run's progress forever; this hides the
   // finished row after "Clear" until a new indexing run starts.
   const [indexTaskCleared, setIndexTaskCleared] = useState(false);
   const transferByUrlRef = useRef({});
+  // Rows the user stopped: the work's own late reports (an abort error, a
+  // "done" that raced the stop) must not overwrite "stopped".
+  const cancelledTransfersRef = useRef(new Set());
   function addTransfer(t) {
     const id = makeId();
     setTransfers((prev) => [{ id, status: "active", ...t }, ...prev].slice(0, 20));
     return id;
   }
   function updateTransfer(id, patch) {
+    if (patch.status && cancelledTransfersRef.current.has(id)) return;
     setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+  // A row that starts over (a re-download of the same url) is a live row again.
+  function reviveTransfer(id, patch) {
+    cancelledTransfersRef.current.delete(id);
+    setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+  function cancelTransfer(id) {
+    setTransfers((prev) => prev.map((t) => {
+      if (t.id !== id || t.status !== "active") return t;
+      cancelledTransfersRef.current.add(id);
+      try { t.cancel?.(); } catch {}
+      return { ...t, status: "cancelled", info: "stopped", cancel: null, progress: undefined };
+    }));
+  }
+  // The server's indexer: one per workspace, stoppable from the popover.
+  function cancelIndexing() {
+    apiJson(`${API}/tasks/indexing`, { method: "DELETE" }).then(() => setTasksNonce((n) => n + 1)).catch(() => {});
   }
   // Byte-level download state reported by the PDF viewer (skips local uploads).
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
@@ -2142,7 +2215,7 @@ function LibraryApp() {
     if (st.phase !== "progress" && st.phase !== "measuring") {
       try { performance.mark(`pdf-${st.phase}`, { detail: { url, ms } }); } catch {}
       const shortUrl = url.length > 100 ? url.slice(0, 100) + "…" : url;
-      logSys(`pdf ${st.phase} +${ms} ms${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
+      logSys(`pdf ${st.phase} +${ms} ms${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`, st.phase === "error" ? "error" : "");
     }
     // Feed the shared status pill — one channel for the whole load lifecycle,
     // so load progress and status messages can never stack.
@@ -2200,16 +2273,17 @@ function LibraryApp() {
     if (st.phase === "start") {
       const prevId = transferByUrlRef.current[url];
       if (prevId) {
-        updateTransfer(prevId, { status: "active", info: "downloading…" });
+        reviveTransfer(prevId, { status: "active", info: "downloading…", cancel: st.cancel, progress: undefined });
         return;
       }
       const name = (pageTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
-      transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
+      transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…", cancel: st.cancel });
     } else if (st.phase === "progress") {
       const id = transferByUrlRef.current[url];
       if (id) updateTransfer(id, {
         status: "active",
         info: st.total ? `${fmtBytes(st.loaded)} / ${fmtBytes(st.total)}` : `${fmtBytes(st.loaded)}…`,
+        progress: st.total ? st.loaded / st.total : undefined,
       });
     } else {
       const id = transferByUrlRef.current[url];
@@ -2231,7 +2305,7 @@ function LibraryApp() {
   useEffect(() => {
     if (!openPopover) return;
     function onDown(e) {
-      // Dropdown menus (menus.jsx) portal to <body>: a pick inside a
+      // Dropdown menus (shared/ui/Menus.jsx) portal to <body>: a pick inside a
       // popover's own dropdown is not a click outside the popover.
       if (!(e.target.closest && e.target.closest("[data-popover], .ctxMenu"))) setOpenPopover(null);
     }
@@ -2241,14 +2315,12 @@ function LibraryApp() {
   // The owner's share of the open page: null = not loaded, {token: null} =
   // not shared, else {token, audience, role, users}. The link is derived.
   const [shareSettings, setShareSettings] = useState(null);
-  const [shareInviteDraft, setShareInviteDraft] = useState("");
   const [shareError, setShareError] = useState("");
-  const [shareUrlShown, setShareUrlShown] = useState(false); // fallback when the clipboard is unavailable
   const shareUrl = shareSettings?.token
     ? `${window.location.origin}${window.location.pathname}?share=${shareSettings.token}`
     : "";
   const [shareCopied, flashShareCopied, resetShareCopied] = useCopied();
-  // Workspace search lives in search.jsx (SearchPanel); App only holds what
+  // Workspace search lives in search/SearchPanel.jsx (SearchPanel); App only holds what
   // the PDF viewer needs from it: the match highlights and the search hook.
   const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
   const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
@@ -2432,6 +2504,7 @@ function LibraryApp() {
   // categories on the left, the selected pane on the right.
   const [settingsOpen, setSettingsOpen] = useState(null); // null | pane id — see settingsNavigation.js
   const [importOpen, setImportOpen] = useState(false);
+  const [importReview, setImportReview] = useState(null);
   // Export dialog: one "Export…" menu entry, the shape of the export chosen
   // here. Remembered across sessions — most people export the same way twice.
   const [exportOpen, setExportOpen] = useState(false);
@@ -2621,7 +2694,7 @@ function LibraryApp() {
 
   function startAddAiProvider() {
     setAiKeysError("");
-    setAiKeysForm({ id: "", protocol: aiKeysInfo?.protocols?.[0]?.id || "anthropic", name: "", api_key: "", base_url: "", models: "", test_model: "" });
+    setAiKeysForm({ id: "", protocol: "chatgpt", name: "", api_key: "", base_url: "", models: "", test_model: "" });
   }
 
   function startEditAiProvider(p) {
@@ -2634,9 +2707,15 @@ function LibraryApp() {
   // ChatGPT (OAuth) is listed live from the codex backend via the entry's
   // sign-in token (known-good fallback list before connecting).
   const [aiModelCatalog, setAiModelCatalog] = useState(null); // null | {loading} | {models} | {error}
+  const catalogRequest = useRef(0);
+  const catalogTarget = JSON.stringify([aiKeysForm?.id, aiKeysForm?.protocol, aiKeysForm?.api_key, aiKeysForm?.base_url, aiKeysForm?.oauthConnectedAt]);
+  const catalogTargetRef = useRef(catalogTarget);
+  catalogTargetRef.current = catalogTarget;
   async function loadModelCatalog() {
     const f = aiKeysForm;
     if (!f) return;
+    const request = ++catalogRequest.current;
+    const target = catalogTarget;
     setAiModelCatalog({ loading: true });
     try {
       const d = await apiJson(`${API}/ai/model-catalog`, {
@@ -2647,9 +2726,9 @@ function LibraryApp() {
           api_key: f.api_key.trim(), base_url: f.base_url.trim(),
         }),
       });
-      setAiModelCatalog({ models: d.models || [] });
+      if (request === catalogRequest.current && target === catalogTargetRef.current) setAiModelCatalog({ models: d.models || [] });
     } catch (err) {
-      setAiModelCatalog({ error: friendlyApiError(err) });
+      if (request === catalogRequest.current && target === catalogTargetRef.current) setAiModelCatalog({ error: friendlyApiError(err) });
     }
   }
   function addCatalogModel(m) {
@@ -2671,18 +2750,18 @@ function LibraryApp() {
   const formStoredEntry = aiKeysForm?.id ? aiKeysInfo?.providers?.find((p) => p.id === aiKeysForm.id) : null;
   const formOauthPending = !!aiKeysForm && isOauthProto(aiKeysForm.protocol) && !formStoredEntry?.oauth_connected;
 
-  // Reset the picker whenever the form target changes, then load the catalog
-  // as soon as it's possible without extra typing: entries with a stored
-  // credential (API key or completed sign-in). A freshly typed key triggers
-  // the load on blur instead; a fresh OAuth entry after Connect.
+  // Debounce credential edits, and discard responses for an older endpoint/key.
   useEffect(() => {
     setAiModelCatalog(null);
-    setCustomModel("");
     const f = aiKeysForm;
     if (!f) return;
     const stored = f.id ? aiKeysInfo?.providers?.find((p) => p.id === f.id) : null;
-    if (stored?.oauth_connected || stored?.key_hint) loadModelCatalog();
-  }, [aiKeysForm?.id, aiKeysForm?.protocol]);
+    const ready = isOauthProto(f.protocol) ? stored?.oauth_connected : f.api_key?.trim() || stored?.key_hint;
+    if (!ready) return;
+    const timer = setTimeout(loadModelCatalog, 500);
+    return () => { clearTimeout(timer); catalogRequest.current++; };
+  }, [catalogTarget, formStoredEntry?.oauth_connected]);
+  useEffect(() => { setCustomModel(""); }, [aiKeysForm?.id, aiKeysForm?.protocol]);
 
   // "Sign in with ChatGPT": opens the OAuth page in a new tab. Its redirect
   // (localhost:1455) fails to load — the user pastes that URL back into the
@@ -2716,11 +2795,21 @@ function LibraryApp() {
           body: { protocol: f.protocol, name: f.name.trim(), base_url: f.base_url.trim(), models: f.models.trim(),
                   test_model: (f.test_model || "").trim(),
                   ...(f.api_key.trim() ? { api_key: f.api_key.trim() } : {}) } };
-    await runAiKeysRequest(() => apiJson(req.url, {
-      method: req.method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body),
-    }), true);
+    await runAiKeysRequest(async () => {
+      const info = await apiJson(req.url, {
+        method: req.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+      });
+      if (oauthCb) {
+        const connected = info.providers.find((p) => f.id ? p.id === f.id : !aiKeysInfo.providers.some((old) => old.id === p.id));
+        if (connected) {
+          setAiKeysForm((current) => current?.oauthState === f.oauthState
+            ? { ...current, id: connected.id, models: connected.models || "", oauthState: "", oauthCallback: "", oauthConnectedAt: Date.now() } : current);
+        }
+      }
+      return info;
+    }, !oauthCb);
   }
 
   function deleteAiProvider(p) {
@@ -2757,7 +2846,7 @@ function LibraryApp() {
     }
   }
 
-  // User management moved into Settings → Users (settings.jsx UsersSettings,
+  // User management moved into Settings → Users (settings/SettingsDialog.jsx UsersSettings,
   // admins only) — App just opens that pane and lends it the shared pieces
   // (confirm dialog, status pill, session re-key after a self-rename).
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
@@ -2968,11 +3057,14 @@ function LibraryApp() {
   function handleTranslateState(st) {
     setPdfTransState(st);
     if (st.running && !transTaskRef.current) {
-      transTaskRef.current = addTransfer({ name: `Translate ${st.label} → ${translateLangLabel}`, kind: "ai", info: "0%" });
+      transTaskRef.current = addTransfer({
+        name: `Translate ${st.label} → ${translateLangLabel}`, kind: "ai", info: "0%", progress: 0,
+        cancel: () => pdfTranslateCtl.current?.halt(),
+      });
     }
     if (transTaskRef.current) {
       if (st.running) {
-        updateTransfer(transTaskRef.current, { info: `${Math.round(st.progress * 100)}%` });
+        updateTransfer(transTaskRef.current, { info: `${Math.round(st.progress * 100)}%`, progress: st.progress });
       } else {
         const full = st.progress >= 0.999;
         updateTransfer(transTaskRef.current, { status: "done", info: full ? "100%" : `stopped at ${Math.round(st.progress * 100)}%` });
@@ -3026,11 +3118,12 @@ function LibraryApp() {
   // Shared by the open-page fetch and the bulk-upload follow-up; throws on
   // failure (with the task already marked).
   async function fetchMetadataRequest(block, force = false) {
-    const taskId = addTransfer({ name: `Metadata — ${(block.content || "paper").slice(0, 48)}`, kind: "ai", info: "fetching…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `Metadata — ${(block.content || "paper").slice(0, 48)}`, kind: "ai", info: "fetching…", cancel: () => ctl.abort() });
     setMetaFetchingIds((prev) => new Set(prev).add(block.id));
     try {
       const data = await apiJson(`${API}/metadata/fetch`, {
-        method: "POST",
+        method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           block_id: block.id,
@@ -3201,10 +3294,11 @@ function LibraryApp() {
     const targetId = blockArg?.id || focusedBlockId;
     if (!targetId || pptCiteBusy) return;
     setPptCiteBusy(true);
-    const taskId = addTransfer({ name: `Slide citation — ${(blockArg?.content || pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `Slide citation — ${(blockArg?.content || pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…", cancel: () => ctl.abort() });
     try {
       const data = await apiJson(`${API}/metadata/cite`, {
-        method: "POST",
+        method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatSendModel || "", force }),
       });
@@ -3212,7 +3306,7 @@ function LibraryApp() {
       if (focusedBlockIdRef.current === targetId) setPptCite(data.citation || "");
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      setStatus(`Citation failed: ${err.message}`);
+      if (!ctl.signal.aborted) setStatus(`Citation failed: ${err.message}`);
     } finally {
       setPptCiteBusy(false);
     }
@@ -3513,6 +3607,82 @@ function LibraryApp() {
     }
   }, [blocks, readOnly]);
 
+  // Merges an offline copy's sync decided on this page's blocks
+  // (docs/dev/mirror.md): a chip on each such row (MergeResolver). Read on
+  // page open and after any sync event; a decision is posted and the block's
+  // new text arrives over the page socket like any edit.
+  const [merges, setMerges] = useState(null);
+  const mirrorWs = workspace?.mirror_of ? workspace.id : "";
+  const loadMerges = useCallback(async () => {
+    if (!mirrorWs || !focusedBlockId || !authUser?.user) { setMerges(null); return; }
+    try {
+      const d = await apiJson(`${API}/mirrors/${encodeURIComponent(mirrorWs)}/conflicts?page=${encodeURIComponent(focusedBlockId)}`);
+      const map = new Map();
+      for (const c of d.conflicts || []) if (!map.has(c.block_id)) map.set(c.block_id, c);
+      setMerges(map.size ? map : null);
+    } catch { setMerges(null); }
+  }, [mirrorWs, focusedBlockId, authUser?.user]);
+  useEffect(() => {
+    loadMerges();
+    if (!mirrorWs || !focusedBlockId) return undefined;
+    const t = setInterval(loadMerges, 15000); // rounds run on their own; the pill also signals them
+    return () => clearInterval(t);
+  }, [loadMerges, mirrorWs, focusedBlockId]);
+  useEffect(() => {
+    window.addEventListener("gamma:mirror", loadMerges);
+    window.addEventListener("gamma:mirror-changed", loadMerges);
+    return () => {
+      window.removeEventListener("gamma:mirror", loadMerges);
+      window.removeEventListener("gamma:mirror-changed", loadMerges);
+    };
+  }, [loadMerges]);
+  // One chip open at a time, and the page's conflicts in tree order: the
+  // chip's ‹ › walk them and a decision opens the next one, so a page of
+  // conflicts is worked through without hunting for the chips.
+  const [mergeOpen, setMergeOpen] = useState(null);
+  useEffect(() => { setMergeOpen(null); }, [focusedBlockId]);
+  const mergeOrder = useMemo(
+    () => (merges ? flattenBlocks(blocks).map((b) => b.id).filter((id) => merges.has(id)) : []),
+    [merges, blocks],
+  );
+  function showMerge(id) {
+    setMergeOpen(id);
+    if (id) jumpToRef.current?.(focusedBlockId, id);
+  }
+  function stepMerge(fromId, delta) {
+    if (!mergeOrder.length) { setMergeOpen(null); return; }
+    const i = Math.max(0, mergeOrder.indexOf(fromId));
+    showMerge(mergeOrder[(i + delta + mergeOrder.length) % mergeOrder.length]);
+  }
+  const mergeNav = (id) => ({ index: mergeOrder.indexOf(id) + 1, total: mergeOrder.length, onStep: (delta) => stepMerge(id, delta) });
+  async function resolveMerge(conflict, choice) {
+    await apiJson(`${API}/mirrors/${encodeURIComponent(mirrorWs)}/conflicts/${conflict.id}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ choice }),
+    });
+    // on to the next conflict down the page (the one above when it was the last), else done
+    const rest = mergeOrder.filter((id) => id !== conflict.block_id);
+    const i = Math.max(0, mergeOrder.indexOf(conflict.block_id));
+    showMerge(rest.length ? rest[Math.min(i, rest.length - 1)] : null);
+    window.dispatchEvent(new CustomEvent("gamma:mirror"));
+  }
+  // Jump to a block on this page or another — the sync popover's lists and
+  // Settings' merges (the "gamma:jump" event) land on the block itself.
+  const jumpToRef = useRef(null);
+  jumpToRef.current = (pageId, blockId) => {
+    setOpenPopover(null);
+    if (blockId) pendingBlockScrollRef.current = blockId;
+    if (pageId && pageId !== focusedBlockId) { openPage(pageId); return; }
+    if (blockId) { suppressAutosaveRef.current = true; setBlocks((prev) => expandToBlock(prev, blockId)); }
+  };
+  useEffect(() => {
+    const h = (e) => jumpToRef.current?.(e.detail?.page, e.detail?.block);
+    // the link was forgotten: this is an ordinary workspace again (no pill, no merge chips)
+    const gone = () => setWorkspace((prev) => (prev && prev.mirror_of ? { ...prev, mirror_of: "" } : prev));
+    window.addEventListener("gamma:jump", h);
+    window.addEventListener("gamma:mirror-gone", gone);
+    return () => { window.removeEventListener("gamma:jump", h); window.removeEventListener("gamma:mirror-gone", gone); };
+  }, []);
+
   useEffect(() => {
     if (!pendingBlockScrollRef.current) return;
     const id = pendingBlockScrollRef.current;
@@ -3544,7 +3714,7 @@ function LibraryApp() {
     return () => { cancelled = true; };
   }, [focusedBlockId, shareMode]);
 
-  // The page's live session (collab.js): the tree's transitions become ops
+  // The page's live session (collaboration/usePageCollab.js): the tree's transitions become ops
   // sent in debounced batches, other clients' batches arrive over the page
   // socket and apply below, presence rides the same socket. A load (the
   // suppress flag) makes the tree the session's base instead of a change.
@@ -3824,16 +3994,23 @@ function LibraryApp() {
     if (session.notesVisible != null) setNotesVisible(session.notesVisible);
   }, [wsReady, shareMode]);
 
-  // Control size (Settings → General): app.css zooms every button/toggle by it.
+  // Interface size: app.css scales text and control boxes together.
   useEffect(() => {
     document.documentElement.style.setProperty("--ui-scale", String(uiScale));
   }, [uiScale]);
 
-  // Theme: System tracks the OS preference live; Light/Dark pin it.
+  // Theme: System tracks the OS preference live; Light/Dark pin it. The
+  // theme-color meta follows: installed as a home-screen app, the status bar
+  // is painted with it, so it matches the topbar under it (docs/dev/ipad.md).
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => document.documentElement.setAttribute(
-      "data-theme", theme === "system" ? (mq.matches ? "dark" : "light") : theme);
+    const apply = () => {
+      document.documentElement.setAttribute(
+        "data-theme", theme === "system" ? (mq.matches ? "dark" : "light") : theme);
+      const bar = getComputedStyle(document.documentElement).getPropertyValue("--bg-surface").trim();
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (bar && meta) meta.setAttribute("content", bar);
+    };
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
@@ -3975,14 +4152,16 @@ function LibraryApp() {
     }, ttl));
   }
   function handleAgentEvent(ev) {
-    if (ev.type === "done") { setAiLive(null); return; }
+    // Replies stream per conversation: another page's finishing reply must
+    // not drop the preview this page's own reply is still writing.
+    if (ev.type === "done") { if (ev.key === focusedBlockId) setAiLive(null); return; }
     if (!focusedBlockId) return;
     const inTree = (id) => !!id && (id === focusedBlockId || flattenBlocks(blocksRef.current).some((b) => b.id === id));
     if (ev.type === "progress") {
       // Only blocks of THIS page can be previewed: an edit targets a block in
       // the tree, a create a parent in it (the page id = a top-level block).
       if (!inTree(ev.tool === "edit_block" ? ev.block_id : ev.parent_id)) return;
-      setAiLive({ tool: ev.tool, blockId: ev.block_id, parentId: ev.parent_id, afterId: ev.after_id, mode: ev.mode || "replace", content: ev.content || "" });
+      setAiLive({ tool: ev.tool, blockId: ev.block_id, parentId: ev.parent_id, afterId: ev.after_id, mode: ev.mode || "replace", find: ev.find, content: ev.content || "" });
       return;
     }
     const a = ev.action;
@@ -4053,7 +4232,13 @@ function LibraryApp() {
       const filename = uploadLeafName(file, "upload.pdf");
       const form = new FormData();
       form.append("file", file, filename);
-      const data = await apiJson(`${API}/uploads`, { method: "POST", body: form });
+      // An XHR so the task row gets byte progress and a stop button.
+      const data = await xhrUpload(`${API}/uploads`, form, {
+        onProgress: (loaded, total) => updateTransfer(taskId, {
+          info: `${fmtBytes(loaded)} / ${fmtBytes(total)}`, progress: total ? loaded / total : undefined,
+        }),
+        onAbortable: (abort) => updateTransfer(taskId, { cancel: abort }),
+      });
       return { doc_id: data.doc_id, source_url: data.source_url, original_filename: filename,
         viewerUrl: data.source_url, note: "" };
     }
@@ -4164,6 +4349,7 @@ function LibraryApp() {
     setLoading(true);
     const done = [];
     const failed = [];
+    const stopped = []; // stopped from the tasks popover — not a failure
     try {
       for (const { file, filename, folder } of items) {
         // Pre-check only with the quota info loaded — otherwise let the
@@ -4179,7 +4365,8 @@ function LibraryApp() {
             ? { ...(await uploadOnePdf(file, folder)), kind: "pdf" }
             : await importOneMarkdown(file, folder));
         } catch (err) {
-          failed.push(`${filename} (${err.message})`);
+          if (err.aborted) stopped.push(filename);
+          else failed.push(`${filename} (${err.message})`);
         }
       }
       const pdfDone = done.filter((item) => item.kind === "pdf");
@@ -4198,8 +4385,10 @@ function LibraryApp() {
         setStatus(failed.length
           ? `Imported ${done.length} of ${items.length} files — failed: ${failed.join(", ")}`
           : `Imported ${done.length} files.`);
-      } else {
+      } else if (failed.length) {
         setStatus(`Upload failed: ${failed.join(", ")}`);
+      } else if (stopped.length) {
+        setStatus(`Upload stopped: ${stopped.join(", ")}`);
       }
       // Runs after the upload/import UI work and never delays its completion.
       queueMetadataForUploads(pdfDone);
@@ -4240,58 +4429,22 @@ function LibraryApp() {
     }
   }
 
-  // Whole-library import from a zipped Zotero RDF export (the import dialog's
-  // third source; also reachable from Settings → Library). Collections become
-  // folders, tags labels, notes child blocks; the reader annotations ride
-  // inside the exported PDFs, so strip works exactly like for "this PDF".
-  async function importZotero(file, strip = embAnnots === "strip") {
-    if (shareMode) return;
-    const taskId = addTransfer({ name: `Zotero import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…" });
-    setStatus("Importing Zotero library — this can take a while for big exports…");
-    try {
-      const { data, summary } = await importZoteroZip(file, strip);
-      updateTransfer(taskId, { status: "done", info: `${data.pages_created + data.pages_merged} pages` });
-      setStatus(`Zotero import: ${summary}.`);
-      refreshQuota?.();
-      await fetchHomeBlocks();
-    } catch (err) {
-      updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      setStatus(`Zotero import failed: ${err.message}`);
-    }
-  }
-
-  // A zip of Markdown notes (Notion's Markdown & CSV export, a Gamma Markdown
-  // export, any zipped folder of .md): one page per note, into the open folder.
-  async function importMarkdownZip(file) {
-    if (shareMode) return;
-    const taskId = addTransfer({ name: `Markdown import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…" });
-    setStatus("Importing Markdown notes…");
-    const form = new FormData();
-    form.append("file", file);
-    form.append("folder", homeMode && folderFilter ? folderFilter : "");
-    try {
-      const data = await apiJson(`${API}/import/markdown-zip`, { method: "POST", body: form });
-      (data.warnings || []).forEach((w) => console.warn(`Markdown import: ${w.title} — ${w.reason}`));
-      const summary = [
-        `${data.pages_created} new page${data.pages_created === 1 ? "" : "s"}`,
-        data.pages_skipped ? `${data.pages_skipped} already imported` : "",
-        data.assets_stored ? `${data.assets_stored} file${data.assets_stored === 1 ? "" : "s"}` : "",
-        data.links_resolved ? `${data.links_resolved} link${data.links_resolved === 1 ? "" : "s"} between notes` : "",
-        data.warnings?.length ? `${data.warnings.length} issue${data.warnings.length === 1 ? "" : "s"} (details in the browser console)` : "",
-      ].filter(Boolean).join(" · ");
-      updateTransfer(taskId, { status: "done", info: `${data.pages_created} pages` });
-      setStatus(`${data.notion ? "Notion" : "Markdown"} import: ${summary}.`);
-      refreshQuota?.();
-      await fetchHomeBlocks();
-    } catch (err) {
-      updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      setStatus(`Markdown import failed: ${err.message}`);
-    }
+  async function completeLibraryImport(data, summary) {
+    setStatus(`Import: ${summary}.`);
+    refreshQuota?.();
+    await fetchHomeBlocks();
   }
 
   // Open a PDF by URL: resolve it, find or create its page, open that page.
   async function openPdf(sourceUrl) {
     if (!sourceUrl || shareMode) return;
+    // Prefer the saved copy, including its notes and locally cached PDF.
+    // Re-resolving an arXiv link needlessly depends on the external source.
+    const existingId = findPageForUrl(sourceUrl, homeBlocks.filter((b) => pageAttachment(b)));
+    if (existingId) {
+      await openBlock(existingId);
+      return;
+    }
     setLoading(true);
     setStatus("Opening PDF...");
     // Visible from the moment Enter is pressed — resolve can take seconds.
@@ -4510,8 +4663,8 @@ function LibraryApp() {
     const showPill = (msg) => { pill.shown++; postPill("upload", { msg, spinner: true }); };
     const dropPill = () => { if (pill.shown) { pill.shown = 0; postPill("upload", null); } };
     setUploadReporter({
-      start: (file) => ({
-        tid: addTransfer({ name: uploadLeafName(file, "file"), kind: "upload", info: fmtBytes(file.size) }),
+      start: (file, abort) => ({
+        tid: addTransfer({ name: uploadLeafName(file, "file"), kind: "upload", info: fmtBytes(file.size), cancel: abort }),
         name: uploadLeafName(file, "file"), size: file.size, at: Date.now(), lastPct: -1,
       }),
       progress: (u, loaded, total) => {
@@ -4519,14 +4672,14 @@ function LibraryApp() {
         const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 0;
         if (pct === u.lastPct) return;
         u.lastPct = pct;
-        updateTransfer(u.tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)} — ${pct}%` });
+        updateTransfer(u.tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)} — ${pct}%`, progress: total ? loaded / total : undefined });
         if (Date.now() - u.at > 400 || total > 2 * 1024 * 1024) showPill(`Uploading ${u.name}… ${pct}%`);
       },
       done: (u, ok, detail) => {
         if (!u) return;
         updateTransfer(u.tid, ok ? { status: "done", info: fmtBytes(u.size) } : { status: "error", info: detail || "failed" });
         dropPill();
-        if (!ok) setStatus(`Upload of ${u.name} failed: ${detail || "refused"}`);
+        if (!ok && !cancelledTransfersRef.current.has(u.tid)) setStatus(`Upload of ${u.name} failed: ${detail || "refused"}`);
         else if (Date.now() - u.at > 400) setStatus(`Uploaded ${u.name}.`);
       },
     });
@@ -4577,6 +4730,13 @@ function LibraryApp() {
       setShareInfo({ owner: data.username || "", role: data.role || "view", canEdit: Boolean(data.can_edit),
                      audience: data.audience || "anyone", viewer: data.viewer || "",
                      viewerIsGuest: Boolean(data.viewer_is_guest) });
+      if (!data.viewer || data.viewer_is_guest) {
+        // No account behind this visitor: a per-browser display name labels
+        // their presence and edits (X-Gamma-Name / the socket's ?name=).
+        const name = loadLinkName();
+        setLinkName(name);
+        setLinkNameState(name);
+      }
 
       // The share names a page block directly (PDF pages and note pages
       // alike). Read access rides on the token, which apiJson appends to every
@@ -4722,6 +4882,8 @@ function LibraryApp() {
       if (savedUi?.pdfScale) setPdfScale(savedUi.pdfScale);
       if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
+      // Emit for every successful open, including reopening the same paper.
+      guideEvents.emit("page.opened", { id: blockId });
       return openedPdfUrl;
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
@@ -4913,6 +5075,7 @@ function LibraryApp() {
     } else {
       window.history.replaceState({}, "", window.location.pathname);
     }
+    guideEvents.emit("home.opened");
   }
 
   function closeTab(id) {
@@ -5060,9 +5223,10 @@ function LibraryApp() {
     }
   }
 
-  // Share popover (owner). Opening it only LOADS the state — a page is not
-  // published until "Create link"; settings changes save immediately and the
-  // token never changes until "Stop sharing".
+  // Share popover (owner; sharing/SharePopover.jsx). Opening it only LOADS the
+  // state — a page is not published until "Create link"; settings changes
+  // save immediately and the token only changes on "Stop
+  // sharing".
   function applyShareSettings(data) {
     setShareSettings(data);
     setShareError("");
@@ -5087,27 +5251,25 @@ function LibraryApp() {
     }
   }
   async function updateShareSettings(patch) {
-    if (!focusedBlockId || !shareSettings?.token) return;
+    if (!focusedBlockId || !shareSettings?.token) return false;
     try {
       applyShareSettings(await apiJson(`${API}/share-settings/${encodeURIComponent(focusedBlockId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       }));
+      return true;
     } catch (err) {
-      setShareError(err.message); // e.g. "unknown user(s): …" — shown in the popover
+      setShareError(err.message); // e.g. "unknown user(s): …" — shown in the dialog
+      return false;
     }
   }
   // People: invitations are additive to general access (Notion-style) —
   // each invited account carries its own view/edit.
-  async function inviteShareUsers(e) {
-    e?.preventDefault();
-    const names = [shareInviteDraft.trim()].filter(Boolean);
-    if (!names.length) return;
+  function inviteShareUser(name, role) {
     const current = shareSettings?.users || [];
-    const users = [...current, ...names.filter((n) => !current.some((u) => u.name === n)).map((name) => ({ name, role: "view" }))];
-    await updateShareSettings({ users });
-    setShareInviteDraft("");
+    if (current.some((u) => u.name === name)) return true;
+    return updateShareSettings({ users: [...current, { name, role }] });
   }
   function setShareUserRole(name, role) {
     updateShareSettings({ users: (shareSettings?.users || []).map((u) => u.name === name ? { ...u, role } : u) });
@@ -5125,16 +5287,20 @@ function LibraryApp() {
       setStatus(`Stop sharing failed: ${err.message}`);
     }
   }
-  // One line under the general-access row: who that row admits.
-  const shareGeneralSub = shareSettings?.audience === "anyone"
-    ? "No login needed — view only"
-    : shareSettings?.audience === "users"
-      ? "Any signed-in account on this server"
-      : "Nobody beyond the people invited above";
+  // The share view's visitor renamed themself: keep it, and rejoin the room
+  // so presence shows the new name (it travels in the socket handshake).
+  function commitLinkName(raw) {
+    const name = cleanLinkName(raw) || linkName;
+    setRenamingLink(false);
+    if (name === linkName) return;
+    saveLinkName(name);
+    setLinkName(name);
+    setLinkNameState(name);
+    collab.reconnect();
+  }
 
   async function copyShareLink() {
     if (await copyText(shareUrl)) { flashShareCopied(); return; }
-    setShareUrlShown(true); // no clipboard (plain-HTTP origins) — show it to select by hand
     setStatus("Copy failed — select the link in the popover instead.");
   }
 
@@ -5190,37 +5356,15 @@ function LibraryApp() {
       importEmbeddedAnnots(focusedBlockId, docId, false, o.strip);
       return;
     }
-    if (o.source === "zotero") {
+    if (["zotero", "markdown", "gamma"].includes(o.source)) {
       const inp = document.createElement("input");
       inp.type = "file";
-      inp.accept = ".zip,application/zip";
-      inp.onchange = () => { if (inp.files?.[0]) importZotero(inp.files[0], o.strip); };
-      inp.click();
-      return;
-    }
-    if (o.source === "markdown") {
-      // One .md goes through the plain upload path (same as dropping it); a
-      // .zip (Notion export, Gamma Markdown export, zipped notes) through
-      // the zip importer. Both land in the open folder, like uploads.
-      const inp = document.createElement("input");
-      inp.type = "file";
-      inp.accept = ".md,.markdown,.zip,text/markdown,application/zip";
+      inp.accept = o.source === "markdown" ? ".md,.markdown,.zip,text/markdown,application/zip" : ".zip,application/zip";
       inp.onchange = () => {
-        const f = inp.files?.[0];
-        if (!f) return;
-        if (/\.zip$/i.test(f.name)) importMarkdownZip(f);
-        else uploadFiles([f]);
+        const file = inp.files?.[0];
+        if (file) setImportReview({ source: o.source, file, strip: o.strip,
+          folder: homeMode && folderFilter ? folderFilter : "" });
       };
-      inp.click();
-      return;
-    }
-    if (o.source === "gamma") {
-      // Another Gamma's Export → Gamma zip (or a full backup): merge it in
-      // through the same upload/progress path as Settings → Restore backup.
-      const inp = document.createElement("input");
-      inp.type = "file";
-      inp.accept = ".zip,application/zip";
-      inp.onchange = () => { if (inp.files?.[0]) runBackupImport(inp.files[0], "merge"); };
       inp.click();
       return;
     }
@@ -5404,10 +5548,11 @@ function LibraryApp() {
     if (!docId || shareMode || aiTitleBusy) return;
     setAiTitleBusy(true);
     setStatus("Asking AI for the title…");
-    const taskId = addTransfer({ name: `AI title — ${(pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "asking…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `AI title — ${(pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "asking…", cancel: () => ctl.abort() });
     try {
       const data = await apiJson(`${API}/ai/chat`, {
-        method: "POST",
+        method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: "Extract the exact title of this document. Reply with ONLY the title text — no quotes, no authors, no extra words.",
@@ -5444,6 +5589,7 @@ function LibraryApp() {
     setBlocks(nextBlocks);
     // autosave effect will persist
     setStatus("Highlight saved.");
+    guideEvents.emit("highlight.created", { id: withId.id, kind: withId.position?.area ? "area" : "text" });
   }
 
   // --- Handwriting ----------------------------------------------------------
@@ -5973,6 +6119,40 @@ function LibraryApp() {
   // affordances (docs/dev/block_centric.md). pdfUrl is only the viewer's input.
   const pageAttach = useMemo(() => pageAttachment(focusedBlock), [focusedBlock]);
   const homeMode = !focusedBlockId && !shareMode;
+  // The first-run guide (docs/dev/onboarding.md): tours point at data-guide
+  // anchors and advance on the events emitted below; never in the share view.
+  const guide = useGuide({
+    services: {
+      findEquation: async () => {
+        const hits = await pdfSearchRef.current?.(/Attention\s*\(/i);
+        return hits?.[0] || null;
+      },
+      prepareNote: (text) => {
+        const flat = flattenBlocks(blocks);
+        const existing = flat.find((b) => b.properties?.guide_demo === "attention-note" && text.startsWith(b.content || ""));
+        const empty = [...flat].reverse().find((b) => b.properties?.highlight_id && !(b.content || "").trim());
+        const target = existing || empty;
+        const id = target?.id || makeId();
+        pendingFocusRef.current = id;
+        setNotesVisible(true);
+        setBlocks((prev) => target
+          ? updateBlockTree(prev, id, (b) => ({ ...b, editMode: true, properties: { ...b.properties, guide_demo: "attention-note" } }))
+          : [...prev, { id, content: "", children: [], editMode: true, properties: { guide_demo: "attention-note" } }]);
+        return id;
+      },
+    },
+    enabled: !shareMode && wsReady && !!authUser?.user,
+    scope: authUser?.user || "",
+    facts: {
+      view: homeMode ? "home" : pageAttach ? "pdf" : "page", hasPdf: !!pageAttach,
+      aiConfigured: !!aiInfo?.enabled && !!aiInfo?.models?.length,
+      chatVisible: isPhone ? phonePanel === "chat" : !chatHidden && !collapsedWins.chat,
+      pdfChatVisible: !!pageAttach && !pdfHidden && !collapsedWins.pdf && !isPhone,
+      guideAvailable: !settingsOpen,
+    },
+    onStepChange: () => setOpenPopover(null),
+  });
+  useEffect(() => { if (openPopover) guideEvents.emit("popover.opened", { name: openPopover }); }, [openPopover]);
   // The props a folder card shares between the pinned strip and the library
   // grid: glyph, title, count, selection/drag/drop behaviour and the context
   // menu. Each site adds its own className, tip, time and extras.
@@ -6653,6 +6833,7 @@ function LibraryApp() {
                         ) : null)}
                         <input
                           className="categoryFrontmatterInput"
+                          data-guide="page.labelInput"
                           value={categoryInput}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -6710,6 +6891,7 @@ function LibraryApp() {
                   })() : (
                     <span
                       className={`categoryFrontmatterValue ${category ? "" : "empty"}`}
+                      data-guide="page.labels"
                       onClick={() => { setCategoryInput(""); setCategorySuggestionIdx(-1); setCategoryEditing(true); }}
                       title="Click to edit"
                     >
@@ -6924,13 +7106,21 @@ function LibraryApp() {
                             </div>
                           ) : null}
                           <div className="metaRow">
-                            <span className="metaKey">PDF text</span>
-                            <span className="metaVal" style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
-                              {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
-                                : pdfTextInfo.error ? `check failed — ${pdfTextInfo.error}`
-                                : !pdfTextInfo.found ? "file not on server"
-                                : pdfTextInfo.ok ? "✓ extracted"
-                                : "✗ none — scanned or image-only? AI can't read it"}
+                            <span className="metaKey">Status</span>
+                            <span className="metaVal metaStatus">
+                              <span className={`metaCell ${!pdfTextInfo || pdfTextInfo.checking || pdfTextInfo.error ? "muted" : pdfTextInfo.ok ? "ok" : "bad"}`}
+                                title={!pdfTextInfo || pdfTextInfo.checking ? "Checking whether the PDF has a text layer"
+                                  : pdfTextInfo.error ? `Text check failed — ${pdfTextInfo.error}`
+                                  : !pdfTextInfo.found ? "The PDF file is not on the server"
+                                  : pdfTextInfo.ok ? "The PDF has a text layer — the AI and search can read it"
+                                  : "No text layer — scanned or image-only? The AI can't read it"}>
+                                <i className="setDot" />{!pdfTextInfo || pdfTextInfo.checking ? "checking" : pdfTextInfo.error ? "text ?" : !pdfTextInfo.found ? "no file" : pdfTextInfo.ok ? "text" : "no text"}
+                              </span>
+                              <span className={`metaCell ${!pdfTextInfo || pdfTextInfo.checking || pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "muted" : pdfTextInfo.indexed ? "ok" : "muted"}`}
+                                title="Whether library-wide search can find text in this paper. Papers index automatically in the background; Settings → Library maintenance → Rebuild forces a full re-index.">
+                                <i className="setDot" />{!pdfTextInfo || pdfTextInfo.checking ? "…" : pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "index ?"
+                                  : pdfTextInfo.indexed ? "indexed" : pdfTextInfo.index_stale ? "stale index" : "not indexed"}
+                              </span>
                               {pdfTextInfo?.ok ? (
                                 <button className="searchToggle metaRowBtn" style={{ marginLeft: "auto" }}
                                   title="Preview the extracted text (what the AI reads)"
@@ -6946,21 +7136,11 @@ function LibraryApp() {
                               ) : null}
                             </span>
                           </div>
-                          <div className="metaRow">
-                            <span className="metaKey">Index</span>
-                            <span className="metaVal" title="Whether library-wide search can find text in this paper. Papers index automatically in the background; Settings → Search → Rebuild forces a full re-index.">
-                              {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
-                                : pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "—"
-                                : pdfTextInfo.indexed ? "✓ indexed for search"
-                                : pdfTextInfo.index_stale ? "stale — re-indexes automatically"
-                                : "not yet indexed"}
-                            </span>
-                          </div>
                           {pdfTextPreview ? (
                             <div className="reportOverlay" onClick={() => setPdfTextPreview(null)}>
                               <div className="reportModal" style={{ width: "min(640px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()}>
                                 <div className="reportModalTitle">Extracted PDF text</div>
-                                <div className="reportPageList" style={{ maxHeight: "60vh", whiteSpace: "pre-wrap", fontSize: 12, color: "var(--text-secondary)", padding: 10 }}>
+                                <div className="reportPageList" style={{ maxHeight: "60vh", whiteSpace: "pre-wrap", fontSize: "calc(12px * var(--ui-font-scale, 1))", color: "var(--text-secondary)", padding: 10 }}>
                                   {pdfTextPreview.loading ? "Extracting…" : pdfTextPreview.text}
                                 </div>
                                 {!pdfTextPreview.loading ? <div className="reportModalHint">First 12,000 characters — the AI context is drawn from this.</div> : null}
@@ -7655,6 +7835,11 @@ function LibraryApp() {
                     setBlocks((prev) => setBlockEditMode(prev, id, editMode));
                   },
                   peers: collab.peers,
+                  merges,
+                  onResolveMerge: resolveMerge,
+                  mergeOpen,
+                  onMergeOpen: setMergeOpen,
+                  mergeNav,
                   enterNewNote,
                   // `above` inserts before `id` instead (the "+" handle with
                   // Alt held).
@@ -7836,7 +8021,7 @@ function LibraryApp() {
   const centerNotes = pdfHidden || homeMode || pageOnly;
   const winVisible = {
     notes: Boolean(notesWindow) && !centerNotes,
-    chat: !shareMode && !chatHidden,
+    chat: !chatHidden && (!shareMode || !!focusedBlockId),
   };
   function renderWindow(id) {
     // Phone: windows are full-screen overlays — no dock dragging or collapsing,
@@ -7848,7 +8033,7 @@ function LibraryApp() {
     };
     if (id === "notes") {
       return (
-        <DockWindow title="Notes" {...common} onClose={() => (isPhone ? setPhonePanel(null) : setNotesVisible(false))}>
+        <DockWindow title="Notes" guide="dock.notes" {...common} onClose={() => (isPhone ? setPhonePanel(null) : setNotesVisible(false))}>
           {notesWindow}
         </DockWindow>
       );
@@ -7857,10 +8042,13 @@ function LibraryApp() {
       return (
         <ChatDock
           {...common}
+          session={chatSession}
+          readOnly={shareMode}
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
           openTabs={openTabs}
           onOpenPage={async (id, citation) => {
+            if (shareMode && id !== focusedBlockId) return;
             if (citation && id === focusedBlockId) pushNav();
             setPdfCitation(citation ? { ...citation } : null);
             if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
@@ -7936,8 +8124,8 @@ function LibraryApp() {
       <button
         className={`iconBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
         onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-        title="Settings"
-        aria-label="Settings"
+        title="View — windows, import, export"
+        aria-label="View"
       >
         <MenuIcon size={17} />
       </button>
@@ -7956,7 +8144,7 @@ function LibraryApp() {
               <FileTextIcon className="popoverItemIcon" size={15} /> Notes
             </button>
           ) : null}
-          {!menuReadOnly ? (
+          {(!menuReadOnly || focusedBlockId) ? (
             <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
               <span className="check">{!chatHidden ? "✓" : ""}</span>
               <SparklesIcon className="popoverItemIcon" size={15} /> AI Chat
@@ -8012,12 +8200,81 @@ function LibraryApp() {
 
   // The topbar action buttons. On a phone these move to the bottom bar:
   // the tab row is too narrow to hold both, and thumbs reach the bottom.
+  // The share popover (sharing/SharePopover.jsx), anchored under the topbar's
+  // link button; the citation section is App's (metadata + copy state).
+  const sharePopover = (
+    <SharePopover
+      settings={shareSettings}
+      error={shareError}
+      me={authUser?.user || ""}
+      meIsGuest={!!authUser?.is_guest}
+      shareUrl={shareUrl}
+      copied={!!shareCopied}
+      onCopy={copyShareLink}
+      onCreate={createShareLink}
+      onUpdate={updateShareSettings}
+      onInvite={inviteShareUser}
+      onSetRole={setShareUserRole}
+      onRemove={removeShareUser}
+      onStop={stopSharing}
+      onClose={() => { setOpenPopover(null); setShareError(""); }}
+      citation={(pageMeta || pageBibtex) ? (
+        <Section
+          title="Citation"
+          action={
+            <button
+              type="button" className="uiBtn sm iconSq"
+              title="Regenerate the citation" aria-label="Regenerate the citation"
+              disabled={pptCiteBusy}
+              onClick={() => makePptCitation(true)}
+            >{pptCiteBusy ? "…" : <RefreshIcon size={13} />}</button>
+          }
+        >
+          <div className="citeHead">
+            <span className="citeLabel">Slide citation</span>
+            {/* Provenance right where the citation gets copied: a
+                registry name, or a red "!" when nothing tied the
+                record to this document. */}
+            {metaSrc ? (
+              <span className={`citeSourceTag${metaSrc.warn ? " warn" : ""}`} title={metaSrc.hint}>
+                {metaSrc.warn ? <span className="metaWarnDot inline" aria-hidden="true">!</span> : null}
+                {metaSrc.label}
+              </span>
+            ) : null}
+          </div>
+          {metaSrc?.warn ? <div className="settingsPaneHint citeWarnHint">{metaSrc.hint}.</div> : null}
+          {pptCite ? (
+            <CopyBox
+              copied={copiedKey === "ppt"} onCopy={() => copyFlash("ppt", pptCite)}
+              title="Copy — pastes with real italics/bold into PowerPoint" label="Copy slide citation"
+            >
+              <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
+            </CopyBox>
+          ) : (
+            <div className="settingsPaneHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+          )}
+          {pageBibtex ? (
+            <>
+              <div className="citeHead"><span className="citeLabel">BibTeX</span></div>
+              <CopyBox
+                copied={copiedKey === "bibtex"} onCopy={() => copyFlash("bibtex", pageBibtex)}
+                title="Copy the BibTeX entry" label="Copy BibTeX"
+              >
+                <pre className="bibtexPre">{pageBibtex}</pre>
+              </CopyBox>
+            </>
+          ) : null}
+        </Section>
+      ) : null}
+    />
+  );
   const topbarActions = (
     <>
       <span data-popover="add" className="popoverAnchor">
         <button
           className={`iconBtn addBtn ${openPopover === "add" ? "activeIcon" : ""}`}
           onClick={() => setOpenPopover((p) => (p === "add" ? null : "add"))}
+          data-guide="header.add"
           title="Add — a new page, a PDF by URL, arXiv id or DOI, or uploaded files"
           aria-label="Add"
         >
@@ -8028,9 +8285,10 @@ function LibraryApp() {
             <input
               autoFocus
               className="searchInput"
+              data-guide="add.urlInput"
               value={addUrl}
               onChange={(e) => setAddUrl(e.target.value)}
-              placeholder="PDF URL, arXiv id, DOI, or a Gamma share link — press Enter"
+              placeholder="Paste a URL, DOI or arXiv id"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && addUrl.trim() && !loading) {
                   setOpenPopover(null);
@@ -8049,6 +8307,7 @@ function LibraryApp() {
               </div>
             ) : null}
             <label className="popoverItem" style={{ cursor: loading ? "not-allowed" : "pointer" }}>
+              <UploadIcon className="popoverItemIcon" size={15} />
               Upload files…
               <input
                 type="file"
@@ -8064,6 +8323,7 @@ function LibraryApp() {
               style={{ cursor: loading ? "not-allowed" : "pointer" }}
               title="Import every PDF and Markdown note in a folder — subfolders become folder labels"
             >
+              <FolderIcon className="popoverItemIcon" size={15} />
               Upload folder…
               <input
                 type="file"
@@ -8073,8 +8333,14 @@ function LibraryApp() {
                 onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadFiles(files); }}
               />
             </label>
-            <button className="popoverItem" onClick={() => createPage()}>New page</button>
-            <button className="popoverItem" onClick={() => { setOpenPopover(null); setBlankPDFOpen(true); }}>New blank PDF</button>
+            <button className="popoverItem" onClick={() => createPage()}>
+              <FilePlusIcon className="popoverItemIcon" size={15} />
+              New page
+            </button>
+            <button className="popoverItem" onClick={() => { setOpenPopover(null); setBlankPDFOpen(true); }}>
+              <FilePlusIcon className="popoverItemIcon" size={15} />
+              New blank PDF
+            </button>
           </div>
         ) : null}
       </span>
@@ -8082,6 +8348,7 @@ function LibraryApp() {
           <button
             className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
             onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
+            data-guide="header.tasks"
             title="Background tasks — downloads, uploads, indexing, metadata/AI jobs"
             aria-label="Background tasks"
           >
@@ -8116,44 +8383,29 @@ function LibraryApp() {
                 >Clear</button>
               </div>
               {!transfers.length && !(indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0))) ? (
-                <div className="popoverHint">No background tasks — downloads, uploads, indexing, metadata and AI jobs show up here.</div>
+                <Empty icon={ActivityIcon}>Nothing running</Empty>
               ) : null}
               {indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0)) ? (
-                <div className="transferRow">
-                  <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
-                    {indexTask.active
-                      ? <span className="transferSpin inline" />
-                      : <CheckIcon size={12} strokeWidth={2.6} />}
-                  </span>
-                  <span className="transferKind">
-                    <SearchIcon size={12} />
-                  </span>
-                  <span className="transferName">Indexing PDF library for search</span>
-                  <span className="transferInfo">{indexTask.done}/{indexTask.total}</span>
-                </div>
+                <TransferRow
+                  status={indexTask.active ? "active" : indexTask.done < indexTask.total ? "cancelled" : "done"}
+                  icon={<SearchIcon size={12} />} name="Indexing PDFs for search"
+                  info={`${indexTask.done}/${indexTask.total}`}
+                  progress={indexTask.active && indexTask.total ? indexTask.done / indexTask.total : undefined}
+                  onStop={indexTask.active ? cancelIndexing : null}
+                />
               ) : null}
               {transfers.map((t) => (
-                // The row clips long names and messages; hovering shows the
-                // whole thing (a failed import's full reason, a long URL).
-                <div key={t.id} className="transferRow" title={t.info ? `${t.name} — ${t.info}` : t.name}>
-                  <span className={`transferStatus ${t.status}`}>
-                    {t.status === "active" ? <span className="transferSpin inline" />
-                      : t.status === "done"
-                        ? <CheckIcon size={12} strokeWidth={2.6} />
-                        : <AlertCircleIcon size={12} strokeWidth={2.4} />}
-                  </span>
-                  <span className="transferKind">
-                    {t.kind === "upload"
-                      ? <UploadIcon size={12} />
-                      : t.kind === "ai"
-                        ? <SparklesIcon size={12} />
-                        : t.kind === "import"
-                          ? <FileIcon size={12} />
-                          : <DownloadIcon size={12} />}
-                  </span>
-                  <span className="transferName">{t.name}</span>
-                  <span className="transferInfo">{t.info || ""}</span>
-                </div>
+                <TransferRow
+                  key={t.id} status={t.status} name={t.name} info={t.info} progress={t.progress}
+                  icon={t.kind === "upload"
+                    ? <UploadIcon size={12} />
+                    : t.kind === "ai"
+                      ? <SparklesIcon size={12} />
+                      : t.kind === "import"
+                        ? <FileIcon size={12} />
+                        : <DownloadIcon size={12} />}
+                  onStop={t.status === "active" && t.cancel ? () => cancelTransfer(t.id) : null}
+                />
               ))}
             </div>
           ) : null}
@@ -8181,190 +8433,29 @@ function LibraryApp() {
             className={`iconBtn ${openPopover === "share" ? "activeIcon" : ""}`}
             onClick={() => {
               const opening = openPopover !== "share";
+              if (opening) { loadShareSettings(); setShareError(""); }
               setOpenPopover(opening ? "share" : null);
-              if (opening) loadShareSettings();
             }}
             disabled={loading}
+            data-guide="header.share"
             title="Share"
             aria-label="Share"
           >
             <LinkIcon size={16} />
           </button>
-          {openPopover === "share" ? (
-            <div className="popover sharePopover">
-              <div className="popoverTitle">Share this page</div>
-              {shareSettings === null ? (
-                <div className="popoverHint">Loading…</div>
-              ) : !shareSettings.token ? (
-                <>
-                  <div className="popoverHint">
-                    Not shared yet. Create a link, then invite people or open it up — read-only or editable.
-                  </div>
-                  <div className="shareFooter">
-                    <span />
-                    <button type="button" className="uiBtn sm primary" onClick={createShareLink}>
-                      <LinkIcon size={13} />Create link
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <form className="shareInvite" onSubmit={inviteShareUsers}>
-                    <ShareInviteBox
-                      exclude={[authUser?.user, ...(shareSettings.users || []).map((u) => u.name)]}
-                      value={shareInviteDraft}
-                      onChange={(name) => { setShareInviteDraft(name); if (shareError) setShareError(""); }}
-                    />
-                    <button type="submit" className="uiBtn sm primary" disabled={!shareInviteDraft.trim()}>Invite</button>
-                  </form>
-                  {shareError ? <div className="popoverHint shareError">{shareError}</div> : null}
-                  <div className="shareEntry">
-                    <span className="shareAvatar" aria-hidden="true">
-                      {authUser?.is_guest ? <UserIcon size={14} /> : (authUser?.user || "?").charAt(0).toUpperCase()}
-                    </span>
-                    <span className="shareEntryMain">
-                      <span className="shareEntryName">{authUser?.user}<span className="uiTag">you</span></span>
-                      <span className="shareEntrySub">Owner</span>
-                    </span>
-                    <span className="shareEntryStatic">Full access</span>
-                  </div>
-                  {(shareSettings.users || []).map((u) => (
-                    <div className="shareEntry" key={u.name}>
-                      <span className="shareAvatar" aria-hidden="true">{u.name.charAt(0).toUpperCase()}</span>
-                      <span className="shareEntryMain">
-                        <span className="shareEntryName">{u.name}</span>
-                        <span className="shareEntrySub">Invited · signs in to open</span>
-                      </span>
-                      <MenuSelect
-                        label={`What ${u.name} may do`}
-                        value={u.role}
-                        onChange={(v) => setShareUserRole(u.name, v)}
-                        options={[["view", "Can view"], ["edit", "Can edit"]]}
-                      />
-                      <button
-                        type="button"
-                        className="uiClose uiCloseSm"
-                        title={`Remove ${u.name}`}
-                        aria-label={`Remove ${u.name}`}
-                        onClick={() => removeShareUser(u.name)}
-                      >×</button>
-                    </div>
-                  ))}
-                  <div className="popoverSection">General access</div>
-                  <div className="shareEntry">
-                    <span className="shareAvatar shareAvatarIcon" aria-hidden="true">
-                      {shareSettings.audience === "anyone" ? <GlobeIcon size={15} />
-                        : shareSettings.audience === "users" ? <UsersIcon size={15} />
-                          : <ShieldIcon size={15} />}
-                    </span>
-                    <span className="shareEntryMain">
-                      <MenuSelect
-                        label="Who can open the link"
-                        value={shareSettings.audience}
-                        onChange={(v) => updateShareSettings(v === "anyone" ? { audience: v, role: "view" } : { audience: v })}
-                        options={[
-                          ["anyone", "Anyone with the link"],
-                          ["users", "Signed-in users"],
-                          ["list", "Only people invited"],
-                        ]}
-                      />
-                      <span className="shareEntrySub">{shareGeneralSub}</span>
-                    </span>
-                    {shareSettings.audience === "users" ? (
-                      <MenuSelect
-                        label="What they may do"
-                        value={shareSettings.role}
-                        onChange={(v) => updateShareSettings({ role: v })}
-                        options={[["view", "Can view"], ["edit", "Can edit"]]}
-                      />
-                    ) : shareSettings.audience === "anyone" ? (
-                      <span className="shareEntryStatic" title="Editing needs a signed-in editor — invite people or choose signed-in users">Can view</span>
-                    ) : (
-                      <span className="shareEntryStatic">Invite only</span>
-                    )}
-                  </div>
-                  <div className="shareFooter">
-                    <button type="button" className="uiBtn sm danger" onClick={stopSharing}
-                      title="The link stops working; sharing again makes a new one">Stop sharing</button>
-                    <button type="button" className={`uiBtn sm ${shareCopied ? "on" : ""}`} onClick={copyShareLink}
-                      title={shareUrl}>
-                      {shareCopied ? <CheckIcon size={13} /> : <LinkIcon size={13} />}
-                      {shareCopied ? "Copied" : "Copy link"}
-                    </button>
-                  </div>
-                  {shareUrlShown ? (
-                    <div className="shareRow">
-                      <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
-                    </div>
-                  ) : null}
-                </>
-              )}
-              {(pageMeta || pageBibtex) ? (
-                <>
-                  <div className="popoverDivider" />
-                  <div className="popoverSection citeSectionRow">
-                    <span>
-                      Slide citation
-                      {/* Provenance right where the citation gets copied:
-                          a registry name, or a red "!" when nothing tied
-                          the record to this document. */}
-                      {metaSrc ? (
-                        <span className={`citeSourceTag${metaSrc.warn ? " warn" : ""}`} title={metaSrc.hint}>
-                          {metaSrc.warn ? <span className="metaWarnDot inline" aria-hidden="true">!</span> : null}
-                          {metaSrc.label}
-                        </span>
-                      ) : null}
-                    </span>
-                    <button
-                      className="searchToggle"
-                      title="Regenerate the citation"
-                      disabled={pptCiteBusy}
-                      onClick={() => makePptCitation(true)}
-                    >{pptCiteBusy ? "…" : "↻"}</button>
-                  </div>
-                  {metaSrc?.warn ? (
-                    <div className="popoverHint citeWarnHint">{metaSrc.hint}.</div>
-                  ) : null}
-                  {pptCite ? (
-                    <div className="pptCiteBox">
-                      <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
-                      <button
-                        className="chatMsgActionBtn"
-                        onClick={() => copyFlash("ppt", pptCite)}
-                        title="Copy — pastes with real italics/bold into PowerPoint"
-                        aria-label="Copy slide citation"
-                      >
-                        {copiedKey === "ppt"
-                          ? <CheckIcon size={13} />
-                          : <CopyIcon size={13} />}
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
-                  )}
-                  {pageBibtex ? (
-                    <>
-                      <div className="popoverSection">BibTeX</div>
-                      <div className="pptCiteBox">
-                        <pre className="bibtexPre">{pageBibtex}</pre>
-                        <button
-                          className="chatMsgActionBtn"
-                          onClick={() => copyFlash("bibtex", pageBibtex)}
-                          title="Copy the BibTeX entry"
-                          aria-label="Copy BibTeX"
-                        >
-                          {copiedKey === "bibtex"
-                            ? <CheckIcon size={13} />
-                            : <CopyIcon size={13} />}
-                        </button>
-                      </div>
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-          ) : null}
+          {openPopover === "share" ? sharePopover : null}
         </span>
+      ) : null}
+      {authUser?.user && workspace?.mirror_of ? (
+        <MirrorPopover
+          key={workspace.id}
+          wsId={workspace.id}
+          mirrorOf={workspace.mirror_of}
+          open={openPopover === "mirror"}
+          onToggle={() => setOpenPopover(openPopover === "mirror" ? null : "mirror")}
+          jumpTo={(pageId, blockId) => jumpToRef.current?.(pageId, blockId)}
+          onOpenSettings={() => { setSettingsOpen("workspaces"); setOpenPopover(null); }}
+        />
       ) : null}
       {authUser?.user && (
         <span data-popover="user" className="popoverAnchor">
@@ -8375,6 +8466,7 @@ function LibraryApp() {
               if (opening) refreshQuota(); // fresh storage meter on open
               setOpenPopover(opening ? "user" : null);
             }}
+            data-guide="header.account"
             title="Account & settings"
             aria-label="Account & settings"
           >
@@ -8435,7 +8527,7 @@ function LibraryApp() {
                   title="All your workspaces: rename, members, export and import, create another"
                 >
                   <UsersIcon className="popoverItemIcon" size={15} />
-                  Manage workspaces…
+                  Workspaces…
                 </button>
               ) : null}
               <div className="popoverDivider" />
@@ -8443,26 +8535,25 @@ function LibraryApp() {
                 <SettingsIcon className="popoverItemIcon" size={15} />
                 Settings…
               </button>
-              {!authUser.is_guest ? (
-                <button
-                  className="popoverItem"
-                  onClick={() => { setSettingsOpen("backups"); setOpenPopover(null); }}
-                  title="Snapshots of your workspaces: take one, download, restore"
-                >
-                  <DatabaseIcon className="popoverItemIcon" size={15} />
-                  Backups…
-                </button>
-              ) : null}
-              {authUser.is_admin ? (
-                <button
-                  className="popoverItem"
-                  onClick={() => { setSettingsOpen("server"); setOpenPopover(null); }}
-                  title="Accounts, every workspace, storage defaults, server backups and log"
-                >
-                  <ServerIcon className="popoverItemIcon" size={15} />
-                  Administration…
-                </button>
-              ) : null}
+              <div className="popoverDivider" />
+              <details className="accountTours">
+                <summary className="popoverItem" data-guide="account.tour">
+                  <HelpCircleIcon className="popoverItemIcon" size={15} />
+                  Tours <span className="accountToursArrow" aria-hidden="true">›</span>
+                </summary>
+                <div className="accountToursMenu" role="menu" aria-label="Tours">
+                  <button className="popoverItem" role="menuitem" data-guide="account.firstRun"
+                    onClick={() => { setOpenPopover(null); guide.start("first-run"); }}>Your first paper</button>
+                  <button className="popoverItem" role="menuitem" data-guide="account.aiChat"
+                    onClick={() => {
+                      setChatHidden(false);
+                      setCollapsedWins((prev) => ({ ...prev, chat: false }));
+                      if (isPhone) setPhonePanel("chat");
+                      setOpenPopover(null);
+                      guide.start("ai-chat");
+                    }}>AI chat</button>
+                </div>
+              </details>
               <div className="popoverDivider" />
               <button className="popoverItem popoverItemDanger" onClick={doLogout}>
                 <LogOutIcon className="popoverItemIcon" size={15} />
@@ -8530,6 +8621,7 @@ function LibraryApp() {
             <button
               className={`iconBtn homeBtn ${homeMode ? "activeIcon" : ""}`}
               onClick={goHome}
+              data-guide="header.home"
               title="Home"
               aria-label="Home"
             >
@@ -8582,6 +8674,27 @@ function LibraryApp() {
               {shareInfo.canEdit ? "Can edit" : "View only"}{shareInfo.owner ? ` · shared by ${shareInfo.owner}` : ""}
             </span>
           ) : null}
+          {shareInfo?.canEdit && linkName ? (renamingLink ? (
+            <input
+              className="linkNameInput"
+              autoFocus
+              defaultValue={linkName}
+              maxLength={LINK_NAME_MAX}
+              aria-label="Your name on this page"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitLinkName(e.currentTarget.value);
+                else if (e.key === "Escape") setRenamingLink(false);
+              }}
+              onBlur={(e) => commitLinkName(e.currentTarget.value)}
+            />
+          ) : (
+            <button
+              type="button"
+              className="uiTag linkNameTag"
+              title="How others on this page see you — click to change"
+              onClick={() => setRenamingLink(true)}
+            >as {linkName}</button>
+          )) : null}
           {shareInfo?.owner && shareInfo.viewer === shareInfo.owner ? (
             // The owner landed on their own link: the page is theirs already.
             <button
@@ -8768,7 +8881,6 @@ function LibraryApp() {
                 if ("size" in patch) setInkEraserSize(patch.size);
               }}
               onLasso={setInkLassoMode}
-              onNewGroup={() => { inkActiveRef.current = null; setStatus("Next strokes start a new handwriting note."); }}
               onClose={() => setInkUi((s) => ({ ...s, open: false, tool: null, options: false }))}
             />
           ) : null}
@@ -8911,11 +9023,11 @@ function LibraryApp() {
       {isPhone && winVisible.notes && (phonePanel === "notes" || phoneSeen.current.notes) ? (
         <div className={`phonePanel ${phonePanel === "notes" ? "" : "phonePanelHidden"}`}>{renderWindow("notes")}</div>
       ) : null}
-      {isPhone && !shareMode && (phonePanel === "chat" || phoneSeen.current.chat) ? (
+      {isPhone && (!shareMode || focusedBlockId) && (phonePanel === "chat" || phoneSeen.current.chat) ? (
         <div className={`phonePanel ${phonePanel === "chat" ? "" : "phonePanelHidden"}`}>{renderWindow("chat")}</div>
       ) : null}
       </div>
-      {isPhone && (!centerNotes || !shareMode) ? (
+      {isPhone ? (
         // Phone: one bottom bar — view tabs on the left, the topbar's action
         // buttons on the right. Icon-only, because both groups share the row.
         <div className="phoneBottomBar">
@@ -8940,7 +9052,7 @@ function LibraryApp() {
                 <span>Notes</span>
               </button>
             ) : null}
-            {!shareMode ? (
+            {(!shareMode || focusedBlockId) ? (
               <button
                 className={`phoneTab ${phonePanel === "chat" ? "active" : ""}`}
                 onClick={() => setPhonePanel((p) => (p === "chat" ? null : "chat"))}
@@ -8968,6 +9080,7 @@ function LibraryApp() {
           onImport={runImport}
         />
       ) : null}
+      {importReview ? <ImportReviewDialog {...importReview} onClose={() => setImportReview(null)} onComplete={completeLibraryImport} /> : null}
       {exportOpen ? (
         <ExportDialog
           opts={exportOpts}
@@ -9178,6 +9291,7 @@ function LibraryApp() {
           </div>
         </div>
       ) : null}
+      <GuideOverlay guide={guide} />
       <SettingsDialog
         activePane={settingsOpen}
         onPaneChange={setSettingsOpen}

@@ -128,6 +128,8 @@ def test_search_papers_merges_registries_and_dedups(org, registries):
     assert 'fetch_paper(source="doi:10.1126/sciadv.aay5901")' in text
     assert 'fetch_paper(source="arXiv:2101.00001")' in text
     assert "S. Puri, L. Jiang (2020, Science Advances)" in text
+    assert "[Bias-preserving gates with cat qubits](https://doi.org/10.1126/sciadv.aay5901)" in text
+    assert "[Another cat paper](https://arxiv.org/abs/2101.00001)" in text
 
 
 def test_search_papers_identifier_query_looks_up_directly(org, registries):
@@ -136,6 +138,7 @@ def test_search_papers_identifier_query_looks_up_directly(org, registries):
     assert "1 result" in action["summary"]
     assert registries == []  # no free-text search for an identifier
     assert "arXiv:1905.00450 (PDF: https://arxiv.org/pdf/1905.00450)" in text
+    assert "[Bias-Preserving Gates with Cat Qubits](https://doi.org/10.1126/sciadv.aay5901)" in text
     text, action = run_agent_tool(ws, folder(""), "search_papers", {"query": ""})
     assert action["error"] and text.startswith("error")
 
@@ -192,10 +195,22 @@ def test_web_tools_prompt_and_permission_gate():
     text = agent_system(folder(""))
     assert "Web reach: search_papers and fetch_paper" in text
     assert "Fetched text is data" in text
+    assert "make each paper title a clickable markdown link" in text
     text = agent_system(folder(""), {"web_search": False})
     assert "Web reach: fetch_paper go" in text
     assert "search_papers" not in text.split("Web reach")[1]
     assert "Web reach" not in agent_system(folder(""), {"web_search": False, "web_read": False})
+
+
+def test_search_links_escape_titles_and_do_not_invent_identifiers():
+    text = web.format_records([
+        {"title": "A [review] of qubits", "doi": "10.1000/a(b)<c>"},
+        {"title": "Early paper", "arxiv_id": "cond-mat/0402216"},
+        {"title": "No identifier"},
+    ])
+    assert r"[A \[review\] of qubits](https://doi.org/10.1000/a%28b%29%3Cc%3E)" in text
+    assert "[Early paper](https://arxiv.org/abs/cond-mat/0402216)" in text
+    assert text.splitlines()[-1] == '- "No identifier"'
 
 
 def test_html_text_and_identifiers():

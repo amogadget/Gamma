@@ -102,7 +102,7 @@ the client passes its `cite_prompt`/`cite_model` prefs, `/api/clip` uses the
 defaults) and returned as `ppt_cite`, so it is ready the moment the record
 is. A citation failure
 never fails the fetch. `/api/metadata/cite` is the regenerate path (↻ in the
-share popover) and the fallback the client's citation effect uses on open
+Share dialog's Citation section) and the fallback the client's citation effect uses on open
 for pages whose record predates this, whose citation call failed, or whose
 metadata was just edited — one attempt per page per session, only when AI
 is configured.
@@ -168,8 +168,8 @@ stays openable even after its source goes away.
 
 ### Connected publisher sessions
 
-The Connector's optional **Publisher sessions** action imports a snapshot of
-cookies for the current HTTPS publisher host. `GET /api/publisher-sessions`
+The Connector's cookie button (the popup footer's **Publisher sessions**
+drawer) imports a snapshot of cookies for the current HTTPS publisher host. `GET /api/publisher-sessions`
 returns supported publisher roots and the caller's connection metadata;
 `POST` replaces one host's snapshot and `DELETE /{host}` disconnects it.
 Cookie values are never returned. Guest accounts and share links cannot use
@@ -194,8 +194,11 @@ private and not cached by shared HTTP caches. Saved PDFs retain the workspace's
 normal access rules; connecting a session does not alter workspace permissions.
 
 Session cookies are capped at 24 hours, others at 30 days or original expiry.
-Upstream cookie changes are transient; use the Connector's Refresh action to
-import a new snapshot. Disconnect removes the live record; existing full server
+Upstream cookie changes are transient; the Connector re-imports a connected
+host's snapshot on its own when the user visits that host and the copy is
+over an hour old (its `autoRefreshSessions` setting, on by default; the rule
+in [extension.md](extension.md#publisher-sessions)), and **Refresh now** in
+its drawer does so by hand. Disconnect removes the live record; existing full server
 backups may retain encrypted older snapshots. Deleting an account deletes its
 connections. Supported roots are explicit in `publisher_sessions.py`; a different
 publisher host (even a sibling) needs its own connection. CAPTCHA clearance tied

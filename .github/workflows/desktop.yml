@@ -1,5 +1,5 @@
 # Desktop app: the Windows installer, macOS dmg/zip and Debian/Ubuntu deb,
-# released automatically. Overview of every workflow: docs/dev/github_actions.md.
+# released on dispatch. Overview of every workflow: docs/dev/github_actions.md.
 #
 # Trigger: manual dispatch only (`gh workflow run desktop.yml --ref main`,
 # what the `release` skill does). A merge to main does NOT build the app;
@@ -381,12 +381,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: Test plugin packaging and setup
-        run: python -m unittest discover -s tools -p 'test_*codex*.py'
+        run: |
+          python -m unittest discover -s tools -p 'test_*codex*.py'
+          python -m unittest discover -s tools -p 'test_plugins.py'
       - name: Build plugin release assets
         env:
           VERSION: ${{ needs.meta.outputs.version }}
           REPO: ${{ github.repository }}
-        run: python tools/release_codex_plugin.py --output dist/codex-plugin --version "$VERSION" --repo "$REPO"
+        run: python tools/release_plugins.py --output dist/codex-plugin --version "$VERSION" --repo "$REPO"
       - uses: actions/upload-artifact@v7
         with:
           name: gamma-codex-plugin
@@ -467,6 +469,12 @@ jobs:
             echo "[Plugin ZIP]($base/gamma-codex-plugin-$VERSION.zip) · [Windows setup]($base/install-gamma-codex.ps1) · [macOS/Linux setup]($base/install-gamma-codex.sh)"
             echo
             echo "In Gamma, open Settings → AI → External assistants → Codex CLI and copy the setup command. It installs the plugin and connects your Gamma server, then asks you to approve a workspace in your browser. Requires the Codex CLI; works with browser and self-hosted Gamma."
+            echo
+            echo "## Gamma PDF plugin for Claude Code"
+            echo
+            echo "[Plugin ZIP]($base/gamma-claude-code-plugin-$VERSION.zip)"
+            echo
+            echo 'Extract the ZIP into a permanent directory. Run `claude plugin marketplace add <path>/gamma-marketplace` and `claude plugin install gamma@gamma-local --scope user`. Connect your server with `claude mcp add --transport http --scope user gamma <your-gamma-address>/mcp`, then open `/mcp` in Claude Code to sign in and approve a workspace. Start a new session and use `/gamma:gamma`.'
             echo
             echo "## Server (Docker)"
             echo

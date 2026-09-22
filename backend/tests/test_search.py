@@ -260,3 +260,18 @@ def test_tasks_endpoint_shape(guest):
     assert r.status_code == 200
     idx = r.json()["indexing"]
     assert set(idx) >= {"total", "done", "active"}
+
+
+def test_stop_indexing_reports_whether_one_was_running(guest):
+    # The reindex tests above start a real background indexer for this
+    # workspace; on a slow runner it can still be alive here, so wait for it
+    # to finish instead of assuming it has.
+    import time
+    deadline = time.monotonic() + 20
+    while guest.get("/api/tasks").json()["indexing"]["active"]:
+        assert time.monotonic() < deadline, "indexer still running"
+        time.sleep(0.05)
+    # nothing running: a no-op, not an error
+    r = guest.delete("/api/tasks/indexing")
+    assert r.status_code == 200
+    assert r.json() == {"cancelled": False}

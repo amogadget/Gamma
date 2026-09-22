@@ -17,6 +17,7 @@ everything.
 import html
 import re
 import threading
+from urllib.parse import quote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as URLRequest
 
@@ -105,7 +106,13 @@ def format_records(records: list[dict]) -> str:
     for rec in records:
         authors = [a for a in rec.get("authors") or [] if a]
         who = ", ".join(authors[:3]) + (f" (+{len(authors) - 3})" if len(authors) > 3 else "")
-        parts = [f'"{rec.get("title", "")}"' + (f" — {who}" if who else "")]
+        title = rec.get("title", "")
+        url = (f"https://doi.org/{quote(rec['doi'], safe='/')}" if rec.get("doi") else
+               f"https://arxiv.org/abs/{quote(rec['arxiv_id'], safe='/')}" if rec.get("arxiv_id") else "")
+        # A ready-to-use title link keeps search recommendations actionable.
+        label = re.sub(r"([\\\[\]])", r"\\\1", title).replace("\n", " ")
+        heading = f"[{label}]({url})" if url else f'"{title}"'
+        parts = [heading + (f" — {who}" if who else "")]
         when = ", ".join(p for p in (rec.get("year", ""), rec.get("venue", "")) if p)
         if when:
             parts[0] += f" ({when})"

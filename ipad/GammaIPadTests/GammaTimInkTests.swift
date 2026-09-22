@@ -142,6 +142,51 @@ final class GammaTimInkTests: XCTestCase {
         XCTAssertEqual(scaled.y, 160, accuracy: 0.000001)
     }
 
+    func testMonolineKeepsPressureAndRawChannelsWithConstantWidth() throws {
+        let pts = [100, 200, -200, 0, 18, -3, 2000, 8]
+        let base: [String: Any] = ["id": "s", "size": 2, "ch": "xypt", "pts": pts]
+        let legacy = try GammaTimInk.decode(data(strokes: [base])).strokes[0]
+        var styled = base
+        styled["brush"] = "monoline"
+        let monoline = try GammaTimInk.decode(data(strokes: [styled])).strokes[0]
+        XCTAssertEqual(monoline.brush, "monoline")
+        XCTAssertTrue(monoline.pen)
+        XCTAssertEqual(monoline.pts, pts.map(Int64.init))
+        XCTAssertEqual(monoline.samples, legacy.samples)
+        XCTAssertEqual(monoline.samples.map(\.p), [0, 1])
+        XCTAssertEqual(monoline.samples.map { monoline.width(at: $0) }, [2, 2])
+        XCTAssertNil(legacy.brush)
+        XCTAssertEqual(legacy.samples.map { legacy.width(at: $0) }, [1.5, 2.5])
+    }
+
+    func testNullBrushRetainsLegacyPenAndHighlighterSemantics() throws {
+        for tool in ["pen", "highlighter"] {
+            let base: [String: Any] = ["id": "s", "tool": tool, "size": 2,
+                                       "ch": "xyp", "pts": [0, 0, 0, 100, 100, 1000]]
+            let legacy = try GammaTimInk.decode(data(strokes: [base])).strokes[0]
+            var nullable = base
+            nullable["brush"] = NSNull()
+            let decoded = try GammaTimInk.decode(data(strokes: [nullable])).strokes[0]
+            XCTAssertNil(decoded.brush)
+            XCTAssertEqual(decoded.pts, legacy.pts)
+            XCTAssertEqual(decoded.samples, legacy.samples)
+            XCTAssertEqual(decoded.samples.map { decoded.width(at: $0) },
+                           legacy.samples.map { legacy.width(at: $0) })
+        }
+    }
+
+    func testRejectsUnknownBrushAndMonolineHighlighter() throws {
+        let badBrushes: [Any] = ["unknown", "", "Monoline", true, 1, ["monoline"], ["name": "monoline"]]
+        for brush in badBrushes {
+            XCTAssertThrowsError(try GammaTimInk.decode(data(strokes: [
+                ["id": "s", "pts": [0, 0], "brush": brush]
+            ])), "\(brush)")
+        }
+        XCTAssertThrowsError(try GammaTimInk.decode(data(strokes: [
+            ["id": "s", "pts": [0, 0], "tool": "highlighter", "brush": "monoline"]
+        ])))
+    }
+
     func testPressureWidthAndMouseHighlighterConstants() throws {
         for (tool, pen, expected) in [("pen", true, 2.5), ("pen", false, 2.0), ("highlighter", true, 2.0)] {
             let s = try GammaTimInk.decode(data(strokes: [["id": "s", "tool": tool, "pen": pen,

@@ -1,0 +1,45 @@
+# gammapdf.com: build sites/dist from the page sources plus the README
+# artwork and demos, and deploy it as a Cloudflare Worker (static assets
+# only). Runs on a push to main that touches the site or anything it copies,
+# or on manual dispatch. Needs the CLOUDFLARE_API_TOKEN and
+# CLOUDFLARE_ACCOUNT_ID secrets (sites/README.md). Overview:
+# docs/dev/github_actions.md.
+name: site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sites/**"
+      - "docs/assets/branding/**"
+      - "docs/assets/demos/**"
+      - "docs/assets/screenshots/01-annotated-pdf.png"
+      - "frontend/public/media/icons/favicon.svg"
+      - "PRIVACY.md"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sites/package-lock.json
+      - working-directory: sites
+        run: |
+          npm ci
+          npm run build
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: sites
+          command: deploy

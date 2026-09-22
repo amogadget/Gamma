@@ -1,8 +1,11 @@
 import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { ROOT } from "../harness.mjs";
 import { newPageViaUi } from "./notes.mjs";
 import { waitForPdf } from "./pdf.mjs";
 
-export async function transferScenarios({ server, browser, alice, makePdf, step, assert, assertEq, assertNoProblems, openPage, flags }) {
+export async function transferScenarios({ server, browser, alice, bob, makePdf, step, assert, assertEq, assertNoProblems, openPage, flags }) {
   async function setup(viewport) {
     const ctx = await alice.context(browser, viewport ? { viewport } : {});
     await ctx.addInitScript(() => localStorage.setItem("gamma-ai-login-check", "off"));
@@ -16,6 +19,148 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
   const choice = (dialog, name) => dialog.getByRole("button", { name, exact: true });
   const toggle = (dialog, name) => dialog.getByRole("checkbox", { name, exact: true });
 
+  await step("transfer: Zotero ZIP review, cancellation, import report and repeat import", async () => {
+    const { ctx, page } = await setup();
+    try {
+      const fixture = path.join(server.dir, "review.zip");
+      const python = process.env.GAMMA_E2E_PYTHON || path.join(ROOT, "backend", "venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+      // Use the backend's synthetic fixture: one real PDF, one absent PDF,
+      // a nested collection and an explicitly empty attachment directory.
+      execFileSync(python, ["-c", `
+import sys, zipfile
+sys.path.insert(0, 'backend/tests')
+from test_zotero_import import RDF, _annotated_pdf
+rdf = RDF.replace('s41586-000-00000-0', 'e2e-zotero-review')
+rdf = rdf.replace('<dc:title>Proximal Policy Optimization</dc:title>', '<dc:title>Missing PDF example</dc:title><link:link rdf:resource="#missing"/>')
+rdf = rdf.replace('</rdf:RDF>', '<z:Attachment rdf:about="#missing"><z:path rdf:resource="files/99/missing.pdf"/></z:Attachment></rdf:RDF>')
+with zipfile.ZipFile(sys.argv[1], 'w') as z:
+    z.writestr('Review/library.rdf', rdf)
+    z.writestr('Review/files/3/Vaswani - 2017 - Attention.pdf', _annotated_pdf(b'E2E review PDF'))
+    z.writestr('Review/files/99/', '')
+`, fixture], { cwd: ROOT });
+      const selectZip = async () => {
+        const dialog = await openDialog(page, "Import");
+        await choice(dialog, "Zotero library (.zip)").click();
+        await choice(dialog, "Next").click();
+        const chooser = page.waitForEvent("filechooser");
+        await choice(dialog, "Choose .zip…").click();
+        await (await chooser).setFiles(fixture);
+        const review = page.getByRole("dialog", { name: "Review Zotero import", exact: true });
+        await review.getByRole("heading", { name: "Library after import", exact: true }).waitFor();
+        return review;
+      };
+      await page.waitForSelector(".folderNewBtn");
+      let imports = 0;
+      let uploads = 0;
+      page.on("request", request => {
+        if (request.method() !== "POST") return;
+        const path = new URL(request.url()).pathname;
+        if (path.startsWith("/api/import/review/")) imports++;
+        if (path === "/api/import/review") uploads++;
+      });
+      let review = await selectZip();
+      assert(await review.getByText("Empty folder", { exact: true }).isVisible());
+      const target = review.getByRole("region", { name: "Library after import", exact: true });
+      assert(await target.getByText("ML", { exact: true }).isVisible());
+      assert(await target.getByText("Transformers", { exact: true }).isVisible());
+      assert(await target.getByText("Missing PDF example", { exact: true }).isVisible());
+      assertEq((await target.locator(".importKind").allTextContents()).join(","), "PDF,Page");
+      assert((await review.locator(".importWarnings").innerText()).includes("PDF missing from ZIP"));
+      assertEq(imports, 0, "preview does not import");
+      await choice(review, "Missing").click();
+      assertEq(await target.locator(".importTreeFile").count(), 1);
+      assert((await review.innerText()).includes("2 of 2 items selected"), "filtering keeps hidden selections");
+      await choice(review, "Deselect all").click();
+      assert(await choice(review, "Import to library").isDisabled());
+      await review.getByRole("checkbox", { name: "Import Missing PDF example", exact: true }).check();
+      await choice(review, "Selected").click();
+      assertEq(await target.locator(".importTreeFile").count(), 1);
+      await choice(review, "All").click();
+      await choice(review, "Select all").click();
+      if (flags.keep) await page.screenshot({ path: `${server.dir}/zotero-review.png` });
+      await choice(review, "Cancel").click();
+      assertEq(imports, 0, "cancelling leaves the library unchanged");
+      review = await selectZip();
+      await choice(review, "Import to library").click();
+      const report = page.getByRole("dialog", { name: "Import complete", exact: true });
+      await report.waitFor();
+      assertEq(imports, 1);
+      assertEq(uploads, 2, "each review uploads once; committing reuses the upload");
+      assert((await report.locator(".importWarnings").innerText()).includes("PDF missing from ZIP"));
+      await choice(report, "Done").click();
+      review = await selectZip();
+      assertEq(await review.getByText("Update existing page", { exact: false }).count(), 2);
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert(!(await review.evaluate(el => el.scrollWidth > el.clientWidth + 1)), "review fits mobile");
+      if (flags.keep) await page.screenshot({ path: `${server.dir}/zotero-review-mobile.png` });
+      await choice(review, "Cancel").click();
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
+  await step("transfer: shared Markdown upload progress, selection and persistent summary", async () => {
+    const { ctx, page } = await setup();
+    try {
+      await page.waitForSelector(".folderNewBtn");
+      let release;
+      const gate = new Promise(resolve => { release = resolve; });
+      await page.route("**/api/import/review", async route => {
+        const response = await route.fetch();
+        await Promise.race([gate, new Promise(resolve => setTimeout(resolve, 3000))]);
+        await route.fulfill({ response });
+      });
+      const dialog = await openDialog(page, "Import");
+      await choice(dialog, "Markdown notes").click();
+      const chooser = page.waitForEvent("filechooser");
+      await choice(dialog, "Choose file…").click();
+      await (await chooser).setFiles({ name: "reviewed.md", mimeType: "text/markdown", buffer: Buffer.from("---\ntitle: Reviewed Markdown\nfolder: Imported notes\n---\nA selected note.") });
+      const review = page.getByRole("dialog", { name: "Review Markdown import", exact: true });
+      await review.getByRole("progressbar").waitFor();
+      assert((await review.innerText()).includes("Uploading for review"));
+      release();
+      await review.getByRole("checkbox", { name: "Import Reviewed Markdown", exact: true }).waitFor();
+      await choice(review, "Deselect all").click();
+      assert(await choice(review, "Import to library").isDisabled());
+      await review.getByRole("checkbox", { name: "Select folder Imported notes", exact: true }).check();
+      await choice(review, "Import to library").click();
+      const report = page.getByRole("dialog", { name: "Import complete", exact: true });
+      await report.waitFor();
+      assert((await report.innerText()).includes("1 new page"));
+      assert(await report.getByText("Reviewed Markdown", { exact: true }).isVisible());
+      await choice(report, "Done").click();
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
+  await step("transfer: Gamma export review imports only the selected page without reloading", async () => {
+    const donorA = await bob.api("/api/blocks", { method: "POST", body: { parent_id: "root", content: "Selected Gamma review" } });
+    const donorB = await bob.api("/api/blocks", { method: "POST", body: { parent_id: "root", content: "Excluded Gamma review" } });
+    const backup = await bob.api("/api/export", { raw: true });
+    const buffer = Buffer.from(await backup.arrayBuffer());
+    const { ctx, page } = await setup();
+    try {
+      await page.waitForSelector(".folderNewBtn");
+      const dialog = await openDialog(page, "Import");
+      await choice(dialog, "Gamma export (.zip)").click();
+      const chooser = page.waitForEvent("filechooser");
+      await choice(dialog, "Choose .zip…").click();
+      await (await chooser).setFiles({ name: "gamma-review.zip", mimeType: "application/zip", buffer });
+      const review = page.getByRole("dialog", { name: "Review Gamma import", exact: true });
+      await review.getByRole("checkbox", { name: "Import Selected Gamma review", exact: true }).waitFor();
+      await choice(review, "Deselect all").click();
+      await review.getByRole("checkbox", { name: "Import Selected Gamma review", exact: true }).check();
+      await choice(review, "Import to library").click();
+      const report = page.getByRole("dialog", { name: "Import complete", exact: true });
+      await report.waitFor();
+      assert((await report.innerText()).includes("1 new page"));
+      assertEq(await report.getByText("Excluded Gamma review", { exact: true }).count(), 0);
+      assertEq((await alice.api(`/api/blocks/${donorA.id}`)).content, "Selected Gamma review");
+      assertEq((await alice.api(`/api/blocks/${donorB.id}`, { raw: true })).status, 404);
+      await choice(report, "Done").click();
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
   await step("transfer: format selection, live options, back navigation and a real notes PDF", async () => {
     const { ctx, page } = await setup();
     try {
@@ -27,7 +172,8 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       assert(await dialog.evaluate((el) => el.contains(document.activeElement)), "reverse tab from the heading stays in the dialog");
       assertEq(await dialog.getByRole("group", { name: "Export format" }).getByRole("button").count(), 6);
       assertEq(await choice(dialog, "PDF").getAttribute("aria-pressed"), "true");
-      for (const [type, count] of [["Notes", 2], ["ZIP", 4]]) {
+      for (const [type, count] of [["This paper", 0], ["Notes", 2], ["Library", 4]]) {
+        if (!count) { assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).count(), 0); continue; }
         assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).getByRole("button").count(), count);
       }
       await choice(dialog, "Markdown").hover();
@@ -114,14 +260,14 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       let dialog = await openDialog(page, "Export");
       await choice(dialog, "Annotated PDF").click();
       await choice(dialog, "Next").click();
-      assertEq(await dialog.locator(".transferOriginalPaper").count(), 1);
+      assertEq(await dialog.locator('[data-preview="original"]').count(), 1);
       await toggle(dialog, "Notes").uncheck();
       assertEq(await dialog.locator('[data-preview="notes"]').count(), 0);
       await choice(dialog, "Close Export").click();
       dialog = await openDialog(page, "Import");
       assertEq(await dialog.getByRole("group", { name: "Import from" }).getByRole("button").count(), 5);
       assertEq(await choice(dialog, "Annotations in this PDF").getAttribute("aria-pressed"), "true");
-      for (const [type, count] of [["PDF", 2], ["MD", 1], ["ZIP", 2]]) {
+      for (const [type, count] of [["This paper", 2], ["Notes", 1], ["Library", 2]]) {
         assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).getByRole("button").count(), count);
       }
       if (flags.keep) await page.screenshot({ animations: "disabled", path: `${server.dir}/import-sources.png` });

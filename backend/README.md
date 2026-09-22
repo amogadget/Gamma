@@ -27,3 +27,13 @@ uvicorn app:app --host 127.0.0.1 --port 9001 --reload
 ```
 
 Tests: `pip install -r requirements-dev.txt && python -m pytest tests -q`
+
+Startup loads the MCP SDK only when an authenticated MCP request or assistant
+sign-in needs it. The first such request pays the import cost; health checks,
+ordinary browsing, and OAuth discovery do not. The MCP transport stays alive
+until server shutdown.
+
+The local `run-local.bat` launcher uses `tools/build_frontend_if_needed.mjs` to
+reuse the frontend build when its source, configuration, and build environment
+are unchanged. Missing build outputs trigger a rebuild. Delete
+`frontend/dist/.gamma-build.json` to force a rebuild on the next launch.

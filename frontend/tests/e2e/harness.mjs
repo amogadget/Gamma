@@ -59,7 +59,7 @@ export class Server {
     const log = fs.openSync(this.logPath, "a");
     this.proc = spawn(PYTHON, ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(this.port)], {
       cwd: BACKEND, stdio: ["ignore", log, log],
-      env: { ...process.env, GAMMA_DATA_DIR: this.dataDir, GAMMA_STATIC_DIR: DIST, PYTHONIOENCODING: "utf-8" },
+      env: { ...process.env, GAMMA_DATA_DIR: this.dataDir, GAMMA_STATIC_DIR: DIST, PYTHONIOENCODING: "utf-8", GAMMA_UPDATE_CHECK: "off" },
     });
     const t0 = Date.now();
     while (Date.now() - t0 < 30000) {

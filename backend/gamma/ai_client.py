@@ -20,6 +20,29 @@ from .logbuf import log
 # carry two agentic extensions beyond {role, content-str}: an assistant message
 # with `tool_calls` ([{id, name, arguments-dict}]) and a {"role": "tool",
 # "call_id", "content"} result entry; each builder maps them to its wire shape.
+# A tool result may also carry `images` ([(media_type, base64)] — a rendered
+# PDF page): Anthropic takes image blocks inside the tool_result; the OpenAI
+# wires only accept text there, so the pictures follow the round's results
+# as one user turn (_TOOL_IMAGES_NOTE) the model reads in call order.
+
+_TOOL_IMAGES_NOTE = "Pictures returned by the tool calls above, in call order:"
+
+
+def _tool_image_turns(messages, make_turn):
+    """The common turn list with every run of tool results followed by one
+    user turn carrying their pictures — ``make_turn(images)`` builds it in
+    the wire's shape. Yields (message, is_image_turn)."""
+    pending = []
+    for m in messages:
+        if m["role"] != "tool" and pending:
+            yield make_turn(pending), True
+            pending = []
+        yield m, False
+        if m["role"] == "tool":
+            pending.extend(m.get("images") or [])
+    if pending:
+        yield make_turn(pending), True
+
 
 def _attach_index(messages) -> int:
     """Index of the message attachments ride on: the last plain user turn
@@ -92,6 +115,10 @@ def _anthropic_messages(messages) -> list:
     for m in messages:
         if m["role"] == "tool":
             block = {"type": "tool_result", "tool_use_id": m["call_id"], "content": m["content"]}
+            if m.get("images"):
+                block["content"] = [{"type": "text", "text": m["content"]}] + [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+                    for media_type, data in m["images"]]
             prev = out[-1] if out else None
             if (prev and prev["role"] == "user" and isinstance(prev["content"], list)
                     and prev["content"] and prev["content"][0].get("type") == "tool_result"):
@@ -159,8 +186,14 @@ def openai_request(
             {"type": "text", "text": last["content"]},
         ]
     wire = [{"role": "system", "content": system}] if system else []
-    for m in messages:
-        if m["role"] == "tool":
+    image_turn = lambda imgs: {"role": "user", "content": [  # noqa: E731
+        {"type": "text", "text": _TOOL_IMAGES_NOTE},
+        *[{"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}}
+          for media_type, data in imgs]]}
+    for m, is_image_turn in _tool_image_turns(messages, image_turn):
+        if is_image_turn:
+            wire.append(m)
+        elif m["role"] == "tool":
             wire.append({"role": "tool", "tool_call_id": m["call_id"], "content": m["content"]})
         elif m["role"] == "assistant" and m.get("tool_calls"):
             wire.append({"role": "assistant", "content": m.get("content") or None,
@@ -185,6 +218,9 @@ def openai_request(
         body["reasoning_effort"] = effort
     if stream:
         body["stream"] = True
+        # The final chunk then carries the token counts (OpenAI and the
+        # common compatible servers: vLLM, Ollama, llama.cpp, LiteLLM).
+        body["stream_options"] = {"include_usage": True}
     return urllib.request.Request(
         f"{conf['base_url']}/v1/chat/completions",
         data=json.dumps(body).encode(),
@@ -211,8 +247,16 @@ def _responses_input(messages, pdf_b64s=None, images=None) -> list:
     """Map the common turn list to Responses API input items (shared by the
     ChatGPT/codex backend and OpenAI's platform /v1/responses)."""
     items = []
-    for message in messages:
-        if message["role"] == "tool":
+    image_turn = lambda imgs: {"type": "message", "role": "user", "content": [  # noqa: E731
+        {"type": "input_text", "text": _TOOL_IMAGES_NOTE},
+        *[{"type": "input_image", "image_url": f"data:{media_type};base64,{data}"}
+          for media_type, data in imgs]]}
+    image_turns = []  # never the turn the user's own attachments ride on
+    for message, is_image_turn in _tool_image_turns(messages, image_turn):
+        if is_image_turn:
+            items.append(message)
+            image_turns.append(message)
+        elif message["role"] == "tool":
             items.append({"type": "function_call_output", "call_id": message["call_id"],
                           "output": message["content"]})
         elif message["role"] == "assistant":
@@ -227,7 +271,8 @@ def _responses_input(messages, pdf_b64s=None, images=None) -> list:
             items.append({"type": "message", "role": "user", "content": content})
     if pdf_b64s or images:
         last = next((item for item in reversed(items)
-                     if item.get("type") == "message" and item.get("role") == "user"), items[-1])
+                     if item.get("type") == "message" and item.get("role") == "user"
+                     and not any(item is turn for turn in image_turns)), items[-1])
         last["content"] = [
             *[
                 {
@@ -410,30 +455,82 @@ def open_ai(
         raise UpstreamError(error.code, detail)
 
 
-def read_reply(response, provider_protocol) -> str:
-    """Read the full reply text from an open provider response."""
+def _int(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_usage(raw, provider_protocol) -> dict | None:
+    """One shape for every provider's token report: ``{input, output,
+    cache_read, cache_write}``. ``input`` is the whole prompt as the
+    provider counted it (Anthropic reports the cached and freshly written
+    parts beside the uncached ones — they are summed here, the way OpenAI's
+    ``prompt_tokens`` already includes ``cached_tokens``); ``cache_read`` /
+    ``cache_write`` are the parts of it that came from / went to the prompt
+    cache. Returns None when the object carries no counts."""
+    if not isinstance(raw, dict):
+        return None
+    if provider_protocol == "anthropic":
+        cache_read = _int(raw.get("cache_read_input_tokens"))
+        cache_write = _int(raw.get("cache_creation_input_tokens"))
+        usage = {"input": _int(raw.get("input_tokens")) + cache_read + cache_write,
+                 "output": _int(raw.get("output_tokens")),
+                 "cache_read": cache_read, "cache_write": cache_write}
+    elif provider_protocol in ("chatgpt", "openai-responses"):
+        usage = {"input": _int(raw.get("input_tokens")), "output": _int(raw.get("output_tokens")),
+                 "cache_read": _int((raw.get("input_tokens_details") or {}).get("cached_tokens")),
+                 "cache_write": 0}
+    else:
+        usage = {"input": _int(raw.get("prompt_tokens")), "output": _int(raw.get("completion_tokens")),
+                 "cache_read": _int((raw.get("prompt_tokens_details") or {}).get("cached_tokens")),
+                 "cache_write": 0}
+    return usage if (usage["input"] or usage["output"]) else None
+
+
+def add_usage(total: dict | None, usage: dict | None) -> dict | None:
+    """Sum two normalized usage dicts (either may be None)."""
+    if not usage:
+        return total
+    if not total:
+        return dict(usage)
+    return {k: total.get(k, 0) + usage.get(k, 0) for k in ("input", "output", "cache_read", "cache_write")}
+
+
+def read_reply(response, provider_protocol, on_usage=None) -> str:
+    """Read the full reply text from an open provider response. ``on_usage``
+    (a callable taking the normalized usage dict) hears the token counts
+    when the provider reports them."""
     if provider_protocol in ("chatgpt", "openai-responses"):
-        return "".join(sse_deltas(response, provider_protocol))
-    return _WIRE[provider_protocol][1](json.loads(response.read()))
+        return "".join(sse_deltas(response, provider_protocol, on_usage))
+    data = json.loads(response.read())
+    usage = normalize_usage(data.get("usage"), provider_protocol)
+    if usage and on_usage:
+        on_usage(usage)
+    return _WIRE[provider_protocol][1](data)
 
 
 def call_ai(
     messages, system, entry, runtime, pdf_b64s=None, effort="",
-    max_tokens=8192, timeout=60, images=None,
+    max_tokens=8192, timeout=60, images=None, on_usage=None,
 ):
     """Send a chat and return its complete reply text."""
     with open_ai(
         messages, system, entry, runtime, pdf_b64s,
         effort, max_tokens, timeout, images,
     ) as response:
-        return read_reply(response, protocol(runtime, entry))
+        return read_reply(response, protocol(runtime, entry), on_usage)
 
 
-def sse_deltas(response, provider_protocol):
-    """Yield text deltas from a provider's SSE response."""
+def sse_deltas(response, provider_protocol, on_usage=None):
+    """Yield text deltas from a provider's SSE response; ``on_usage`` hears
+    the stream's token counts."""
     for kind, data in sse_events(response, provider_protocol):
         if kind == "text":
             yield data
+        elif kind == "usage" and on_usage:
+            on_usage(data)
 
 
 def _parse_tool_args(raw) -> dict:
@@ -604,11 +701,14 @@ def sse_events(response, provider_protocol):
     response. A ``tool_delta`` carries the tool call's arguments as streamed
     SO FAR (raw, possibly truncated JSON — see ``partial_json_object``) so a
     consumer can preview a long argument while the model is still writing
-    it; the ``tool`` event with the parsed arguments always follows. Raises
-    on a fully empty response (neither text nor tool calls) with the stop
-    reason attached."""
+    it; the ``tool`` event with the parsed arguments always follows. A last
+    ``("usage", {input, output, cache_read, cache_write})`` event reports
+    the turn's token counts when the provider sent them
+    (``normalize_usage``). Raises on a fully empty response (neither text
+    nor tool calls) with the stop reason attached."""
     got = False
     stop = ""
+    usage = None   # the provider's token report, normalized
     tool = None    # anthropic: {id, name, json} tool_use block being accumulated
     pending = {}   # openai: index -> {id, name, args} accumulated across deltas
     items = {}     # responses: item id -> {id (call_id), name, args} being streamed
@@ -625,7 +725,11 @@ def sse_events(response, provider_protocol):
             continue
         if provider_protocol == "anthropic":
             kind = event.get("type")
-            if kind == "content_block_start":
+            if kind == "message_start":
+                # Input counts arrive up front; the output count comes with
+                # the final message_delta (cumulative, so the last one wins).
+                usage = normalize_usage((event.get("message") or {}).get("usage"), "anthropic")
+            elif kind == "content_block_start":
                 block = event.get("content_block") or {}
                 if block.get("type") == "tool_use":
                     tool = {"id": block.get("id") or "", "name": block.get("name") or "", "json": ""}
@@ -647,6 +751,13 @@ def sse_events(response, provider_protocol):
                     tool = None
             elif kind == "message_delta":
                 stop = (event.get("delta") or {}).get("stop_reason") or stop
+                delta_usage = normalize_usage(event.get("usage"), "anthropic")
+                if delta_usage:
+                    usage = usage or {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+                    usage["output"] = delta_usage["output"]
+                    if delta_usage["input"] and not usage["input"]:
+                        usage.update(input=delta_usage["input"], cache_read=delta_usage["cache_read"],
+                                     cache_write=delta_usage["cache_write"])
             elif kind == "error":
                 raise RuntimeError((event.get("error") or {}).get("message") or "stream error")
         elif provider_protocol in ("chatgpt", "openai-responses"):
@@ -677,6 +788,8 @@ def sse_events(response, provider_protocol):
                                     "arguments": _parse_tool_args(item.get("arguments"))})
             elif kind == "response.completed":
                 stop = (event.get("response") or {}).get("status") or "completed"
+                usage = normalize_usage((event.get("response") or {}).get("usage"),
+                                        provider_protocol) or usage
             elif kind in ("response.failed", "error"):
                 error = (
                     (event.get("response") or {}).get("error") or {}
@@ -687,6 +800,8 @@ def sse_events(response, provider_protocol):
         else:
             if event.get("error"):
                 raise RuntimeError((event["error"] or {}).get("message") or "stream error")
+            if event.get("usage"):
+                usage = normalize_usage(event["usage"], "openai") or usage
             choice = (event.get("choices") or [{}])[0]
             delta = choice.get("delta") or {}
             text = delta.get("content") or ""
@@ -710,6 +825,8 @@ def sse_events(response, provider_protocol):
         got = True
         yield ("tool", {"id": slot["id"], "name": slot["name"],
                         "arguments": _parse_tool_args(slot["args"])})
+    if usage:
+        yield ("usage", usage)
     if not got:
         raise RuntimeError(
             f"empty response (stop reason={stop or 'unknown'} — a reasoning model may have spent "

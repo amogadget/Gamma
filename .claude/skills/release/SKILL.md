@@ -43,7 +43,8 @@ marks the desktop release as a pre-release.
    Report the link and version. Do not wait for the desktop build
    (~20 min) unless asked; `gh run watch <id> --exit-status` if so. The
    desktop publish job re-dispatches `docker.yml` with the version, so the
-   image gets a matching `:<version>` tag on its own.
+   image gets a matching `:<version>` tag on its own, and uploads the Codex
+   plugin zip, its setup scripts and checksums onto the same release.
 
 Follow-ups to offer, not to run: the Chrome Web Store upload of a new
 extension zip is manual (`extension/STORE.md`).

@@ -66,6 +66,9 @@ def create_workspace_files(ws_id: str, welcome: bool = False):
     # does NOT close, and the open handle would block renaming/deleting the
     # directory on Windows.
     with closing(sqlite3.connect(str(target / "pages.db"))) as pages_db:
+        # WAL from the start: connect_pages_db would switch it on first
+        # open, which needs the file to itself — two first openers race.
+        pages_db.execute("PRAGMA journal_mode=WAL")
         for stmt in PAGES_SCHEMA:
             pages_db.execute(stmt)
         if not pages_db.execute("SELECT 1 FROM unified_blocks WHERE id = 'root'").fetchone():

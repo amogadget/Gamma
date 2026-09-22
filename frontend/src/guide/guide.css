@@ -1,0 +1,172 @@
+/* The guide overlay: dimmed sheet with a spotlight hole, a card beside it.
+   Uses the app's surface tokens so it follows every theme. */
+.guideRoot {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-tip);
+  pointer-events: none;
+}
+.guideDim {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+/* The painted part swallows clicks; the evenodd hole is not painted, so
+   pointer events fall through to the real control beneath it. */
+.guideDimFill {
+  fill: rgba(0, 0, 0, 0.42);
+  transition: d 180ms ease;
+}
+.guideRing {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  pointer-events: none;
+  animation: guidePulse 1.8s ease-in-out infinite;
+}
+@keyframes guidePulse {
+  0%, 100% { stroke-opacity: 0.95; }
+  50% { stroke-opacity: 0.45; }
+}
+
+.guideCard {
+  position: fixed;
+  pointer-events: auto;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-surface);
+  padding: 12px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  animation: guideIn 160ms ease-out;
+}
+@keyframes guideIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.guideCardCentered {
+  top: 50%;
+  left: 50%;
+  width: 340px;
+  transform: translate(-50%, -50%);
+  animation: none;
+  padding: 18px 20px 16px;
+}
+.guideHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 18px;
+}
+.guideStep {
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.guideClose { margin-right: -4px; }
+.guideDone {
+  margin-left: 8px;
+  color: var(--accent);
+}
+.guideRoot.done .guideRing { animation: none; stroke-opacity: 1; }
+.guideBusy, .guideFailed {
+  margin-left: 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  color: var(--text-muted);
+}
+.guideFailed { color: var(--danger); text-transform: none; letter-spacing: 0; font-size: calc(11px * var(--ui-font-scale, 1)); }
+/* While a demo acts, the whole sheet swallows clicks (the hole included) so
+   a stray click can't derail it; the card stays usable for Skip / leave. */
+.guideShield { position: absolute; inset: 0; pointer-events: auto; }
+.guideCardCorner { right: 16px; bottom: 16px; width: 300px; }
+/* The demo's pointer glides between targets; a press shrinks it briefly. */
+.guideCursor {
+  position: fixed;
+  top: -4px;
+  left: -3px;
+  pointer-events: none;
+  transition: transform 520ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+  z-index: 1;
+}
+.guideCursor.pressed svg { transform: scale(0.85); transform-origin: 4px 4px; transition: transform 90ms; }
+.guideCursor.dragging { transition: transform 40ms linear; }
+.guideModifier {
+  position: absolute;
+  top: 24px;
+  left: 10px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: 600 calc(11px * var(--ui-font-scale, 1)) system-ui;
+}
+@media (prefers-reduced-motion: reduce) {
+  .guideCursor, .guideCursor.dragging, .guideDimFill { transition: none; }
+  .guideRing, .guideCard { animation: none; }
+}
+.guideTitle {
+  font-size: calc(14px * var(--ui-font-scale, 1));
+  font-weight: 600;
+  line-height: 1.3;
+}
+.guideCardCentered .guideTitle { font-size: calc(17px * var(--ui-font-scale, 1)); }
+.guideBody {
+  font-size: calc(12.5px * var(--ui-font-scale, 1));
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.guideBody p { margin: 0; }
+.guideBody p + p { margin-top: 6px; }
+.guideBody code {
+  font-size: calc(11.5px * var(--ui-font-scale, 1));
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+.guideFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+.guideDots { display: inline-flex; gap: 4px; }
+.guideDots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-light);
+}
+.guideDots i.done { background: var(--accent-bg); }
+.guideDots i.on { background: var(--accent); width: 14px; border-radius: 3px; }
+.guideBtns { display: inline-flex; gap: 6px; }
+.guideInvitation .guideCard { border-top: 2px solid var(--accent); gap: 8px; }
+.guideInvitation .guideStep { color: var(--accent); }
+.guideInvitation .guideTitle { font-size: calc(16px * var(--ui-font-scale, 1)); }
+
+/* Narrow screens: the card becomes a bottom sheet; the spotlight stays. */
+@media (max-width: 640px) {
+  .guideCard:not(.guideCardCentered) {
+    top: auto !important;
+    left: 12px !important;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    width: auto !important;
+  }
+  .guideCardCentered { width: min(340px, calc(100vw - 32px)); }
+  /* Keep lower controls, especially the composer, usable during practice. */
+  .guideCard.guideCardAbove {
+    top: calc(12px + env(safe-area-inset-top)) !important;
+    bottom: auto;
+  }
+}

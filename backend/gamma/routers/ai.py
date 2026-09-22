@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import queue
 import re
 import secrets
 import sqlite3
@@ -14,11 +15,12 @@ from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from .. import chatgpt_oauth
+from .. import ai_usage, chatgpt_oauth
 from ..ai_client import (
     UpstreamError,
+    add_usage as _add_usage,
     call_ai as _call_ai,
     chatgpt_request as _chatgpt_request,
     open_ai as _open_ai,
@@ -110,6 +112,11 @@ class AIChatRequest(BaseModel):
     effort: str = ""      # reasoning effort; empty = provider default (param omitted)
     system: str = ""      # custom system prompt; empty = built-in default
     pages: list[str] = Field(default_factory=list, max_length=7)  # open page + up to six references
+
+    @field_validator("pages")
+    @classmethod
+    def _unique_pages(cls, pages):
+        return list(dict.fromkeys(str(page) for page in pages if page))
     # Also include the user's highlights + notes for pages that carry a PDF
     # (a page without one is its notes — they always go).
     include_notes: bool = False
@@ -214,6 +221,21 @@ _SYSTEM_PROMPT = (
     "knowledge — just make clear it is background, not something these pages state. "
     "Be concise; when you cite a specific value from a PDF, give its PDF page number, "
     "and say when something comes from the user's notes rather than the document.")
+
+# Appended whenever a document is in context, custom system prompt or not:
+# the clickable-citation link shape (docs/dev/pdf_citations.md).
+_CITATION_PROMPT = (
+    "\n\nWhen citing a passage from a library PDF, provide a clickable citation "
+    "as [p. N](/?page=PAGE_ID&pdf_page=N&quote=URL_ENCODED_QUOTE). "
+    "Use the Gamma page ID supplied in context or tool results, the 1-based physical "
+    "PDF page number from [PDF page N] labels (not printed page numbers), and a "
+    "verbatim, distinctive quote of 8-2000 characters contained on that page, preferably one sentence. "
+    "Percent-encode the quote, including spaces, ampersands and parentheses. "
+    "These links only navigate and visually highlight text; they never create notes. "
+    "Never invent quotes, IDs or page numbers. If the location is unknown, read the "
+    "page first when tools are available, otherwise use an ordinary page link. "
+    "Do not use these links for external or uploaded files without a Gamma page ID."
+)
 
 # Default prompt for AI-based metadata extraction (used when neither an arXiv id
 # nor a DOI identifies the paper). Editable per-user in the frontend prompt editor.
@@ -350,6 +372,23 @@ def _apply_provider_fields(entry: dict, payload: AIProviderRequest):
         entry["test_model"] = test_model
 
 
+@router.get("/ai/usage")
+def ai_usage_summary(request: Request):
+    """Token usage of the signed-in account's AI calls, as the providers
+    reported it: totals for today / 7 days / 30 days / all kept rows, the
+    30-day split by kind (chat, translate, metadata, cite, test) and by
+    model. Guests have no providers, so theirs is always empty."""
+    user = require_user(request)
+    return ai_usage.summary(user)
+
+
+@router.delete("/ai/usage")
+def ai_usage_reset(request: Request):
+    """Forget the account's usage rows (Settings → AI → Usage → Reset)."""
+    user = require_user(request)
+    return {"ok": True, "deleted": ai_usage.clear(user)}
+
+
 @router.get("/ai/settings")
 async def ai_settings_get(request: Request):
     user = require_user(request)
@@ -444,9 +483,10 @@ def _probe_entry(user: str, entry: dict, fallback_model: str = "") -> dict:
     started = time.time()
     try:
         # Generous cap: reasoning models burn invisible tokens even on "ok".
+        probe_entry = {"provider": provider_id, "model": model}
         _call_ai([{"role": "user", "content": 'Reply with the single word "ok".'}],
-                 "", {"provider": provider_id, "model": model}, rt,
-                 max_tokens=2048, timeout=45)
+                 "", probe_entry, rt, max_tokens=2048, timeout=45,
+                 on_usage=ai_usage.recorder("test", probe_entry, rt))
     except Exception as e:
         auth = isinstance(e, UpstreamError) and e.status in (401, 403)
         return {"ok": False, "model": model, "error": str(e), "auth": auth}
@@ -659,7 +699,7 @@ class ModelCatalogRequest(BaseModel):
     provider_id: str = ""  # saved entry to use the stored key of; "" = use the fields below
     protocol: str = ""
     api_key: str = ""
-    base_url: str = ""
+    base_url: str | None = None
 
 
 # Sync def: the upstream /v1/models fetch runs in the threadpool.
@@ -674,7 +714,7 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     protocol = payload.protocol
     if payload.provider_id:
         entry = next((e for e in load_provider_entries(user) if e.get("id") == payload.provider_id), None) or {}
-        protocol = entry.get("protocol") or protocol
+        protocol = protocol or entry.get("protocol")
     if protocol == "chatgpt":
         return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
     if protocol not in AI_PROTOCOLS:
@@ -682,7 +722,7 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     key = (payload.api_key or "").strip() or (entry.get("api_key") or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="enter the API key first, then load the model list")
-    base = ((payload.base_url or "").strip() or (entry.get("base_url") or "").strip()
+    base = ((payload.base_url if payload.base_url is not None else entry.get("base_url") or "").strip()
             or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
     try:
         data = _model_catalog_json(_models_list_request(protocol, key, base))
@@ -746,6 +786,73 @@ def ai_health(payload: AIHealthRequest, request: Request):
     except Exception as e:
         return {**result, "ok": False, "auth": False, "error": str(e)[:200]}
     return {**result, "ok": True}
+
+
+# --- Streaming keepalive ------------------------------------------------------
+
+# Seconds of silence before a stream gets a keepalive line. Reverse proxies
+# close a response that sends nothing for a while (nginx and Synology's
+# proxy default to 60 s, Cloudflare to 100 s); the browser then sees a bare
+# "network error" mid-reply and nothing reaches the server log. A tool loop
+# over a long context is quiet for exactly that long while the model thinks.
+KEEPALIVE_INTERVAL = 15.0
+
+
+def keepalive_lines(lines, what="ai", interval=KEEPALIVE_INTERVAL):
+    """Relay the NDJSON line generator ``lines`` from a worker thread and put a
+    ``{"ping": 1}`` line in every gap longer than ``interval`` seconds, so an
+    idle proxy or browser keeps the response open while the provider is still
+    thinking. Clients skip ping lines. When the consumer goes away before
+    the source ends (the Stop button, or the connection dropped anyway), the
+    worker stops the source at its next yield — the same point the plain
+    generator would have been abandoned at — and the log says so."""
+    q = queue.Queue(maxsize=64)
+    done = object()
+    abandoned = threading.Event()
+
+    def put(item):
+        while not abandoned.is_set():
+            try:
+                q.put(item, timeout=1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def pump():
+        try:
+            for line in lines:
+                if not put(line):
+                    lines.close()
+                    return
+        except BaseException as e:  # relayed to the consumer
+            put(e)
+        else:
+            put(done)
+
+    threading.Thread(target=pump, name=f"{what}-stream", daemon=True).start()
+    started = time.monotonic()
+    finished = False
+    try:
+        while True:
+            try:
+                item = q.get(timeout=interval)
+            except queue.Empty:
+                yield '{"ping": 1}\n'
+                continue
+            if item is done:
+                finished = True
+                return
+            if isinstance(item, BaseException):
+                finished = True
+                raise item
+            yield item
+    finally:
+        abandoned.set()
+        if not finished:
+            log.warning(f"[{what}] client closed the stream after "
+                        f"{time.monotonic() - started:.0f}s (stop button, or the "
+                        f"connection dropped — a proxy idle timeout?)")
 
 
 # --- PDF translation ----------------------------------------------------------
@@ -893,9 +1000,11 @@ def ai_translate(payload: AITranslateRequest, request: Request):
         # thinking spends from the same budget.
         return min(30000, 8000 + 2 * sum(len(t) for t in batch))
 
+    count_usage = ai_usage.recorder("translate", entry, rt)
+
     def call(batch):
         return _call_ai(user_turn(batch), system, entry, rt, effort=effort,
-                        max_tokens=budget(batch), timeout=180)
+                        max_tokens=budget(batch), timeout=180, on_usage=count_usage)
 
     def stream_call(batch):
         """The same call, streamed: yields ("partial", text-so-far) as the
@@ -904,7 +1013,7 @@ def ai_translate(payload: AITranslateRequest, request: Request):
                         max_tokens=budget(batch), timeout=180, stream=True)
         acc = ""
         try:
-            for text in _sse_deltas(resp, _protocol(rt, entry)):
+            for text in _sse_deltas(resp, _protocol(rt, entry), count_usage):
                 acc += text
                 yield ("partial", acc)
         finally:
@@ -981,7 +1090,8 @@ def ai_translate(payload: AITranslateRequest, request: Request):
             log.warning(f"[ai_translate] {e}")
             yield json.dumps({"error": f"translation failed: {e}"}) + "\n"
 
-    return StreamingResponse(ndjson(), media_type="application/x-ndjson")
+    return StreamingResponse(keepalive_lines(ndjson(), "ai_translate"),
+                             media_type="application/x-ndjson")
 
 
 # --- Voice dictation ----------------------------------------------------------
@@ -1180,7 +1290,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
     # armed subset — an empty result (or no scope) is a plain chat.
     scope = {"type": payload.agent_scope, "folder": payload.folder,
              "page_id": payload.page_id, "read_chars": payload.read_char_limit,
-             "context_pages": list(dict.fromkeys(payload.pages)),
+             "context_pages": list(payload.pages),
              # The agent prompt names the cursor block / attached chips so
              # "this block" resolves without a read_block round-trip.
              "focus_block_id": (payload.focus_block_id or "").strip()[:64],
@@ -1192,6 +1302,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                          payload.read_char_limit) or None) if valid_scope else None
     # The conversation the agent loop grows across tool rounds (agent mode).
     state = {}
+    count_usage = ai_usage.recorder("chat", entry, rt)
 
     def prepared(allow_native):
         pdf_b64s, context, coverage = _gather_inputs(ws, payload, allow_native)
@@ -1202,18 +1313,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
         # A custom prompt always applies; the built-in one only when there's a document
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
         if context or pdf_b64s:
-            system += (
-                "\n\nWhen citing a passage from a library PDF, provide a clickable citation "
-                "as [p. N](/?page=PAGE_ID&pdf_page=N&quote=URL_ENCODED_QUOTE). "
-                "Use the Gamma page ID supplied in context or tool results, the 1-based physical "
-                "PDF page number from [PDF page N] labels (not printed page numbers), and a "
-                "verbatim, distinctive quote of 8-2000 characters contained on that page, preferably one sentence. "
-                "Percent-encode the quote, including spaces, ampersands and parentheses. "
-                "These links only navigate and visually highlight text; they never create notes. "
-                "Never invent quotes, IDs or page numbers. If the location is unknown, read the "
-                "page first when tools are available, otherwise use an ordinary page link. "
-                "Do not use these links for external or uploaded files without a Gamma page ID."
-            )
+            system += _CITATION_PROMPT
         if tools:
             system = ((system + "\n\n" if system else "")
                       + agent_system(scope, payload.permissions,
@@ -1244,9 +1344,10 @@ def ai_chat(payload: AIChatRequest, request: Request):
 
     def agent_events(first_resp):
         """Organizer tool loop: yield ("delta", text) / ("action", dict) /
-        ("progress", dict) events. Each round streams one provider turn; tool
-        calls are executed here and their results appended before the next
-        round re-opens the provider. A "progress" event previews a note
+        ("progress", dict) / ("usage", dict) events. Each round streams one
+        provider turn (its token counts are one "usage" event; the client
+        sums them per reply); tool calls are executed here and their
+        results appended before the next round re-opens the provider. A "progress" event previews a note
         edit while the model is still writing it: the block being edited (or
         the parent/sibling of the block being created) plus the markdown
         streamed so far — the notes panel types it into the block live."""
@@ -1285,6 +1386,10 @@ def ai_chat(payload: AIChatRequest, request: Request):
                             mode = str(args.get("mode") or "replace").lower()
                             if mode in ("append", "prepend"):
                                 progress["mode"] = mode
+                            elif mode == "patch" and isinstance(args.get("find"), str):
+                                # patch: the preview swaps the passage in place.
+                                progress["mode"] = mode
+                                progress["find"] = args["find"]
                         else:
                             progress["parent_id"] = target
                             if args.get("after_id"):
@@ -1292,6 +1397,9 @@ def ai_chat(payload: AIChatRequest, request: Request):
                         yield ("progress", progress)
                     elif kind == "tool":
                         calls.append(data)
+                    elif kind == "usage":
+                        count_usage(data)
+                        yield ("usage", data)
             finally:
                 resp.close()
             if not calls:
@@ -1308,14 +1416,17 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     action = tool_action("error", f'{name} — change limit reached',
                                          name, call["arguments"], result, error=True)
                 else:
-                    result, action = run_agent_tool(ws, scope, name, call["arguments"],
-                                                    permissions=payload.permissions, allowed_tools=armed)
+                    result, action = run_agent_tool(ws, scope, name, call["arguments"], allowed_tools=armed)
                 # Reads and failures render as chips too, but only applied
                 # mutations count against the change budget.
                 if name in MUTATING_TOOLS and not action.get("error"):
                     actions += 1
+                # A picture a tool answered with (view_pdf_page) goes to the
+                # model with its result, never into the streamed/saved chip.
+                tool_images = action.pop("images", None)
                 yield ("action", action)
-                messages.append({"role": "tool", "call_id": call["id"], "content": result})
+                messages.append({"role": "tool", "call_id": call["id"], "content": result,
+                                 **({"images": tool_images} if tool_images else {})})
             if round_no == max_rounds - 1:
                 yield ("delta", "\n\n*(stopped: tool-round limit reached — "
                                 "raise it in Settings → Assistant)*")
@@ -1345,36 +1456,50 @@ def ai_chat(payload: AIChatRequest, request: Request):
                         log.warning(f"[ai_chat] agent stream error: {e}")
                         yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
 
-                return StreamingResponse(agent_ndjson(), media_type="application/x-ndjson")
+                return StreamingResponse(keepalive_lines(agent_ndjson(), "ai_chat"),
+                                         media_type="application/x-ndjson")
 
             def ndjson():
+                usage = []
                 try:
                     if head:
                         yield head
-                    for text in _sse_deltas(resp, _protocol(rt, entry)):
+                    for text in _sse_deltas(resp, _protocol(rt, entry), usage.append):
                         yield json.dumps({"delta": text}) + "\n"
+                    # The provider's token report closes the stream.
+                    for u in usage:
+                        count_usage(u)
+                        yield json.dumps({"usage": u}) + "\n"
                 except Exception as e:
                     log.warning(f"[ai_chat] stream error: {e}")
                     yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
                 finally:
                     resp.close()
 
-            return StreamingResponse(ndjson(), media_type="application/x-ndjson")
+            return StreamingResponse(keepalive_lines(ndjson(), "ai_chat"),
+                                     media_type="application/x-ndjson")
         if tools:
             # The tool loop is SSE-based on every protocol; join it for
             # non-stream callers and return the actions alongside the text.
-            parts, actions = [], []
+            parts, actions, usage = [], [], None
             for kind, data in agent_events(open_with_fallback(True)):
                 if kind == "delta":
                     parts.append(data)
                 elif kind == "action":
                     actions.append(data)
+                elif kind == "usage":
+                    usage = _add_usage(usage, data)
                 # "progress" previews only matter to a live UI
             return {"response": "".join(parts), "actions": actions,
-                    "context": state.get("coverage") or []}
+                    "context": state.get("coverage") or [],
+                    **({"usage": usage} if usage else {})}
+        usage = []
         with open_with_fallback(False) as resp2:
-            text = _read_reply(resp2, _protocol(rt, entry))
-        return {"response": text, "context": state.get("coverage") or []}
+            text = _read_reply(resp2, _protocol(rt, entry), usage.append)
+        for u in usage:
+            count_usage(u)
+        return {"response": text, "context": state.get("coverage") or [],
+                **({"usage": usage[0]} if usage else {})}
     except HTTPException:
         raise
     except Exception as e:

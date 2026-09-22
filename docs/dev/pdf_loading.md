@@ -28,8 +28,13 @@ computes it on demand for anything older, in pdfium, in FastAPI's threadpool
 joined, not repeated, so opening a book right after uploading it waits for
 the upload's own walk instead of queueing a second one behind the pdfium
 lock. Every pdfium walk goes through
-`pdf_text.page_sizes`, behind the same lock as text extraction. A file pdfium
-cannot read is stored with `pages: 0` so it is not parsed again on every open;
+`pdf_text.page_sizes`, behind the same lock as text extraction, and closes
+every page it opens explicitly, inside the lock — pypdfium2 objects sit in
+reference cycles, so a page merely dropped would be closed by the cyclic GC
+later, on another thread, outside the lock, which crashes the server
+(`pdf_text.py` has the story; its `_serialize_finalizers` is the net). A
+file pdfium cannot read is stored with `pages: 0` so it is not parsed again
+on every open;
 the endpoint sends that answer `no-store` and a real one with a day of
 `private` caching (a doc id is a content hash, its manifest never changes).
 
@@ -142,8 +147,8 @@ the pending pdf.js render and text-layer tasks; unmount zeroes the canvas.
 
 `pdf/verticalScrollSnap.js` is the always-on one-finger vertical alignment
 (`installVerticalScrollSnap`, reinstalled on zoom and document changes). It
-judges direction after 8 CSS pixels within a 30° vertical cone and never
-writes scroll offsets while a finger or native momentum is moving: after
+judges direction after 8 CSS pixels within a 30° vertical cone. It never
+writes scroll offsets while a finger or native momentum is moving. After
 `scrollend` (250 ms of quiet after lift on browsers without it) it corrects
 horizontal drift once, instantly under reduced motion. A diagonal start, a
 deliberate sideways turn, a second contact, a cancelled gesture, keyboard or

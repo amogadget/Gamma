@@ -37,12 +37,12 @@ export const TRANSLATE_LANGS = [
 // Agent per-tool permissions (Settings → Assistant → Tool configuration),
 // one map per chat KIND: "folder" (the home/folder chat), "pdf" (a page with
 // a PDF attached) and "notes" (a page without one). The chat picks its
-// kind's map (chatDock.jsx) and sends it as the request's `permissions`.
+// kind's map (chat/ChatDock.jsx) and sends it as the request's `permissions`.
 // Missing keys mean allowed, so new tools default on for existing users;
 // a pre-kind flat map ({list, read, …}) is applied to every kind.
 export const CHAT_KINDS = ["folder", "pdf", "notes"];
 const TOOL_PERMS_DEFAULT = {
-  list: true, read: true, block_read: true, search: true,
+  list: true, read: true, block_read: true, view: true, search: true,
   web_search: true, web_read: true,
   rename: true, move: true, block_edit: true,
 };
@@ -77,11 +77,11 @@ const SIZE_INDEX_CODEC = {
   serialize: String,
 };
 
-export const THEMES = ["system", "light", "dark", "sepia", "solarized", "gray"];
+export const THEMES = ["system", "light", "dark", "gamma-light", "gamma-dark", "sepia", "solarized", "gray"];
 
-// Control size (Settings → General): a CSS `zoom` on every button and toggle
-// (app.css, `--ui-scale`) — the interface chrome, not the notes/chat text,
-// which Ctrl+scroll resizes in place per panel and never persists. The
+// Interface size (Settings → Appearance): text and control boxes share
+// --ui-scale in app.css. Ctrl+scroll further resizes notes/chat text in place
+// per panel and never persists. PDF zoom remains independent. The
 // index.html pre-paint script repeats the bounds — keep them in step.
 export const UI_SCALE = { min: 0.7, max: 1.6, step: 0.1, default: 1 };
 
@@ -97,7 +97,7 @@ export function useAppPrefs() {
   });
   // Flip page colors: display-only inverted (night) rendering of the PDF canvas.
   const [pdfDarkPage, setPdfDarkPage] = usePersistedFlag("gamma-pdf-dark", false);
-  // Control size: index.html applies the stored value before first paint,
+  // Interface size: index.html applies the stored value before first paint,
   // App.jsx keeps `--ui-scale` on the root in sync afterwards.
   const [uiScale, setUiScale] = usePersistedState("gamma-ui-scale", 1, {
     parse: (raw) => {
@@ -224,7 +224,7 @@ export function useAppPrefs() {
   // the user's own row of pens and highlighters (ink.js DEFAULT_TOOLS).
   const [inkTools, setInkTools] = usePersistedState("gamma-ink-tools", DEFAULT_TOOLS, INK_TOOLS_CODEC);
   // "stroke" erases whole strokes, "partial" cuts through them; the size
-  // is an S/M/L index (inkLayer.jsx ERASER_SIZES).
+  // is an S/M/L index (ink/InkLayer.jsx ERASER_SIZES).
   const [inkEraserMode, setInkEraserMode] = usePersistedState("gamma-ink-eraser", "stroke", {
     parse: (raw) => (["stroke", "partial"].includes(raw) ? raw : undefined),
   });

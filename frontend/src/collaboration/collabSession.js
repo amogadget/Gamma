@@ -1,5 +1,5 @@
 // The page's live session as a plain state machine — no React, no globals:
-// the hook in collab.js wires it to the app (fetch, WebSocket, React state)
+// the hook in collaboration/usePageCollab.js wires it to the app (fetch, WebSocket, React state)
 // and the node tests drive it with fakes. One session per tab; it
 //   - turns the block tree's transitions into ops (blockOps.diffTrees) and
 //     sends them in debounced batches to POST /api/pages/{id}/ops — the
@@ -62,8 +62,9 @@ const sameCursor = (a, b) => !!a && !!b && a.block === b.block && a.anchor === b
 //       onReload(pageId)              refetch the tree (a change ops can't express)
 //       onStatus(text)                the status line
 //   onPeers(peers), onMe(me) — presence changes (the hook's React state)
+//   onQueued()                — a local edit was queued (the clone's sync pill shows it as pending)
 //   timers                — {set(fn, ms) → id, clear(id)}; default the globals
-export function createCollabSession({ clientId, api, openSocket, keepalivePost, opts, onPeers, onMe, timers }) {
+export function createCollabSession({ clientId, api, openSocket, keepalivePost, opts, onPeers, onMe, onQueued, timers }) {
   const later = timers?.set || ((fn, ms) => globalThis.setTimeout(fn, ms));
   const cancel = timers?.clear || ((id) => globalThis.clearTimeout(id));
   const o = () => opts();
@@ -252,6 +253,7 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
     const delay = now ? 0 : structural ? STRUCTURAL_DEBOUNCE_MS : TYPING_DEBOUNCE_MS;
     if (s.timer) cancel(s.timer);
     s.timer = later(() => { s.timer = null; send(s); }, delay);
+    onQueued?.();
   }
 
   // Called by the tree's transition effect. `isLoad`: the transition was a

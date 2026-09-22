@@ -90,7 +90,16 @@ compatibility input: it resolves to the page carrying that PDF
 `page_id`, nothing new may depend on `doc_id`. `stream: true` (the chat UI's
 mode) returns NDJSON lines of
 `{"delta"}`/`{"error"}` parsed from the provider's SSE; upstream failures
-before the first byte still return normal HTTP errors. The client turns a
+before the first byte still return normal HTTP errors. Every AI NDJSON
+stream (chat, the tool loop, translation) runs through `keepalive_lines`
+(`routers/ai.py`): the source generator is pumped from a worker thread and a
+`{"ping": 1}` line goes out after 15 s of silence, so a reverse proxy's idle
+timeout (nginx and Synology default to 60 s, Cloudflare to 100 s) doesn't
+cut the response while the model thinks over a long context — before this
+the browser saw a bare "network error" mid-reply and nothing reached the
+server log. Clients skip `ping`. A consumer that leaves before the source
+ends (Stop, or the connection dropped anyway) stops the source at its next
+yield and logs a warning with the elapsed time. The client turns a
 failure with no reply text into an AI message carrying `error: true` — shown
 as an error bubble, saved with the chat so it survives a reload, but left out
 of the `history` it sends on later turns, and `build_messages` skips such
@@ -109,10 +118,10 @@ pages". The built-in chat system prompt frames the model as working inside
 that knowledge base and grounds claims about the pages in text actually read
 (look details up or say they're absent, never fill gaps from memory; cite a
 PDF by page number, say when something comes from the user's notes). With a
-document in context, custom prompt or not, the citation instruction is
-appended: link a passage as `[p. N](/?page=<id>&pdf_page=N&quote=…)` using
-the `[PDF page N]` labels and the `Gamma page ID` each context section
-carries ([pdf_citations.md](pdf_citations.md)).
+document in context, `_CITATION_PROMPT` is appended, custom prompt or not.
+It asks for `[p. N](/?page=<id>&pdf_page=N&quote=…)` links built from the
+`[PDF page N]` labels and the `Gamma page ID` each context section carries
+([pdf_citations.md](pdf_citations.md)).
 
 Whatever went to the model is reported back: the stream's first line is
 `{"context": [...]}` (non-stream: a `context` field) with one entry per
@@ -145,9 +154,8 @@ their page numbers; unlocatable selections fall back to the plain head excerpt.
 
 `chat/PaperMentionInput.jsx` owns the picker. `chat/paperMentions.js` owns mention text edits
 and `MAX_CHAT_REFERENCES`, shared with `chat/ChatDock.jsx`. The six-reference UI limit
-mirrors the API's seven-page limit, leaving one slot for the current page.
-Attached papers and message references use the shared flat `crumbBtn` control,
-`linkChipText` for long titles, and `uiClose` to remove context.
+mirrors the API's seven-page limit (`pages`, de-duplicated server-side),
+leaving one slot for the current page.
 
 Type `@` in the chat composer to search library titles with the same ranking,
 typo tolerance, and separator matching as library search (`library/librarySearch.js`).
@@ -155,8 +163,7 @@ Arrow keys choose a result; Enter or Tab attaches it, Escape dismisses the
 query, and clicking or tapping a result also works. Results include author,
 year, venue, and folder details. A completed mention inserts the title and
 adds a removable context chip; the chip controls which page IDs are sent.
-The `+` menu offers the same library search. Up to six references can be
-attached, plus the open page, with duplicates removed.
+The `+` menu offers the same library search.
 
 References persist for follow-up questions and are saved as `contextPages`
 on each user message. Loading a conversation restores its last references;
@@ -253,7 +260,7 @@ Search, Rename, Move, Edit — folder scope offers all, page scope the reading
 tools and the note-block editors); clicking a chip allows or forbids that
 tool for every chat of the kind. The stored map is localStorage JSON
 `gamma-ai-agent-perms` = `{folder, pdf, notes}` → `{list, read, block_read,
-search, rename, move, block_edit}` (a pre-kind flat map is applied to every
+view, search, web_search, web_read, rename, move, block_edit}` (a pre-kind flat map is applied to every
 kind on read). The chat header's ⚙ popover carries the same picker for the
 kind of the chat it is opened in (`AgentToolPicker` in `settings/SettingsDialog.jsx`,
 bound to the same map), so a change in either place is the same change.
@@ -262,13 +269,14 @@ else `pageAttach` → pdf; else notes) and sends that kind's map as the
 request's `permissions`.
 
 One permission per capability: List pages, Read pages, Read note blocks,
-Search library (`search_library` — notes and PDF text; the stored key is
+View PDF pages (`view` → `view_pdf_page`, a rendered page picture for a
+scan or a figure), Search library (`search_library` — notes and PDF text; the stored key is
 still `search`), Search papers online (`web_search` → `search_papers`), Fetch
 documents (`web_read` → `fetch_paper`; both web tools are read-only and
 described in [ai_tools.md](ai_tools.md)), Rename pages, Move pages, and Edit
 note blocks (one chip arming `edit_block`/`create_block`/`move_block`
 together). The "Read & search" preset (`chat/chatSettings.js` `READ_TOOLS`)
-includes the two web tools. Plus:
+includes the two web tools and the page viewer. Plus:
 
 - **Tool rounds** (`gamma-ai-tool-rounds` → request `tool_rounds`, default 32,
   user-tunable 1–100) — provider round-trips one message may use.
@@ -289,7 +297,7 @@ the server executes them → results go back → repeat until it answers.
 
 Every tool call streams back as an
 `{"action": {kind, summary, tool, args, result}}` NDJSON line (kinds
-list/read/search/rename/move/edit/create, plus `error` with `error: true` for
+list/read/view/search/rename/move/edit/create, plus `error` with `error: true` for
 failed/blocked calls) that the chat renders as a chip and saves in the message
 — clicking a chip expands the arguments and the (truncated, `_DETAIL_CAP`)
 output the model got; only applied mutations count against
@@ -297,7 +305,10 @@ output the model got; only applied mutations count against
 the note-block tools' actions carry `page_id`/`src_page_id` so the frontend
 reloads the open page's block tree when the AI touched it (`onNotesChange`;
 with the page's live socket up the tools' ops already arrived through it and
-the reload is skipped — [collab.md](collab.md)).
+the reload is skipped — [collab.md](collab.md)). A `view_pdf_page` result
+also carries the rendered page: the loop lifts it off the action into the
+tool message's `images` before yielding the chip, so the model sees the
+picture and the saved chat never holds it ([ai_tools.md](ai_tools.md)).
 
 ### Watching the agent work (live footprint)
 
@@ -315,7 +326,7 @@ notes panel shows where the agent is, not just what it did.
   edit reloads the tree immediately (same guards as `onNotesChange`, plus
   never while the user has a block editor open), so the change is visible
   while the agent carries on.
-- `{"progress": {tool, id, block_id (+ mode) | parent_id (+ after_id), content}}`
+- `{"progress": {tool, id, block_id (+ mode, + find for patch) | parent_id (+ after_id), content}}`
   lines preview an `edit_block`/`create_block` call the model is still
   writing. `ai_client.sse_events` yields `tool_delta` events with the raw
   argument JSON so far, on all three wires (Anthropic `input_json_delta`,
@@ -429,6 +440,57 @@ deliberately nothing on disk; it makes halts/retries/re-shows free until a
 restart. Duplicate paragraphs within a request go upstream once. Caps: 200
 texts / 60k chars per request.
 
+## Token usage
+
+Every AI call's token counts come back from the provider itself and are
+kept per account, so the chat can show what a reply cost and Settings can
+show what a week cost. Code: `gamma/ai_usage.py`, `ai_client.normalize_usage`,
+`frontend/src/chat/tokenUsage.js`.
+
+- **On the wire.** `sse_events` ends every stream with a `("usage", {input,
+  output, cache_read, cache_write})` event when the provider reported one:
+  Anthropic's `message_start` (input, cache read/write) + the final
+  `message_delta` (output); the Responses wire's `response.completed`;
+  Chat Completions' trailing usage chunk, which the request asks for with
+  `stream_options.include_usage` (OpenAI, vLLM, Ollama, llama.cpp, LiteLLM
+  all honour it). Non-stream JSON bodies carry `usage` and `read_reply` /
+  `call_ai` pass it to an `on_usage` callback. `input` is the whole prompt as
+  the provider counted it (Anthropic's uncached + cache-read + cache-write
+  parts summed, the way OpenAI's `prompt_tokens` already includes
+  `cached_tokens`); `cache_read` / `cache_write` are the cached parts of it.
+  A provider that reports nothing (some gateways) yields no event, and
+  nothing else changes.
+- **In the chat stream.** `/api/ai/chat` emits `{"usage": …}` lines — one per
+  provider turn, so an agent reply with three tool rounds sends three; the
+  client sums them onto the reply (`usage` on the saved message, like
+  `context` and `actions`). Non-stream callers get one summed `usage` field.
+  The panel shows a dim line under each reply (↑ input, ↓ output, "N%
+  cached" when the provider served part of the prompt from its cache) and
+  the conversation total in the chat-settings popover and the button's
+  tooltip. While a reply streams the same line ticks up inside the
+  "Thinking / Responding" pill, Claude Code style: exact counts for the
+  rounds already reported plus a `~` estimate for the one still arriving
+  (`estimateTokens`: characters received / 4, text deltas and previewed
+  tool arguments alike; reset when that round's report lands). Replies
+  saved before this carry no counts and show nothing.
+- **Stored.** `ai_usage.record` writes one row per call to `ai_usage` in
+  `users.db` (account, time, kind, provider id + name, model, the four
+  counts); `ai_usage.recorder(kind, entry, rt)` is the `on_usage` callback the
+  call sites bind (`rt["user"]` names the account). Kinds: `chat` (every
+  chat turn, agent rounds included), `translate` (each batch), `metadata`
+  (AI extraction), `cite` (the slide citation), `test` (the Test button and
+  the login test). Dictation has no token report. Rows older than
+  `KEEP_DAYS` (400) go on the next write. Recording never raises.
+- **Shown.** `GET /api/ai/usage` → `{windows: {today, week, month, all} →
+  {calls, input, output, cache_read, cache_write}, kinds: {kind → the same}
+  and models: [{provider_id, provider_name, model, …}] over the last 30
+  days, first_at, keep_days}`; `DELETE /api/ai/usage` forgets the account's
+  rows. Settings → AI › Connections → **Token usage** renders three
+  tiles (today / 7 days / 30 days), the all-time line with Reset, and a
+  by-model table (plus a by-kind block when more than one kind ran).
+  Guests never see it (no providers). No prices anywhere: they differ per
+  provider and change; the tokens are what every provider agrees on.
+
 ## Chat history buckets
 
 Focused page id in the paper view, `home` at the library root,
@@ -440,6 +502,18 @@ keys, and folder rename/move/delete calls `POST /api/chats/folder-rename`
 bucket exists when ChatDock reloads (a destination holding a real conversation
 wins; empty save-echo rows are overwritten) — folder conversations follow
 renames and moves, and are deleted with their folder.
+
+Replies stream per bucket, independently: `chat/chatSession.js` (owned by
+App, so navigation can unmount the dock while a request runs) keeps one
+in-flight reply per bucket — `active` is the set of streaming buckets, each
+with its own `AbortController`. Asking one paper, opening another and asking
+it too runs both requests at once; the composer, the Stop button and the
+edit/re-send controls are disabled only while THIS bucket's reply streams
+(`busyHere` in `ChatDock`), and Stop aborts only that one. A bucket refuses
+a second question until its reply ends. The stream's `done` agent event
+carries the bucket so a background reply finishing does not clear the open
+page's live edit preview (`handleAgentEvent`). Covered by
+`tests/chatSession.test.mjs` and the e2e `chat navigation` steps.
 
 ### Chat history
 

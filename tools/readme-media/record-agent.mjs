@@ -1,19 +1,10 @@
-// Records the agent source for demo-annotate-and-ask.webp: ask the chat to organize
-// the library into folders, tool chips stream, folders appear in the list.
-import { chromium, configureContext } from './runtime.mjs';
+// Historical README source: ask the chat to organize the library into folders,
+// tool chips stream, folders appear in the list. render-suite.py keeps its
+// render as a scratch preview.
+import { chromium, configureContext, addCursor, readSession, BASE } from './runtime.mjs';
 import fs from 'fs';
 
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
-const SESSION = fs.readFileSync('session.txt', 'utf8').trim();
-const CURSOR = () => addEventListener('DOMContentLoaded', () => {
-  const c = document.createElement('div');
-  c.style.cssText = 'position:fixed;z-index:99999;width:14px;height:14px;'
-    + 'border-radius:50%;background:rgba(0,0,0,.45);border:2px solid #fff;'
-    + 'pointer-events:none;margin:-8px 0 0 -8px;transition:transform .05s';
-  document.body.appendChild(c);
-  addEventListener('mousemove', e => c.style.transform =
-    `translate(${e.clientX}px,${e.clientY}px)`, true);
-});
+const SESSION = readSession();
 
 const browser = await chromium.launch({ slowMo: 0 });
 const context = await browser.newContext({
@@ -24,8 +15,8 @@ const context = await browser.newContext({
 });
 await configureContext(context);
 await context.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
+await addCursor(context);
 const page = await context.newPage();
-await page.addInitScript(CURSOR);
 const tPage = Date.now();
 await page.goto(BASE + '/');
 await page.click('[aria-label="Home"]');
@@ -57,11 +48,8 @@ for (let i = 0; i < 240 && stable < 4; i++) {
 }
 await page.waitForTimeout(1500);
 // glide over the library so the new folders get a moment of attention
-const folder = page.locator('.homeList, main').first();
-try {
-  const fb = await page.locator('text=New folder').first().boundingBox();
-  if (fb) await page.mouse.move(fb.x + 40, fb.y + 120, { steps: 40 });
-} catch {}
+const fb = await page.locator('text=New folder').first().boundingBox().catch(() => null);
+if (fb) await page.mouse.move(fb.x + 40, fb.y + 120, { steps: 40 });
 await page.waitForTimeout(2500);
 const mEnd = (Date.now() - tPage) / 1000;
 

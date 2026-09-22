@@ -21,7 +21,7 @@ class PackageTest(unittest.TestCase):
                 self.assertIn("gamma-marketplace/plugins/gamma/.codex-plugin/plugin.json", names)
                 self.assertFalse(any(n.endswith((".env", ".mcp.json", "config.toml")) for n in names))
                 self.assertIn("gamma-marketplace/plugins/gamma/skills/gamma/assets/icon.png", names)
-                self.assertEqual(len(names), 9)
+                self.assertEqual(len(names), 11)
 
     def test_existing_output_and_invalid_repo_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

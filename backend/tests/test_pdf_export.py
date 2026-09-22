@@ -64,6 +64,57 @@ def test_annotate_roundtrips_through_import_extractor():
     assert a["color"] == "rgba(170, 235, 170, 0.65)"
 
 
+def _pdf_with_dangling_reference():
+    """A readable page with a missing optional object, as in real arXiv PDFs."""
+    from PyPDF2 import PdfWriter
+    from PyPDF2.generic import DictionaryObject, NameObject, NullObject
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=PAGE_W, height=PAGE_H)
+    page = writer.pages[0]
+    missing = writer._add_object(NullObject())
+    page[NameObject("/PieceInfo")] = DictionaryObject({
+        NameObject("/Missing"): missing,
+    })
+    writer.add_annotation(0, {
+        "/Type": "/Annot", "/Subtype": "/Link", "/Rect": [10, 10, 30, 30],
+        "/A": {"/S": "/URI", "/URI": "https://example.com"},
+    })
+    writer.add_outline_item("Original bookmark", 0)
+    buf = io.BytesIO()
+    writer.write(buf)
+    # Leave the xref valid but point this optional entry at an undefined id.
+    old = f"/Missing {missing.idnum} 0 R".encode()
+    return buf.getvalue().replace(old, b"/Missing 0 0 R")
+
+
+def test_annotate_preserves_document_with_dangling_reference():
+    from PyPDF2 import PdfReader
+    from PyPDF2.generic import NullObject
+
+    source = _pdf_with_dangling_reference()
+    # Ensure the fixture really exercises the unresolved-reference path.
+    assert PdfReader(io.BytesIO(source)).pages[0]["/PieceInfo"]["/Missing"] is None
+    out, written = annotate_pdf(source, [{"position": _position(), "note": "kept note"}])
+    reader = PdfReader(io.BytesIO(out))
+    assert written == 1 and len(reader.pages) == 1
+    assert isinstance(reader.pages[0]["/PieceInfo"]["/Missing"], NullObject)
+    annots = [a.get_object() for a in reader.pages[0]["/Annots"]]
+    assert annots[0]["/A"]["/URI"] == "https://example.com"
+    assert annots[1]["/Contents"] == "kept note"
+    assert reader.outline[0]["/Title"] == "Original bookmark"
+
+
+def test_render_notes_with_dangling_reference():
+    from gamma.pdf_notes import render_notes
+
+    out, drawn = render_notes(_pdf_with_dangling_reference(), [
+        {"position": _position(), "note": "Visible note"},
+    ])
+    assert drawn == 1
+    assert "Visible note" in _page_text(out)
+
+
 def test_annotate_multiline_and_skips_unusable():
     from PyPDF2 import PdfReader
 
@@ -158,7 +209,7 @@ def test_parse_css_color():
 def test_export_pdf_endpoint(guest):
     from PyPDF2 import PdfReader
 
-    up = guest.post("/api/uploads", files={"file": ("p.pdf", _blank_pdf(), "application/pdf")})
+    up = guest.post("/api/uploads", files={"file": ("p.pdf", _pdf_with_dangling_reference(), "application/pdf")})
     assert up.status_code == 200, up.text
     page = make_page(guest, "Annotated paper",
                      properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]})
@@ -183,7 +234,8 @@ def test_export_pdf_endpoint(guest):
     assert "annotated.pdf" in r.headers["content-disposition"]
     assert r.headers["x-annotations-written"] == "1"  # link region excluded
 
-    obj = PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"][0].get_object()
+    obj = next(a.get_object() for a in PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"]
+               if a.get_object()["/Subtype"] == "/Highlight")
     assert str(obj["/Subtype"]) == "/Highlight"
     assert str(obj["/Contents"]) == "top comment\n- nested note"
     assert str(obj["/T"]) == "guest"

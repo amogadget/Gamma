@@ -102,6 +102,9 @@ export const ArrowLeftIcon = (p) => (
 export const ArrowUpIcon = (p) => (
   <Icon {...p}><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></Icon>
 );
+export const ArrowDownIcon = (p) => (
+  <Icon {...p}><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></Icon>
+);
 export const ArrowUpDownIcon = (p) => (
   <Icon {...p}><path d="m21 16-4 4-4-4" /><path d="M17 20V4" /><path d="m3 8 4-4 4 4" /><path d="M7 4v16" /></Icon>
 );
@@ -112,6 +115,9 @@ export const PlusIcon = (p) => (
 // Status & tasks.
 export const InfoIcon = (p) => (
   <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></Icon>
+);
+export const HelpCircleIcon = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4" /><path d="M12 17h.01" /></Icon>
 );
 export const AlertCircleIcon = (p) => (
   <Icon {...p}><path d="M12 8v5" /><path d="M12 16.5h.01" /><circle cx="12" cy="12" r="9" /></Icon>
@@ -245,6 +251,9 @@ export const RefreshIcon = (p) => (
 export const HistoryIcon = (p) => (
   <Icon {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l3 2" /></Icon>
 );
+export const CodeIcon = (p) => (
+  <Icon {...p}><path d="m16 18 6-6-6-6" /><path d="m8 6-6 6 6 6" /></Icon>
+);
 export const TerminalIcon = (p) => (
   <Icon {...p}><path d="m4 17 6-6-6-6" /><path d="M12 19h8" /></Icon>
 );
@@ -324,6 +333,9 @@ export const UndoIcon = (p) => (
 export const RedoIcon = (p) => (
   <Icon {...p}><path d="m15 4 5 5-5 5" /><path d="M20 9H10a6 6 0 0 0 0 12" /></Icon>
 );
+export const ResizeIcon = (p) => (
+  <Icon {...p}><path d="M7 17 17 7M7 11v6h6M11 7h6v6" /></Icon>
+);
 export const PaletteIcon = (p) => (
   <Icon {...p}><path d="M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.8 1.8 0 0 1 1.4-3H18a3 3 0 0 0 3-3A9 9 0 0 0 12 3Z" /><circle cx="7.5" cy="10" r=".6" /><circle cx="11" cy="6.5" r=".6" /><circle cx="16" cy="8" r=".6" /><circle cx="7.5" cy="15" r=".6" /></Icon>
 );
@@ -392,3 +404,24 @@ export function FileGlyph({ isPdf }) {
     </svg>
   );
 }
+export const ChevronLeftIcon = (p) => (
+  <Icon {...p}><path d="m15 18-6-6 6-6" /></Icon>
+);
+// The offline copy's sync surfaces (collaboration/MirrorPopover.jsx,
+// MergeResolver.jsx): a merge, a detached link, a cadence, a "more" menu.
+export const MergeIcon = (p) => (
+  <Icon {...p}><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 21V9a9 9 0 0 0 9 9" /></Icon>
+);
+export const UnlinkIcon = (p) => (
+  <Icon {...p}>
+    <path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71" />
+    <path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71" />
+    <path d="M8 2v3" /><path d="M2 8h3" /><path d="M16 19v3" /><path d="M19 16h3" />
+  </Icon>
+);
+export const ClockIcon = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></Icon>
+);
+export const MoreIcon = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></Icon>
+);

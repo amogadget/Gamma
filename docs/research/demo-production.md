@@ -16,17 +16,13 @@ repository used a particular editor. A finished GIF rarely identifies the tool
 that made it; vendor customer logos do not establish how those teams made their
 GitHub README assets.
 
-## What limited the old Gamma recordings
+## What made the earlier GIFs look jerky
 
-The repository itself supplies the comparison: the skill's general recipe used
-12 fps, and the reference-links/connector recipes used 10/11 fps. Several sped up
-the whole recording by 1.35–1.7×. Cursor scripts split moves into many Playwright
-steps but did not explicitly pace those steps in time. Some camera ramps were
-linear. Machine-specific browser and ffmpeg paths also made iteration awkward.
-
-Our inference: a modern-looking demo needs readable composition, consistent
-motion, and a concise story before it needs more decoration. Enlarging a low-rate
-GIF or converting it to 60 fps cannot recover missing interaction frames.
+Low frame rates (10 to 12 fps), blanket 1.35 to 1.7× speed-ups of the whole
+recording, and pointer moves split into Playwright steps without a time budget.
+A modern-looking demo needs readable composition, consistent motion and a
+concise story before decoration. Enlarging a low-rate GIF or converting it to
+60 fps cannot recover missing interaction frames.
 
 ## Chosen direction and measured result
 
@@ -38,27 +34,45 @@ after the recorded segment. Do not mock the ink layer or paint a simulated app.
 
 Deliver a single animated WebP per README slot. [Playwright's video documentation](https://playwright.dev/docs/videos)
 explains that video dimensions must be configured explicitly and files finalize
-when the context closes. Record at a matching 1440 x 900 viewport/video size, then
-export at 25 fps and normally 1120 pixels wide (1040 for the combined hero and reference-link clips). The WebP encoder coalesces identical frames
-without shortening holds. No frame interpolation is claimed.
+when the context closes. The WebP encoder coalesces identical frames without
+shortening holds; no frame interpolation is used.
 
 [Google's WebP documentation](https://developers.google.com/speed/webp/faq)
 documents animation support in modern Chrome, Edge, Firefox and Safari, and the
-format's lossy/lossless choices. The ink export uses lossy quality 85: the shortened
-9.6-second ink clip is **1.13 MiB**, versus **3.33 MiB** for its GIF and **3.53 MiB**
-for lossless WebP at the same dimensions. These are measurements of this clip,
-not general compression ratios. Encoded frames are checked in Chromium for text
-legibility and animation integrity. A fixed camera keeps the toolbar, paper and
-note preview in frame without adding motion to every text pixel.
+format's lossy/lossless choices. Measured on one 9.6-second ink clip at the same
+dimensions (2026-09): lossy WebP at quality 85 **1.13 MiB**, GIF **3.33 MiB**,
+lossless WebP **3.53 MiB**. A fixed camera keeps the toolbar, paper and note
+preview in frame without adding motion to every text pixel.
 
-The user requested image-only delivery, so MP4 and superseded GIF copies are
-removed. All seven older cases were recorded again because their original raw
-videos were unavailable. Keep the recordings and intermediate frames in ignored
-scratch storage, and publish only the small images. The paper Q&A and agent
-sequences now share one 28.8-second, 2.18 MiB hero, replacing two clips totaling
-43.3 seconds and 5.23 MiB. The edit removes model waits and cuts from the paper
-to Home for the separate library-wide request. The current inventory and
-sizes live in [the asset directory](../assets/demos/README.md).
+The delivery rules, the recipe per slot and the published inventory live in
+[tools/readme-media/README.md](../../tools/readme-media/README.md) and
+[the asset directory](../assets/demos/README.md).
 
-The implementation and repeatable commands live in
-[tools/readme-media/README.md](../../tools/readme-media/README.md).
+## Abstract SVG scenes next to the recordings (2026-09)
+
+Tried: the same three interactions (annotate + ink, notes with live math,
+library search) as animated SVG illustrations in the branding style
+(`tools/branding/build-demos.py`), to see whether "showing the idea" can
+stand in for a recording.
+
+What works: a scene is ~10 KB against 1–5 MiB per WebP, renders crisp at
+any size, needs no server, no demo workspace and no re-recording when the
+UI's pixels change — only when the interaction itself changes. SMIL keeps
+it a plain `<img>` (GitHub strips scripts and ignores CSS animation inside
+an embedded SVG; SMIL plays). Typing is one `<tspan>` per character switched
+on in turn (`branding.typewriter()`, a wipe looked like a curtain, not a
+keyboard); drawing is `stroke-dashoffset`; a cursor is an `animateTransform`.
+
+What it cannot do: prove the feature exists. A recording shows the real
+toolbar, the real latency, the real result; the abstraction shows a claim.
+It also cannot show density — a real notes panel is busier than the scene.
+Rules from the attempt: every `keyTimes` must end at 1 (a list ending early
+silently disables that animation); glyph widths are unknowable (the viewer's
+system font draws the text), so the caret hops along estimated advances and
+`textLength` squeezes the line to the same estimate; and the less a scene
+shows, the better it reads — the annotate scene ended up as one highlighted
+line, one note and one stroke.
+
+Decision: keep the recordings in the README, where a visitor decides
+whether the product is real, and use the abstract scenes, light only, in
+the user guide, where the reader already has the app and wants the idea.

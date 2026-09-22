@@ -1,10 +1,26 @@
-"""Small animated WebP delivery, shared by the README renderers."""
+"""Lossless assembly and small animated WebP delivery, shared by the README renderers."""
 import os
 from pathlib import Path
 import subprocess
 import time
 
 from imageio_ffmpeg import get_ffmpeg_exe
+
+ROOT = Path(__file__).resolve().parents[2]
+# Match the illustrations: warm paper, a fine card edge, and a 16:9 canvas.
+# Captures stay at 1440 px wide; detail crops are centered without stretching.
+FRAME = ('pad=iw+4:ih+4:2:2:color=0xe3e0d8,'
+         'pad=1728:972:(ow-iw)/2:(oh-ih)/2:color=0xf6f4ef')
+
+
+def concat_segments(master, sources, parts, tail):
+    """Write a lossless master: each entry of `parts` is one segment's filter chain
+    (`[i:v]trim=…`), concatenated in order and finished with the `tail` filters."""
+    graph = ';'.join(f'{part}[s{i}]' for i, part in enumerate(parts)) + ';'
+    graph += ''.join(f'[s{i}]' for i in range(len(parts))) + f'concat=n={len(parts)}:v=1:a=0,{tail}[v]'
+    inputs = [arg for source in sources for arg in ('-i', str(source))]
+    subprocess.run([get_ffmpeg_exe(), '-v', 'error', '-y', *inputs, '-filter_complex', graph,
+                    '-map', '[v]', '-an', '-c:v', 'ffv1', '-level', '3', str(master)], check=True)
 
 
 def encode_webp(source, target, filters='fps=25,scale=1120:-2:flags=lanczos', quality=85, effort=6):

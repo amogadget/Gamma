@@ -45,12 +45,12 @@ export function Section({ title, action, children }) {
 
 // Keep the row compact: icon, label, short hint, and a shared control.
 // Longer explanations use the native hover tooltip.
-export function Row({ icon: Icon, label, hint, title, scope, children }) {
+export function Row({ icon: Icon, label, hint, title, children }) {
   return (
     <div className="settingRow setRow" data-setting={label} title={title}>
       <span className="setIcon">{Icon ? <Icon size={15} /> : null}</span>
       <div className="settingText">
-        <span className="settingLabel">{label}{scope ? <small className="setScope">{scope}</small> : null}</span>
+        <span className="settingLabel">{label}</span>
         {hint ? <span className="settingDesc">{hint}</span> : null}
       </div>
       {children}
@@ -107,6 +107,20 @@ export function PictureChoices({ label, value, onChange, onConfirm, options, col
         </span>
       </button>
     ))}
+  </div>;
+}
+
+// Picture choices whose picture is an icon tile: stacked glyph / name / hint,
+// three or four to a row — an audience, an input mode, any small exclusive
+// set that reads faster as tiles than as a dropdown. `options` are
+// [{value, label, hint, Icon}].
+export function IconChoices({ label, value, onChange, options, columns }) {
+  return <div className="setIconTiles">
+    <PictureChoices label={label} value={value} onChange={onChange} columns={columns || options.length}
+      options={options.map(({ value: id, label: name, hint, Icon }) => ({
+        value: id, label: name, hint,
+        preview: <span className="setTileIcon" aria-hidden="true"><Icon size={18} /></span>,
+      }))} />
   </div>;
 }
 
@@ -168,7 +182,7 @@ export function SubDialog({ title, onClose, children, draft, className = "", clo
           }
           if (event.key === "Tab") {
             event.stopPropagation();
-            const targets = [...ref.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary')]
+            const targets = [...ref.current.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary')]
               .filter((el) => el.getClientRects().length && !el.closest("[inert]"));
             const first = targets[0], last = targets.at(-1);
             if (event.shiftKey && (document.activeElement === first || !targets.includes(document.activeElement))) { event.preventDefault(); last?.focus(); }
@@ -250,13 +264,20 @@ export function PasswordInput({ className = "aiKeyInput", ...props }) {
 // values: typing "25" into a 1–32 field must not snap at "2").
 export function UnitInput({ value, onChange, onCommit, unit, placeholder, min, onEnter }) {
   const [draft, setDraft] = React.useState(null); // non-null only while editing deferred
+  // The draft stays on screen until the commit settles (an async save), then
+  // the stored value shows — the parent never needs a `key` remount to reset
+  // the box, which would drop a value typed while the save was landing.
+  const commit = async () => {
+    if (draft == null) return;
+    try { await onCommit(draft); } finally { setDraft(null); }
+  };
   return (
     <span className="unitInput">
       <input
         className="aiKeyInput" type="number" min={min}
         placeholder={placeholder} value={onCommit ? (draft ?? String(value ?? "")) : value}
         onChange={(event) => (onCommit ? setDraft(event.target.value) : onChange(event.target.value))}
-        onBlur={onCommit ? () => { if (draft != null) { onCommit(draft); setDraft(null); } } : undefined}
+        onBlur={onCommit ? commit : undefined}
         onKeyDown={(event) => {
           if (event.key !== "Enter") return;
           if (onCommit) event.currentTarget.blur(); // commit via onBlur
@@ -350,25 +371,43 @@ export function Stat({ icon: Icon, label, value, total, title }) {
   );
 }
 
+// A text-valued tile beside Stat's numeric ones: a version, an uptime, a
+// pair of counts. `tone` "warn" / "error" colours the frame.
+export function StatText({ icon: Icon, label, value, hint, tone = "", title }) {
+  return (
+    <div className={`setStat setStatText ${tone}`} title={title}>
+      <span className="setStatTop"><span className="setStatNum">{value}</span></span>
+      <span className="setStatLabel"><Icon size={12} />{label}</span>
+      {hint ? <span className="setStatHint">{hint}</span> : null}
+    </div>
+  );
+}
+
 // Newest-first log list with a Copy button — one rendering for the session
 // log (Advanced) and the admin server log (Server). Entries are normalized
-// to {key, timeMs, text}.
-export function LogBox({ icon, label, description, entries, emptyText, copyStatus, setStatus }) {
+// to {key, timeMs, text, tone?} — tone "warn" / "error" adds a badge.
+// `extra` sits before the Copy button (a level filter).
+export function LogBox({ icon, label, description, entries, emptyText, copyStatus, setStatus, extra }) {
+  const prefix = (entry) => (entry.tone ? `[${entry.tone === "error" ? "ERROR" : "WARNING"}] ` : "");
   function copy() {
     const text = entries
-      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${entry.text}`)
+      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${prefix(entry)}${entry.text}`)
       .join("\n");
     copyText(text).then((ok) => setStatus(ok ? copyStatus : "Copy failed—copy manually."));
   }
   return (
     <>
       <Row icon={icon} label={label} hint={description}>
-        <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
+        <span className="setRowControls">
+          {extra}
+          <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
+        </span>
       </Row>
       <div className="sysLogBox">
         {entries.length ? [...entries].reverse().map((entry) => (
           <div key={entry.key} className="sysLogRow">
             <span className="sysLogTime">{new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })}</span>
+            {entry.tone ? <span className={`sysLogLevel ${entry.tone}`}>{entry.tone === "error" ? "ERR" : "WARN"}</span> : null}
             <span className="sysLogMsg">{entry.text}</span>
           </div>
         )) : <div className="sysLogEmpty">{emptyText}</div>}

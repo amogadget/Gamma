@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-gamma_server=${1:?Pass the Gamma MCP URL from External assistants.}
+gamma_server=${1:?Pass the Gamma MCP URL from Integrations.}
 for gamma_tool in codex curl unzip; do
     command -v "$gamma_tool" >/dev/null 2>&1 || { printf 'Install %s first. Codex CLI: https://learn.chatgpt.com/docs/cli\n' "$gamma_tool" >&2; exit 1; }
 done

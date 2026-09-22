@@ -351,6 +351,91 @@ def _v7_mcp_oauth(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v8_ai_usage(conn: sqlite3.Connection) -> None:
+    """Adds the ``ai_usage`` table (+ index) in users.db: per-account token counts of AI calls."""
+    for stmt in USERS_SCHEMA:
+        if "ai_usage" in stmt:
+            conn.execute(stmt)
+    conn.commit()
+
+
+def _v9_upload_path_titles(conn: sqlite3.Connection) -> None:
+    """Runs the content normalizers over every workspace's pages.db once
+    more: the ``upload_path_titles`` step (a directory path that leaked into
+    ``original_filename`` and the generated title) used to be repaired on
+    every library listing, with raw SQL outside the op log; now it is a
+    one-time rewrite like the other content shapes."""
+    if not config.WORKSPACES_DIR.is_dir():
+        return
+    for ws_root in sorted(config.WORKSPACES_DIR.iterdir()):
+        pages_db = ws_root / "pages.db"
+        if not ws_root.is_dir() or not pages_db.is_file():
+            continue
+        with closing(sqlite3.connect(str(pages_db))) as pdb:
+            for stmt in PAGES_SCHEMA:
+                pdb.execute(stmt)
+            normalize_pages_db(pdb)
+
+
+def _v10_mirrors(conn: sqlite3.Connection) -> None:
+    """``integration_tokens`` gains ``scope`` (read, the old meaning, or
+    write — a token a mirror pushes with) and users.db gains ``mirrors``
+    (local workspaces that are offline copies of a remote one)."""
+    if "scope" not in _columns(conn, "integration_tokens"):
+        conn.execute("ALTER TABLE integration_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'read'")
+    conn.execute(next(s for s in USERS_SCHEMA if "CREATE TABLE IF NOT EXISTS mirrors" in s))
+    conn.commit()
+
+
+def _v11_mirror_cadence(conn: sqlite3.Connection) -> None:
+    """``mirrors`` gains its cadence: ``poll_s`` (how often a round checks
+    the original, 0 = only by hand) and ``on_change`` (a round a few seconds
+    after a local edit). A mirror's ``mode`` may now also be ``off`` — detached,
+    the link kept for a later re-link."""
+    cols = _columns(conn, "mirrors")
+    if "poll_s" not in cols:
+        conn.execute("ALTER TABLE mirrors ADD COLUMN poll_s INTEGER NOT NULL DEFAULT 30")
+    if "on_change" not in cols:
+        conn.execute("ALTER TABLE mirrors ADD COLUMN on_change INTEGER NOT NULL DEFAULT 1")
+    conn.commit()
+
+
+def _v12_sync_log_stats(conn: sqlite3.Connection) -> None:
+    """Every workspace's ``sync_log`` gains ``stats``: the git-style block
+    counts of what a round did to the page (JSON ``{add, del, mod}``; rows
+    from before carry none and show without counts)."""
+    if not config.WORKSPACES_DIR.is_dir():
+        return
+    for ws_root in sorted(config.WORKSPACES_DIR.iterdir()):
+        pages_db = ws_root / "pages.db"
+        if not ws_root.is_dir() or not pages_db.is_file():
+            continue
+        with closing(sqlite3.connect(str(pages_db))) as pdb:
+            for stmt in PAGES_SCHEMA:
+                pdb.execute(stmt)
+            if "stats" not in _columns(pdb, "sync_log"):
+                pdb.execute("ALTER TABLE sync_log ADD COLUMN stats TEXT NOT NULL DEFAULT ''")
+            pdb.commit()
+
+
+def _v13_sync_conflict_base(conn: sqlite3.Connection) -> None:
+    """Every workspace's ``sync_conflicts`` gains ``base``: the text a merged
+    block had before either side edited it, so the resolver can show what
+    each side changed (rows from before carry none and show as before)."""
+    if not config.WORKSPACES_DIR.is_dir():
+        return
+    for ws_root in sorted(config.WORKSPACES_DIR.iterdir()):
+        pages_db = ws_root / "pages.db"
+        if not ws_root.is_dir() or not pages_db.is_file():
+            continue
+        with closing(sqlite3.connect(str(pages_db))) as pdb:
+            for stmt in PAGES_SCHEMA:
+                pdb.execute(stmt)
+            if "base" not in _columns(pdb, "sync_conflicts"):
+                pdb.execute("ALTER TABLE sync_conflicts ADD COLUMN base TEXT NOT NULL DEFAULT ''")
+            pdb.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
@@ -359,4 +444,10 @@ STEPS = [
     (5, "publisher_sessions", _v5_publisher_sessions),
     (6, "integration_tokens", _v6_integration_tokens),
     (7, "mcp_oauth", _v7_mcp_oauth),
+    (8, "ai_usage", _v8_ai_usage),
+    (9, "upload_path_titles", _v9_upload_path_titles),
+    (10, "mirrors", _v10_mirrors),
+    (11, "mirror_cadence", _v11_mirror_cadence),
+    (12, "sync_log_stats", _v12_sync_log_stats),
+    (13, "sync_conflict_base", _v13_sync_conflict_base),
 ]

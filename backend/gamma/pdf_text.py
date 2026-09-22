@@ -7,8 +7,11 @@ Used by the AI context builder, metadata lookup, /pdf-text-status, and the
 search indexer, so extraction fixes land once.
 """
 
+import re
 import io
+import struct
 import threading
+import zlib
 
 from .logbuf import log
 
@@ -30,7 +33,42 @@ MAX_PAGES = 5000
 # context builder would otherwise hand the model "(PDF text extraction failed)"
 # and it would answer from memory. Callers of iter_page_texts must hold it —
 # extract_pages/extract_text/page_count do.
+#
+# The lock alone is not enough. pypdfium2 closes a page or document it still
+# owns from a weakref finalizer, and its objects sit in reference cycles, so
+# a page that was merely dropped is closed by the CYCLIC GC — later, on
+# whatever thread happens to allocate (a sync round parsing JSON, a request
+# handler), outside this lock, while another thread is inside pdfium. That
+# is a native crash of the whole server (Windows exit 0x80000003), seen when
+# an offline copy pulled a library of PDFs and their manifests were walked
+# in the background. Two rules follow: every page/textpage/document made
+# here is closed EXPLICITLY, inside the lock, as soon as it is done with
+# (a closed object's finalizer is dead, the GC never touches pdfium for it);
+# and, as a net under any object that still reaches a finalizer,
+# pypdfium2's finalizer template is wrapped at import to take the same lock
+# (_serialize_finalizers) — a finalizer on the walking thread re-enters the
+# RLock, one on any other thread waits its turn.
 _lock = threading.RLock()
+
+
+def _serialize_finalizers() -> None:
+    try:
+        import pypdfium2.internal.bases as bases
+    except Exception:  # noqa: BLE001 — pypdfium2 missing or reshaped: nothing to wrap
+        return
+    inner = getattr(bases, "_close_template", None)
+    if inner is None or getattr(inner, "_gamma_locked", False):
+        return
+
+    def locked_close(*args, **kwargs):
+        with _lock:
+            return inner(*args, **kwargs)
+
+    locked_close._gamma_locked = True
+    bases._close_template = locked_close
+
+
+_serialize_finalizers()
 
 
 def _open(src):
@@ -96,6 +134,15 @@ def extract_text(src, char_limit: int, empty_page_cap: int = 50,
     return extract_text_pages(src, char_limit, empty_page_cap, start_page, label_pages)[0]
 
 
+
+PAGE_LABEL_RE = re.compile(r"(?m)^\[PDF page (\d+)\]\n")
+
+
+def page_label(page_no, continued: bool = False) -> str:
+    """The `[PDF page N]` line that heads a page's text in AI context (the
+    model cites these physical numbers, never printed ones)."""
+    return f"[PDF page {page_no}{'; continued' if continued else ''}]\n"
+
 def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
                        start_page: int = 1, label_pages: bool = False) -> tuple[str, int]:
     """extract_text plus how many PDF pages the text spans (counted from
@@ -108,7 +155,7 @@ def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
             if t.strip():
                 empties = 0
                 if label_pages:
-                    t = f"[PDF page {start_page + pages - 1}]\n{t}"
+                    t = page_label(start_page + pages - 1) + t
                 parts.append(t)
                 total += len(t)
                 if total >= char_limit:
@@ -138,7 +185,14 @@ def page_sizes(src) -> list[tuple[float, float]]:
                     out.append((w, h))
                 return out
             try:
-                return [tuple(pdf[i].get_size()) for i in range(len(pdf))]
+                out = []
+                for i in range(len(pdf)):
+                    page = pdf[i]
+                    try:
+                        out.append(tuple(page.get_size()))
+                    finally:
+                        page.close()
+                return out
             finally:
                 pdf.close()
         except Exception as e:
@@ -160,3 +214,71 @@ def page_count(src) -> int:
         except Exception as e:
             log.warning(f"[pdf-text] page count failed: {e}")
             return 0
+
+
+# Longest side, in pixels, of a page picture handed to a vision model (past
+# ~1.6k px providers downscale anyway; below it small print gets unreadable).
+RENDER_MAX_SIDE = 1568
+
+
+def _png(width: int, height: int, channels: int, rows) -> bytes:
+    """A plain PNG (8-bit RGB / RGBA, filter 0) — no Pillow needed."""
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        return (struct.pack(">I", len(body)) + tag + body
+                + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF))
+    raw = b"".join(b"\x00" + bytes(row) for row in rows)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6 if channels == 4 else 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6))
+            + chunk(b"IEND", b""))
+
+
+def _encode_bitmap(bitmap) -> tuple[bytes, str]:
+    """``(bytes, media type)`` of a rendered pdfium bitmap: JPEG through
+    Pillow when it is installed (a scan is a photo — several times smaller),
+    else a PNG written here."""
+    try:
+        from PIL import Image  # noqa: F401 — optional
+    except ImportError:
+        width, height, stride = bitmap.width, bitmap.height, bitmap.stride
+        channels = bitmap.n_channels
+        data = bytes(bitmap.buffer)
+        rows = (data[y * stride:y * stride + width * channels] for y in range(height))
+        return _png(width, height, channels, rows), "image/png"
+    buf = io.BytesIO()
+    bitmap.to_pil().convert("RGB").save(buf, "JPEG", quality=85)
+    return buf.getvalue(), "image/jpeg"
+
+
+def render_page(src, page_no: int, max_side: int = RENDER_MAX_SIDE):
+    """Rasterize one page (1-based) for a vision model: ``(image, pages)``
+    where image is ``(bytes, media_type, width, height)`` — the page scaled
+    so its longer side is ``max_side`` px — or None when the page number is
+    out of range; ``(None, 0)`` when the file can't be rendered (unreadable,
+    or only PyPDF2 could open it). Holds the pdfium lock like every walk."""
+    with _lock:
+        try:
+            kind, pdf = _open(src)
+            if kind == "pypdf2":
+                return None, 0
+            try:
+                total = len(pdf)
+                if page_no < 1 or page_no > total:
+                    return None, total
+                page = pdf[page_no - 1]
+                try:
+                    w, h = page.get_size()
+                    scale = max_side / max(w, h, 1)
+                    bitmap = page.render(scale=scale, rev_byteorder=True)
+                    try:
+                        data, media_type = _encode_bitmap(bitmap)
+                        return (data, media_type, bitmap.width, bitmap.height), total
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+            finally:
+                pdf.close()
+        except Exception as e:
+            log.warning(f"[pdf-text] page render failed: {e}")
+            return None, 0

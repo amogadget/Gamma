@@ -32,9 +32,9 @@ on Ubuntu ≥ 24.04), so `test/smoke.js` and `test/e2e.js` start it with
 ## The `desktop` workflow
 
 **A release is a dispatch, not a merge.** `.github/workflows/desktop.yml`
-has no push trigger; it runs by hand (`gh workflow run desktop.yml --ref
-main`, what the `release` skill does) against whatever is on `main` — a
-merge to `main` only publishes the Docker image. Every run builds Windows + macOS + Linux (pin the version →
+has no push trigger. The `release` skill dispatches it against whatever is
+on `main` (`gh workflow run desktop.yml --ref main`); a merge to `main`
+publishes only the Docker image. Every run builds Windows + macOS + Linux (pin the version →
 frontend build → backend freeze → frozen-server health check →
 electron-builder → signature verification → packaged `--smoke`; the Linux
 job additionally `apt install`s the `.deb` on the runner and runs the
@@ -137,7 +137,11 @@ Start list, plus `targetsize-N` and `_altform-unplated` variants),
 `StoreLogo`, `SplashScreen`, each with `.scale-125/150/200/400` variants
 (their presence makes electron-builder run `makepri`, so Windows picks a
 sharp one per DPI). The tiles are the bare mark on a transparent plate,
-coloured by `backgroundColor`; the 44 px logo is the rounded app icon.
+coloured by `backgroundColor`; the 44 px logo is the rounded app icon, and
+its `_altform-unplated` variants (what Windows 11 shows in Start, the
+taskbar and Alt+Tab) are that same rounded tile, not a bare mark — Windows
+paints nothing behind an unplated asset, so the mark alone would lose its
+cream glyph on a light Start menu.
 `npm run store-art` renders all of them from the logo mark (same script as
 the listing art below). **The folder must exist**: without it
 electron-builder ships its own `SampleAppx.*` placeholders and
@@ -176,8 +180,9 @@ listing's *Store logos* (9:16 poster art, 1:1 box art) and *Store display
 images* (300/150/71 px app tile icons) are pre-rendered in `assets/store/`;
 `npm run store-art` regenerates them, together with the package assets in
 `assets/appx/`, from the logo mark with Playwright's Chromium
-(`scripts/store-art.js`, Windows only, and online: the poster's wordmark
-font comes from Google Fonts).
+(`scripts/store-art.js` delegates to the shared brand generator). Generation
+uses the frontend's locked Playwright, Python 3 and the shared hero logo/font stack;
+no font download is needed. See [brand sources](../../design/brand/README.md).
 The package version must increase per submission
 (`package.json` `<version>` becomes `<version>.0`; the Store requires the
 fourth part to be 0, which electron-builder guarantees). Certification takes one

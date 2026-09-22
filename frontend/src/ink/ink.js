@@ -41,6 +41,8 @@ export const PEN_COLORS = ["#1f1f1f", "#6b7280", "#1d4ed8", "#0284c7", "#0f766e"
   "#ca8a04", "#ea580c", "#dc2626", "#db2777", "#7c3aed", "#92400e", "#ffffff"];
 export const HIGHLIGHTER_COLORS = ["#fde047", "#86efac", "#7dd3fc", "#f9a8d4", "#fdba74", "#c4b5fd", "#67e8f9", "#d4d4d8"];
 export const HIGHLIGHTER_OPACITY = 0.6;
+// Cap on a stroke's nominal width (pt); scaling a selection stops here.
+export const MAX_STROKE_SIZE = 100;
 export const DEFAULT_TOOLS = [
   { id: "pen1", kind: "pen", color: "#1f1f1f", size: 2 },
   { id: "pen2", kind: "pen", color: "#1d4ed8", size: 2 },
@@ -74,7 +76,8 @@ export function normalizeTools(list) {
     let id = typeof t.id === "string" && /^[A-Za-z0-9_-]{1,24}$/.test(t.id) ? t.id : toolId();
     while (seen.has(id)) id = toolId();
     seen.add(id);
-    out.push({ id, kind, color: t.color.toLowerCase(), size: Math.round(size * 100) / 100 });
+    out.push({ id, kind, color: t.color.toLowerCase(), size: Math.round(size * 100) / 100,
+      ...(kind === "pen" && t.brush === "monoline" ? { brush: "monoline" } : {}) });
     if (out.length >= MAX_TOOLS) break;
   }
   return out.length ? out : DEFAULT_TOOLS.map((t) => ({ ...t }));
@@ -83,14 +86,15 @@ export function normalizeTools(list) {
 export function toolStyle(preset) {
   return preset.kind === "highlighter"
     ? { tool: "highlighter", color: preset.color, size: preset.size, opacity: HIGHLIGHTER_OPACITY }
-    : { tool: "pen", color: preset.color, size: preset.size, opacity: 1 };
+    : { tool: "pen", color: preset.color, size: preset.size, opacity: 1,
+      ...(preset.brush === "monoline" ? { brush: "monoline" } : {}) };
 }
 
 
 // --- codec -----------------------------------------------------------------
 
 // samples: [{x, y, p?, t?}] with x/y in points and t in ms since t0.
-export function encodeStroke({ id, tool = "pen", color = PEN_COLORS[0], size = 2, opacity = 1,
+export function encodeStroke({ id, tool = "pen", brush, color = PEN_COLORS[0], size = 2, opacity = 1,
   pen = true, t0 = null, samples, ch = "xyp" }) {
   const pts = [];
   let px = 0, py = 0, pt = 0;
@@ -105,6 +109,7 @@ export function encodeStroke({ id, tool = "pen", color = PEN_COLORS[0], size = 2
     }
   }
   const out = { id: id || strokeId(), tool, color, size, opacity, pen, ch, pts };
+  if (tool === "pen" && brush === "monoline") out.brush = "monoline";
   if (t0 != null) out.t0 = t0;
   return out;
 }
@@ -135,7 +140,7 @@ export function decodeStroke(stroke) {
 }
 
 export function strokeWidth(stroke, p) {
-  if (stroke.tool !== "pen" || stroke.pen === false) return stroke.size;
+  if (stroke.tool !== "pen" || stroke.pen === false || stroke.brush === "monoline") return stroke.size;
   return stroke.size * (1 + THINNING * (p - 0.5));
 }
 
@@ -190,24 +195,24 @@ function segDist2(px, py, ax, ay, bx, by) {
   return qx * qx + qy * qy;
 }
 
-// Ids of the strokes an eraser at (x, y) with `radius` touches: within
-// half the stroke's width plus the radius of any segment. Bounding boxes
-// prune the work.
-export function hitStrokes(ink, x, y, radius) {
-  const out = [];
-  for (const s of ink?.strokes || []) {
-    const b = strokeBounds(s);
-    if (!b || x < b[0] - radius || x > b[2] + radius || y < b[1] - radius || y > b[3] + radius) continue;
-    const pts = decodeStroke(s);
-    let hit = false;
-    for (let i = 0; i < pts.length && !hit; i++) {
-      const a = pts[i], c = pts[Math.min(i + 1, pts.length - 1)];
-      const tol = radius + Math.max(strokeWidth(s, a.p), strokeWidth(s, c.p)) / 2;
-      if (segDist2(x, y, a.x, a.y, c.x, c.y) <= tol * tol) hit = true;
-    }
-    if (hit) out.push(s.id);
+// Distance from (x, y) to the stroke's painted edge (0 inside the ink), or
+// Infinity when the point lies more than `radius` outside its bounding box.
+function strokeEdgeDistance(s, x, y, radius) {
+  const b = strokeBounds(s);
+  if (!b || x < b[0] - radius || x > b[2] + radius || y < b[1] - radius || y > b[3] + radius) return Infinity;
+  const pts = decodeStroke(s);
+  let best = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], c = pts[Math.min(i + 1, pts.length - 1)];
+    const edge = Math.sqrt(segDist2(x, y, a.x, a.y, c.x, c.y)) - Math.max(strokeWidth(s, a.p), strokeWidth(s, c.p)) / 2;
+    if (edge < best) best = edge;
   }
-  return out;
+  return Math.max(0, best);
+}
+
+// Ids of the strokes an eraser at (x, y) with `radius` touches.
+export function hitStrokes(ink, x, y, radius) {
+  return (ink?.strokes || []).filter((s) => strokeEdgeDistance(s, x, y, radius) <= radius).map((s) => s.id);
 }
 
 // Nearest stroke edge, with the last-painted stroke winning ties. The
@@ -215,15 +220,8 @@ export function hitStrokes(ink, x, y, radius) {
 export function nearestInkStroke(groups, x, y, radius) {
   let best = null, distance = radius;
   for (const g of groups) for (const s of g.ink.strokes) {
-    const b = strokeBounds(s);
-    if (!b || x < b[0] - radius || x > b[2] + radius || y < b[1] - radius || y > b[3] + radius) continue;
-    const pts = decodeStroke(s);
-    for (let i = 0; i < pts.length; i++) {
-      const a = pts[i], c = pts[Math.min(i + 1, pts.length - 1)];
-      const edge = Math.max(0, Math.sqrt(segDist2(x, y, a.x, a.y, c.x, c.y))
-        - Math.max(strokeWidth(s, a.p), strokeWidth(s, c.p)) / 2);
-      if (edge <= distance) { distance = edge; best = { id: g.id, ids: [s.id] }; }
-    }
+    const edge = strokeEdgeDistance(s, x, y, radius);
+    if (edge <= distance) { distance = edge; best = { id: g.id, ids: [s.id] }; }
   }
   return best;
 }
@@ -282,11 +280,17 @@ export function translateStrokes(ink, ids, dx, dy) {
   }) };
 }
 
+// (x, y) scaled by `scale` and rotated by `angle` (radians) about (cx, cy).
+export function transformPoint(x, y, { cx, cy, scale, angle }) {
+  const cos = Math.cos(angle), sin = Math.sin(angle), dx = x - cx, dy = y - cy;
+  return [cx + scale * (dx * cos - dy * sin), cy + scale * (dx * sin + dy * cos)];
+}
+
 // Uniform scaling/rotation around a shared page-space origin. Rewrite only
 // XY channels, preserving pressure, timing, tilt, IDs and other metadata.
 export function transformStrokes(ink, ids, { cx, cy, scale = 1, angle = 0 }) {
   if (![cx, cy, scale, angle].every(Number.isFinite) || scale <= 0 || (scale === 1 && angle === 0)) return ink;
-  const selected = new Set(ids), cos = Math.cos(angle), sin = Math.sin(angle);
+  const selected = new Set(ids);
   let changed = false;
   const strokes = ink.strokes.map((s) => {
     if (!selected.has(s.id)) return s;
@@ -294,20 +298,20 @@ export function transformStrokes(ink, ids, { cx, cy, scale = 1, angle = 0 }) {
     const pts = s.pts.slice(), n = s.ch.length;
     let px = 0, py = 0;
     decodeStroke(s).forEach((p, i) => {
-      const x = p.x - cx, y = p.y - cy;
-      const nx = Math.round((cx + scale * (x * cos - y * sin)) * COORD_UNIT);
-      const ny = Math.round((cy + scale * (x * sin + y * cos)) * COORD_UNIT);
+      const [tx, ty] = transformPoint(p.x, p.y, { cx, cy, scale, angle });
+      const nx = Math.round(tx * COORD_UNIT);
+      const ny = Math.round(ty * COORD_UNIT);
       pts[i * n] = nx - px; pts[i * n + 1] = ny - py;
       px = nx; py = ny;
     });
-    return { ...s, pts, size: Math.max(0.01, Math.min(100, s.size * scale)) };
+    return { ...s, pts, size: Math.max(0.01, Math.min(MAX_STROKE_SIZE, s.size * scale)) };
   });
   return changed ? { ...ink, strokes } : ink;
 }
 
 // A stroke's samples → a stroke of the same look (fresh id).
 function restroke(stroke, samples) {
-  return encodeStroke({ tool: stroke.tool, color: stroke.color, size: stroke.size, opacity: stroke.opacity,
+  return encodeStroke({ tool: stroke.tool, brush: stroke.brush, color: stroke.color, size: stroke.size, opacity: stroke.opacity,
     pen: stroke.pen !== false, t0: stroke.t0 ?? null, samples, ch: stroke.ch });
 }
 
@@ -393,7 +397,7 @@ export function svgPathFromPoints(points) {
 // Outline options in page units — thickness is size, so zoom scales ink
 // like ink on paper.
 export function outlineOptions(stroke) {
-  return { size: stroke.size, thinning: stroke.pen === false ? 0 : THINNING, smoothing: 0.5,
+  return { size: stroke.size, thinning: stroke.pen === false || stroke.brush === "monoline" ? 0 : THINNING, smoothing: 0.5,
     streamline: 0.4, simulatePressure: false, last: true };
 }
 

@@ -59,6 +59,7 @@ class Stroke(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     id: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
     tool: Literal["pen", "highlighter"] = "pen"
+    brush: Literal["monoline"] | None = None
     color: str = Field(default="#1f1f1f", max_length=40)
     size: float = Field(default=1.6, gt=0, le=100)
     opacity: float = Field(default=1.0, gt=0, le=1)
@@ -69,6 +70,8 @@ class Stroke(BaseModel):
 
     @model_validator(mode="after")
     def _shape(self):
+        if self.brush is not None and self.tool != "pen":
+            raise ValueError("brush styles apply to pens only")
         if not _CH_RE.match(self.ch):
             raise ValueError(f"bad channel list {self.ch!r}")
         if not _COLOR_RE.match(self.color):
@@ -193,9 +196,9 @@ def encode_points(samples: list[dict], ch: str = "xy") -> list[int]:
 
 
 def stroke_width(stroke: Stroke, p: float) -> float:
-    """Drawn diameter at pressure ``p``: pens thin with pressure, highlighters
-    (and mouse/finger strokes, which carry no real pressure) stay constant."""
-    if stroke.tool != "pen" or not stroke.pen:
+    """Drawn diameter: pens follow pressure; monoline, highlighter and
+    mouse/finger strokes stay constant. The pressure samples are retained."""
+    if stroke.tool != "pen" or not stroke.pen or stroke.brush == "monoline":
         return stroke.size
     return stroke.size * (1 + THINNING * (p - 0.5))
 

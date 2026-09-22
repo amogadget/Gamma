@@ -1,16 +1,19 @@
 """FastAPI application assembly: middleware, routers, startup maintenance, SPA serving."""
 
+import mimetypes
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
 
-from . import config, migrations
+from . import backup_schedule, config, migrations
+from . import sync_engine, version
 from .auth import session_middleware
 from .db import connect_data_db, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
-from .mcp_server import GammaMCP
+from .mcp_lazy import LazyMCP
 from .mcp_oauth import router as mcp_oauth_router
 from .routers import (
     admin,
@@ -18,6 +21,7 @@ from .routers import (
     auth as auth_router,
     blank_pdf,
     blocks,
+    backup_tasks,
     chats,
     clip,
     collab,
@@ -29,12 +33,14 @@ from .routers import (
     metadata,
     native_highlights,
     native_ink,
+    mirrors,
     pages,
     pdf,
     prefs,
     publisher_sessions,
     search,
     shares,
+    sync,
     uploads,
     workspaces,
     ws_backups,
@@ -71,6 +77,7 @@ def _startup_maintenance():
     directory), create users.db on a fresh install, seed the first admin,
     then per workspace: prune orphaned uploads and apply the per-file
     schema statements (a restored backup gains page_ops, WAL, ...)."""
+    log.info(f"[startup] Gamma {version.label()}")
     try:
         done = migrations.ensure_current()
     except migrations.MigrationError as e:
@@ -103,8 +110,15 @@ def _startup_maintenance():
 def create_app() -> FastAPI:
     setup_logging()
     _silence_windows_connection_reset()
-    mcp = GammaMCP()
-    app = FastAPI(title="Gamma PDF Annotator", lifespan=mcp.lifespan)
+    mcp = LazyMCP()
+    @asynccontextmanager
+    async def lifespan(app):
+        # The MCP lifespan's yield is request state (its runtime, read by the
+        # /mcp route from scope["state"]) — it must pass through here.
+        async with mcp.lifespan(app) as state, backup_schedule.lifespan():
+            yield state
+
+    app = FastAPI(title="Gamma PDF Annotator", lifespan=lifespan)
 
     app.middleware("http")(session_middleware)
 
@@ -116,6 +130,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(workspaces.router)
     app.include_router(ws_backups.router)
+    app.include_router(backup_tasks.router)
     app.include_router(ai.router)
     app.include_router(chats.router)
     app.include_router(chats.history_router)
@@ -142,12 +157,18 @@ def create_app() -> FastAPI:
     app.include_router(links.router)
     app.include_router(clip.router)
     app.include_router(collab.router)
+    app.include_router(sync.router)
+    app.include_router(mirrors.router)
 
     # Serve the built frontend (SPA) when GAMMA_STATIC_DIR is set.
     # Registered last so all /api routes take precedence.
     static_dir = Path(config.STATIC_DIR) if config.STATIC_DIR else None
     if static_dir and static_dir.is_dir():
         index_html = static_dir / "index.html"
+        # The web app manifest (/media/manifest.webmanifest, the "Add to Home
+        # Screen" install): FileResponse guesses types from the OS table,
+        # which lacks this one on Windows and in slim images.
+        mimetypes.add_type("application/manifest+json", ".webmanifest")
 
         def revalidating(file: Path, request: Request):
             """An unhashed file (index.html, favicons) changes in place on
@@ -177,6 +198,8 @@ def create_app() -> FastAPI:
             return revalidating(index_html, request)
 
     _startup_maintenance()
+
+    sync_engine.start_loop()
     return app
 
 

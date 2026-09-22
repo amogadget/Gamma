@@ -73,7 +73,7 @@ export function WorkspacesAdmin({ value }) {
               </button>
             )}
           >
-            {shared.length ? shared.map(row) : <Empty icon={UsersIcon}>No shared workspaces yet. Personal workspaces are listed under each account in Users.</Empty>}
+            {shared.length ? shared.map(row) : <Empty icon={UsersIcon}>No shared workspaces yet.</Empty>}
           </Section>
           {listing.orphans?.length ? (
             <div className="settingsPaneHint">

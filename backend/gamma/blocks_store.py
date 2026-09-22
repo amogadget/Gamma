@@ -240,22 +240,26 @@ def attachment_props(doc_id: str, source_url: str = "", original_filename: str =
     return props, original or url_filename(source_url) or doc_id
 
 
-def create_page(conn, title: str, props: dict | None = None, block_id: str | None = None) -> dict:
-    """Insert a new root page (last in the library) and return its block
-    dict. Commits. The one code path that mints pages: POST /api/pages and
-    get_or_create_doc_page both go through it — as does the blank-notebook
-    endpoint, which supplies the canonical UUID its client minted
-    (``block_id``) so a retry can recognize the page it already created."""
+def create_page(conn, title: str, props: dict | None = None, *,
+                block_id: str = "", position: str = "") -> dict:
+    """Insert a new root page and return its block dict. Commits. Last in
+    the library unless ``position`` (a sibling key the caller minted) says
+    otherwise; ``block_id`` reuses an id (a page brought back) — its
+    ``deleted_pages`` tombstone, if any, is cleared. The one code path that
+    mints pages: POST /api/pages, POST /api/blocks (parent ``root``) and
+    get_or_create_doc_page all go through it. The native blank-notebook
+    endpoint supplies its client-minted UUID for idempotent retries."""
     block_id = block_id or secrets.token_urlsafe(9)
     title = (title or "").strip() or "Untitled"
     props = dict(props or {})
     now = page_now()
-    new_pos = generate_key_between(last_child_position(conn, "root"), None)
+    new_pos = position or generate_key_between(last_child_position(conn, "root"), None)
     conn.execute(
         "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
         "VALUES (?, 'root', ?, ?, ?, ?, ?)",
         (block_id, new_pos, title, json.dumps(props), now, now),
     )
+    conn.execute("DELETE FROM deleted_pages WHERE page_id = ?", (block_id,))
     conn.commit()
     return {
         "id": block_id, "parent_id": "root", "position": new_pos,
@@ -266,7 +270,7 @@ def create_page(conn, title: str, props: dict | None = None, block_id: str | Non
 def get_or_create_doc_page(conn, doc_id: str, default_title: str = "",
                            source_url: str | None = None,
                            original_filename: str | None = None,
-                           folder: str = "") -> dict:
+                           folder: str = "", *, ws: str, actor: str = "") -> dict:
     """Lookup-or-create BY ATTACHMENT: the root page whose PDF attachment is
     `doc_id`, created under root when absent. Shared by POST /api/blocks/by-doc
     (PDF ingest from the app, "Open as document" on a PDF file block) and
@@ -277,7 +281,9 @@ def get_or_create_doc_page(conn, doc_id: str, default_title: str = "",
     (the caller's — a clip's tab title), else what ``attachment_props``
     derives (URL file name, doc id). ``folder`` (a path) files a NEW page;
     an existing page keeps its own. On an existing page this
-    opportunistically backfills the source/filename markers; auto_title is
+    opportunistically backfills the source/filename markers (an op batch on
+    the page, like every other write to an existing page — ``ws`` names the
+    workspace, ``actor`` the account); auto_title is
     only set when the page still carries the exact title this call considers
     automatic, so a re-upload can never mark a user's custom title as
     replaceable by the metadata worker."""
@@ -296,12 +302,10 @@ def get_or_create_doc_page(conn, doc_id: str, default_title: str = "",
             props["auto_title"] = row[3]
             changed = True
         if changed:
-            now = page_now()
-            conn.execute(
-                "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(props), now, row[0]),
-            )
-            conn.commit()
+            from .ops import after_commit, apply_ops, props_patch  # ops imports this module
+            patch = props_patch(json.loads(row[4] or "{}"), props)
+            after_commit(ws, conn, apply_ops(conn, row[0], [{"op": "set", "id": row[0], "props": patch}],
+                                             actor=actor))
             row = (*row[:4], json.dumps(props), *row[5:])
         return block_to_dict(row)
     props = {**attachment, "auto_title": title}

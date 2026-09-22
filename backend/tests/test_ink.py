@@ -68,6 +68,29 @@ def test_bounding_box_and_pdf_position():
     assert inkmod.bounding_box(inkmod.parse_ink(_ink(strokes=[]))) is None
 
 
+def test_monoline_preserves_samples_and_constant_width_in_exports(guest):
+    legacy = inkmod.parse_ink(_ink())
+    assert b'"brush"' not in inkmod.dumps(legacy)
+    data = _ink()
+    data["strokes"][0]["brush"] = "monoline"
+    r = guest.post("/api/upload-ink", json=data)
+    assert r.status_code == 200, r.text
+    stored = guest.get(r.json()["url"])
+    ink = inkmod.parse_ink(stored.content)
+    assert ink.strokes[0].brush == "monoline"
+    assert inkmod.decode_stroke(ink.strokes[0]) == inkmod.decode_stroke(legacy.strokes[0])
+    assert {w for _, _, w in inkmod.stroke_polyline(ink.strokes[0])} == {2}
+    # Both SVG export and the notes PDF keep a uniform 2pt stroke despite
+    # varying pressure, while the native JSON retains those pressure samples.
+    svg = inkmod.to_svg(ink)
+    assert svg.count('stroke-width="2"') == 4
+    ops = inkmod.pdf_path_ops(ink, lambda x, y: (x, PAGE_H - y))
+    assert ops.count(b"2.00 w") == 4
+    invalid = _ink()
+    invalid["strokes"][0].update(tool="highlighter", brush="monoline")
+    assert guest.post("/api/upload-ink", json=invalid).status_code == 400
+
+
 @pytest.mark.parametrize("mutate, message", [
     (lambda d: d.__setitem__("format", "other"), "format"),
     (lambda d: d["space"].pop("page"), "page"),

@@ -5,7 +5,7 @@
 // socket URL (share token / workspace), the keepalive POST on pagehide, and
 // `peers` / `me` as React state.
 import { useEffect, useRef, useState } from "react";
-import { API, apiJson, makeId, withShare, withWorkspace } from "../shared/lib/utils";
+import { API, apiJson, getLinkName, makeId, withShare, withWorkspace } from "../shared/lib/utils";
 import { createCollabSession } from "./collabSession";
 
 export const CLIENT_ID = makeId().slice(0, 10); // one per tab
@@ -14,7 +14,9 @@ function socketUrl(pageId) {
   // A share view carries its token (the share names the workspace); a
   // member's socket carries ?ws= — the handshake has no headers to inject.
   const base = `${API}/ws/page/${encodeURIComponent(pageId)}?client=${CLIENT_ID}`;
-  const path = withShare(base) === base ? withWorkspace(base) : withShare(base);
+  let path = withShare(base) === base ? withWorkspace(base) : withShare(base);
+  // A visitor without an account joins under its display name (presence).
+  if (path !== base && getLinkName()) path += `&name=${encodeURIComponent(getLinkName())}`;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}${path}`;
 }
@@ -27,6 +29,9 @@ function socketUrl(pageId) {
 //                 tree (pos: the shared id → position map blockOps needs)
 //   onReload(pageId)          — refetch the tree (a change ops can't express)
 //   onStatus(text)            — the status line
+// Returns the session's commit/flush/hasPending/sendCursor, `peers`, `me`,
+// and `reconnect` (reopen the socket — after a display-name change, since the
+// name travels in the handshake).
 export function usePageCollab(opts) {
   const o = useRef(opts);
   o.current = opts;
@@ -49,6 +54,8 @@ export function usePageCollab(opts) {
       opts: () => o.current,
       onPeers: setPeers,
       onMe: setMe,
+      // a clone's sync pill (MirrorPopover) marks local edits as not pushed yet
+      onQueued: () => window.dispatchEvent(new CustomEvent("gamma:local-edit")),
     });
   }
   const session = ref.current;
@@ -66,5 +73,9 @@ export function usePageCollab(opts) {
     return () => session.disconnect();
   }, [session, pageId, enabled]);
 
-  return { commit: session.commit, flush: session.flush, hasPending: session.hasPending, peers, me, sendCursor: session.sendCursor };
+  return {
+    commit: session.commit, flush: session.flush, hasPending: session.hasPending, peers, me,
+    sendCursor: session.sendCursor,
+    reconnect: () => { if (enabled && pageId) session.connect(pageId); },
+  };
 }

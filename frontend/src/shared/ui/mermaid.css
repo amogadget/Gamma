@@ -1,0 +1,20 @@
+.mermaidDiagram { position: relative; margin: 8px 0; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--bg-surface); overflow: hidden; }
+/* The hover toolbar: the note image's flat icon buttons, revealed on hover
+   (always while the source is shown, so the toggle stays reachable). */
+.mermaidTools { position: absolute; top: 6px; right: 6px; z-index: 1; display: inline-flex; align-items: center; gap: 1px; padding: 3px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); opacity: 0; pointer-events: none; transition: opacity 0.12s; }
+.mermaidDiagram:hover .mermaidTools, .mermaidDiagram.showingSource .mermaidTools, .mermaidTools:focus-within { opacity: 1; pointer-events: auto; }
+.mermaidPreview { padding: 12px; overflow: auto; max-height: 600px; }
+/* The figure hugs the drawing (its width = the stored size, else Mermaid's
+   natural width) and centres; the SVG fills it so a dragged width scales
+   the whole drawing, like a sized note image. */
+.mermaidFigure { position: relative; max-width: 100%; margin: 0 auto; }
+.mermaidSvg > svg { display: block; max-width: 100%; height: auto; margin: auto; }
+.mermaidFigure.sized .mermaidSvg > svg { width: 100% !important; max-width: none !important; }
+.mermaidFigure .mdResizeGrip { opacity: 0; }
+.mermaidFigure:hover .mdResizeGrip { opacity: 0.55; }
+.mermaidFigure .mdResizeGrip:hover, .mermaidFigure .mdResizeGrip:active { opacity: 0.9; }
+.mermaidStatus, .mermaidError { padding: 8px 12px; color: var(--text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mermaidError { color: var(--danger); }
+.mermaidDiagram pre.mermaidSource, .mermaidError pre { margin: 0; padding: 12px; overflow: auto; max-height: 400px; white-space: pre; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.mermaidDiagram.showingSource pre.mermaidSource { padding-right: 120px; }
+.mermaidError pre { padding: 6px 0; white-space: pre-wrap; }

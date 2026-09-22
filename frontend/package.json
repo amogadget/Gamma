@@ -11,7 +11,8 @@
     "e2e": "node tests/e2e/run.mjs",
     "e2e:native": "node tests/e2e/nativeHandoff.mjs",
     "e2e:notereplay": "node tests/e2e/noteReplay.mjs",
-    "e2e:blankpdf": "node tests/e2e/blankPdf.mjs"
+    "e2e:blankpdf": "node tests/e2e/blankPdf.mjs",
+    "e2e:latex": "node tests/e2e/latexEditor.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -20,6 +21,7 @@
     "fractional-indexing": "^3.4.0",
     "highlight.js": "^11.12.0",
     "katex": "^0.16.45",
+    "mermaid": "^12.0.0",
     "pdfjs-dist": "4.4.168",
     "perfect-freehand": "^1.2.2",
     "react": "^18.3.1",

@@ -37,6 +37,21 @@ function getCurrentWorkspace() {
   return currentWorkspace;
 }
 
+// ---- Link visitors -----------------------------------------------------------
+// In a share view opened without an account, the visitor's display name
+// (collaboration/linkName.js) goes out as X-Gamma-Name on every API call —
+// percent-encoded, since header values cannot carry non-Latin-1 text — and
+// as ?name= on the page socket. The server records writes as `link:<name>`.
+let linkName = "";
+
+function setLinkName(name) {
+  linkName = name || "";
+}
+
+function getLinkName() {
+  return linkName;
+}
+
 // Append the workspace to an in-app URL (links, history entries) so a reload
 // or a copied link lands in the same library. Share URLs never carry it.
 function withWorkspace(url) {
@@ -87,11 +102,12 @@ window.fetch = function (input, options) {
   const method = String(options?.method || input?.method || "GET").toUpperCase();
   const expectedAtStart = expectedUser;
   const started = performance.now();
-  if ((expectedUser || currentWorkspace) && isApi && !AUTH_PATHS.has(path)) {
+  if ((expectedUser || currentWorkspace || linkName) && isApi && !AUTH_PATHS.has(path)) {
     options = { ...(options || {}) };
     const extra = {};
     if (expectedUser) extra["X-Gamma-User"] = expectedUser;
     if (currentWorkspace) extra["X-Gamma-Workspace"] = currentWorkspace;
+    if (linkName) extra["X-Gamma-Name"] = encodeURIComponent(linkName);
     if (options.headers instanceof Headers) {
       options.headers = new Headers(options.headers);
       for (const [k, v] of Object.entries(extra)) options.headers.set(k, v);
@@ -124,6 +140,7 @@ window.fetch = function (input, options) {
       window.dispatchEvent(new CustomEvent("gamma-api-log", {
         detail: {
           message: `API ${method} ${path} → ${r.status} in ${timing}${explanation ? ` — ${explanation}` : ""}`,
+          tone: r.status >= 500 ? "error" : r.status >= 400 ? "warn" : "",
         },
       }));
     };
@@ -140,6 +157,7 @@ window.fetch = function (input, options) {
     window.dispatchEvent(new CustomEvent("gamma-api-log", {
       detail: {
         message: `API ${method} ${path} failed after ${elapsed} ms — ${error?.message || "network error"}`,
+        tone: "error",
       },
     }));
   });
@@ -147,7 +165,7 @@ window.fetch = function (input, options) {
 };
 // -----------------------------------------------------------------------------
 
-// One id generator for blocks, uploads and tasks alike (logseqPdfModel owns it
+// One id generator for blocks, uploads and tasks alike (blockModel owns it
 // so the pure model stays import-free).
 const makeId = makeBlockId;
 
@@ -328,27 +346,6 @@ async function apiJson(url, options = {}) {
   return r.json();
 }
 
-// Upload a zipped "Zotero RDF" export (shared by the Import dialog and the
-// Settings → Library row). Logs per-item problems to the console; returns
-// {data, summary} — summary is the ready-made status-line text.
-async function importZoteroZip(file, strip) {
-  const form = new FormData();
-  form.append("file", file);
-  form.append("strip", strip ? "true" : "false");
-  const data = await apiJson(`${API}/import/zotero`, { method: "POST", body: form });
-  const problems = (data.skipped?.length || 0) + (data.warnings?.length || 0);
-  [...(data.skipped || []), ...(data.warnings || [])].forEach((s) =>
-    console.warn(`Zotero import: ${s.title} — ${s.reason}`));
-  const summary = [
-    `${data.pages_created} new page${data.pages_created === 1 ? "" : "s"}`,
-    data.pages_merged ? `${data.pages_merged} updated` : "",
-    data.annotations_imported ? `${data.annotations_imported} annotations` : "",
-    data.notes_imported ? `${data.notes_imported} notes` : "",
-    problems ? `${problems} issue${problems === 1 ? "" : "s"} (details in the browser console)` : "",
-  ].filter(Boolean).join(" · ");
-  return { data, summary };
-}
-
 async function resolvePdfUrl(rawUrl, allowOa = true) {
   // {source_url, note} — note explains e.g. that an open-access preprint was
   // substituted because the published PDF is paywalled.
@@ -398,4 +395,4 @@ async function readNdjson(res, onBatch) {
   }
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, assetUrl, setCurrentWorkspace, getCurrentWorkspace, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, assetUrl, setCurrentWorkspace, getCurrentWorkspace, setLinkName, getLinkName, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };

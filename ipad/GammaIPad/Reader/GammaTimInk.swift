@@ -27,6 +27,7 @@ struct GammaTimInk {
     struct Stroke {
         let id: String
         let tool: String
+        let brush: String?
         let color: String
         let size: Double
         let opacity: Double
@@ -38,7 +39,7 @@ struct GammaTimInk {
         let samples: [Sample]
 
         func width(at sample: Sample) -> Double {
-            size * (tool == "pen" && pen ? 1 + 0.5 * (sample.p - 0.5) : 1)
+            size * (tool == "pen" && brush != "monoline" && pen ? 1 + 0.5 * (sample.p - 0.5) : 1)
         }
     }
     enum InkError: Error, LocalizedError {
@@ -69,13 +70,22 @@ struct GammaTimInk {
         }
         var strokes: [Stroke] = [], ids = Set<String>(), total = 0
         for raw in rawStrokes {
-            let s = try object(raw, keys: ["id", "tool", "color", "size", "opacity", "pen", "t0", "ch", "pts"])
+            let s = try object(raw, keys: ["id", "tool", "brush", "color", "size", "opacity", "pen", "t0", "ch", "pts"])
             let id = try text(s["id"])
             guard matches(id, "^[A-Za-z0-9_-]{1,32}$"), ids.insert(id).inserted else {
                 throw InkError.invalid("invalid or duplicate stroke id")
             }
             let tool = try text(s["tool"] ?? "pen")
             guard ["pen", "highlighter"].contains(tool) else { throw InkError.invalid("tool") }
+            // Missing/null retains legacy pressure width; monoline changes only
+            // rendering, never the recorded pressure or other sample channels.
+            let brush: String?
+            if let rawBrush = s["brush"], !(rawBrush is NSNull) {
+                brush = try text(rawBrush)
+                guard brush == "monoline", tool == "pen" else { throw InkError.invalid("brush") }
+            } else {
+                brush = nil
+            }
             let color = try text(s["color"] ?? "#1f1f1f")
             guard color.count <= 40, rgba(color) != nil else { throw InkError.invalid("color") }
             let size = try positive(s["size"] ?? 1.6, maximum: 100)
@@ -116,7 +126,7 @@ struct GammaTimInk {
                 }
                 samples.append(Sample(x: Double(x) / 100, y: Double(y) / 100, p: p, t: t, a: a, z: z))
             }
-            strokes.append(Stroke(id: id, tool: tool, color: color, size: size, opacity: opacity,
+            strokes.append(Stroke(id: id, tool: tool, brush: brush, color: color, size: size, opacity: opacity,
                                   pen: penNumber.boolValue, t0: t0, ch: ch, pts: pts, samples: samples))
         }
         return GammaTimInk(space: space, strokes: strokes)

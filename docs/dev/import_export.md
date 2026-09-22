@@ -39,18 +39,46 @@ the original is still embedded).
 ## The Import dialog
 
 The ⋮ menu's single "Import…" entry → `ImportDialog` in `transfers/ImportExport.jsx`, the
-export dialog's counterpart. Step one is a source card (annotations embedded
-in this PDF, a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes — one
-`.md` or a `.zip` such as a Notion export, or a Gamma export .zip); double-click
-or Next confirms. Only sources with an option get a review step: the strip
-switch, which applies to embedded annotations, including those inside Zotero's
-exported PDFs. Markdown, Logseq and Gamma open the file picker directly, with
-their preparation notes under the selected card. `resolveImport` in
-`transfers/transferFormats.js` decides both.
+export dialog's counterpart. Step one is a source card: annotations embedded
+in this PDF, a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes (one
+`.md` or a `.zip` such as a Notion export), or a Gamma export .zip. Double-click
+or Next confirms. Only sources with an option get a review step. That option is
+the strip switch, which applies to embedded annotations, including those
+inside Zotero's exported PDFs. Markdown, Logseq and Gamma open the file picker
+directly, with their preparation notes under the selected card.
+`resolveImport` in `transfers/transferFormats.js` decides both.
 Zotero is the default source (a numbered step guide reusing
 settingsKit's `Step`); with a PDF open, that PDF's own annotations win. Nothing
 is remembered: the switch starts from the Settings preference each time, so the
 setting stays the standing policy.
+
+Zotero, Markdown (ZIP or one file), Obsidian/Notion ZIPs and Gamma exports
+continue into the shared `transfers/ImportReviewDialog.jsx`: Upload → Review →
+Import → Summary. `importApi.js` supplies the format adapter, `xhrUpload.js`
+reports real uploaded/total bytes, and `importReview.js` owns selection,
+filtering and tree construction. Upload progress ends when the browser finishes
+sending bytes; checking/importing show an indeterminate progress bar. The report
+stays in the dialog, including warnings, without navigating or reloading the app.
+
+`POST /api/import/review` receives the file and its source (`zotero`,
+`markdown-zip`, `markdown-file`, `gamma`), optional folder and strip preference.
+It returns the two trees' data and a `review_id`. Import uses
+`POST /api/import/review/{id}` with JSON `{selected: [source item IDs]}`; it
+reuses the upload and checks current library state. Source IDs (and grouped
+`selection_ids` for duplicate Zotero records) make selection independent of
+destination IDs. Missing, Warnings and Selected filters only change visibility;
+hidden selections remain selected. Folder checkboxes affect descendants;
+Select all/Deselect all affect the whole plan. Nothing imports on preview or cancel.
+
+`gamma/import_staging.py` stores temporary uploads outside library data, bound
+to the account and workspace. Every request rechecks workspace write access.
+A filesystem claim prevents concurrent commit across workers, and the saved
+result makes a retry after a lost response safe. The payload is removed after
+success; closing review deletes its staging directory. Abandoned uploads expire
+after two hours and are cleaned on the next upload. Compressed uploads have a
+1 GB limit. This additive selection flow is separate from Settings' full backup
+replacement. Logseq and in-PDF annotations keep their existing source-specific
+import controls.
 
 ## Plain Markdown uploads
 
@@ -72,6 +100,10 @@ exports a toggle's content. In mixed folder uploads, Markdown note pages and PDF
 receive the same subfolder labels; unsupported files are skipped.
 
 ## Markdown zips: Obsidian vaults, Notion exports, Gamma exports, zipped notes
+
+Mermaid fences stay as editable Markdown through import/export and render as
+diagrams in the frontend. The diagram toolbar can download SVG separately;
+backend PDF exports retain code-block output. See [mermaid.md](mermaid.md).
 
 `POST /api/import/markdown-zip` (Import dialog → "Markdown notes", pick a
 `.zip`; `gamma/markdown_zip_import.py`) turns a zip of `.md` files into one
@@ -135,9 +167,12 @@ folder of notes, because they only differ in naming and link conventions
   the existing page, so re-importing an export adds nothing.
 
 The report's counts (`pages_created`, `pages_skipped`, `assets_stored`,
-`links_resolved`, `notion`) feed the status line, `warnings` go to the
-browser console, and `pages` lists up to 200 created pages (`id`, `title`,
-`folder`) for API callers. To make the round trip work the
+`links_resolved`, `notion`) and warnings appear in the shared dialog. `pages`
+lists selected pages and their destinations, including pages already in the library. The same engine's `preview=True`
+mode parses notes and checks assets without writing uploads or blocks; optional
+selection limits page creation and associated assets. Links to unselected new
+notes remain as written, with warnings. A selected note may still link to an
+already imported note. To make the round trip work the
 Markdown export writes the page's folder label into the front matter
 (`folder:`), relative to the exported folder — a folder export's root pages
 carry none — so importing the zip into a folder rebuilds the same tree there.
@@ -157,6 +192,26 @@ tags→`category`, notes→child blocks (`properties.zotero_note`), then runs th
 shared `import_embedded_annotations` (reader annotations arrive inside the
 exported PDFs; `strip` follows the client's embedded-annotations preference).
 Merging only fills gaps: existing meta/bibtex/files are kept, labels union.
+
+Choosing the ZIP opens the shared import review dialog. Its two trees show
+the archive (including empty directories and unused files) and the destination
+library (PDF/page, new/update, collection paths, notes). The active library
+folder becomes the import prefix. `POST /api/import/zotero/preview` accepts
+the same `file` and `folder`, requires workspace write access, and writes no
+pages or uploads. Both endpoints use `plan_zotero_archive`, so attachment
+resolution and warnings agree. The staged review flow reuses the upload,
+rechecks the current library, and leaves actual results and warnings in the dialog.
+
+The parser accepts standalone and inline PDF attachments, both MIME namespaces,
+and literal or resource paths. Lookup normalizes relative dot segments and
+percent encoding as well as ZIP filename encodings. If a filename changed,
+only a unique PDF in that same `files/<attachment-id>` directory can be used;
+ambiguous or cross-item matches are never guessed. Additional PDFs become
+separate pages in the item's collections, with stable attachment keys.
+Missing/invalid PDFs, unsupported or unlinked files, recovered filenames and
+preserved existing PDFs are reported. Empty directories do not supply PDF
+bytes; a URL in metadata is not a bundled attachment. Reimporting a complete
+export attaches a recovered PDF to an existing metadata-only page.
 
 ## Zotero RDF export
 
@@ -256,21 +311,22 @@ status line and the transfer row.
 ## The Export dialog
 
 The ⋮ menu's single "Export…" entry → `ExportDialog` in `transfers/ImportExport.jsx`.
-Step one is a format card: the PDF row contains Annotated PDF, the Notes row
-contains PDF and Markdown, and the ZIP row contains Obsidian, Logseq, Zotero
-and Gamma. Double-click or Next confirms. Formats with editable options get a
-review step: the Highlights, Notes and Bundle-the-files switches beside an
-illustrative page (`illustrations/TransferPreview.jsx`, an example of the
-options, not a render of the document). Gamma has fixed contents and a PDF
-without a stored copy can only be the original file, so both export straight
-from step one; Logseq shows only the bundle switch. The breadcrumb returns to
-the cards without losing edits. Both dialogs are a `SubDialog` (focus trap,
-Escape, backdrop) with its close-button header; the footer holds only Next or
-the final action. Zotero's post-export steps expand under "Open this export in
-Zotero". `transfers/transferFormats.js` owns the format table (label, category, hint,
-editable and fixed options, `EXPORT_SWITCH_TEXT`) and `resolveExport`, which
-turns the saved options into the controls, whether a review step is needed
-and the one payload the preview and the download share. Zotero highlights
+Step one is a format card. The PDF row holds Annotated PDF, the Notes row PDF
+and Markdown, the ZIP row Obsidian, Logseq, Zotero and Gamma. Double-click or
+Next confirms. Formats with editable options get a review step: the
+Highlights, Notes and Bundle-the-files switches beside an illustrative page
+(`illustrations/TransferPreview.jsx`, an example of the options, not a render
+of the document). Gamma has fixed contents, and a PDF without a stored copy
+can only be the original file, so both export straight from step one. Logseq
+shows only the bundle switch. The breadcrumb returns to the cards without
+losing edits. Both dialogs are a `SubDialog` (focus trap, Escape, backdrop)
+with its close-button header; the footer holds only Next or the final action.
+Zotero's post-export steps expand under "Open this export in Zotero".
+`transfers/transferFormats.js` owns the format table (label, category, hint,
+editable and fixed options, `EXPORT_SWITCH_TEXT`, the row order `CATEGORIES`)
+and `resolveExport`. The resolver turns the saved options into the controls,
+decides whether a review step is needed, and builds the one payload the
+preview and the download share. Zotero highlights
 live inside bundled PDFs, so turning bundling off disables Highlights without
 changing the saved preference. The chosen format and options are remembered
 in `localStorage` (`gamma-export-opts`). The switches are query flags on two
@@ -448,6 +504,12 @@ flipped into user space by one `cm`. `pdf_image.XObjectStore` is the shared
 upload → image-XObject registry.
 
 ## Annotated-PDF export
+
+Both the annotation and visible-note writers use `ExportPdfReader`, which
+resolves dangling indirect references to PDF null objects. Some otherwise
+readable PDFs contain missing optional objects; PyPDF2 returns Python `None`
+for these and its writer otherwise fails with a blank `AssertionError`.
+The repair is in memory during export; the stored original is unchanged.
 
 `/api/pages/{id}/export-pdf`: highlights become standard `/Highlight` (or
 `/Square` for area notes) annotations with the note text in the popup

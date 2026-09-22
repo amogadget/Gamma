@@ -36,6 +36,51 @@ docker run -p 9001:9001 -v gamma-data:/data ghcr.io/tim4431/gamma
 
 ## Tests
 
+### Local changes: test the affected modules
+
+Default to the smallest set of tests that covers the changed behavior and its
+direct consumers. Do not run the full backend suite, all frontend tests, or
+the full browser suite after every edit. Once relevant checks pass, repeat
+them only after further relevant changes or when a failure needs investigation.
+
+- Backend changes: select the relevant `tests/test_*.py` files. Prefer whole
+  files because tests within a file can depend on earlier tests. For a few
+  files, omit `-n auto` to avoid starting a worker per CPU.
+- Frontend pure-module changes: invoke `node --test` with the relevant test
+  files directly. `npm test` always includes the full module suite.
+- UI behavior changes: run the relevant browser flow with `--only`, building
+  once after the final frontend edit so the suite sees current code. Select
+  a complete flow by its step-name prefix, rather than an isolated dependent
+  step. Check that the intended steps actually ran. A pure-module change
+  does not automatically require a build or browser run.
+- Shared contracts and helpers: include tests for affected consumers. For
+  example, changes to shared normalization cases need both Python and Node
+  coverage; auth, workspace access, migrations, and block storage may require
+  several related suites. Broaden further when the impact cannot be bounded.
+- Documentation-only changes: check the diff and referenced commands/paths;
+  application tests and builds are unnecessary.
+
+Examples (paths are relative to the indicated directory):
+
+```bash
+# From backend/: OAuth behavior and its MCP integration
+python -m pytest tests/test_mcp_oauth.py tests/test_mcp.py -q
+
+# From frontend/: settings module behavior
+node --test tests/settings.test.mjs
+
+# From frontend/: settings UI behavior (build once before the browser run)
+npm run build
+npm run e2e -- --only settings
+```
+
+Report which checks ran and any relevant coverage gaps. Full suites remain
+the PR CI safety net in `.github/workflows/check.yml`; run them locally for
+broad changes, an explicit request, or unresolved regression concerns.
+Selection is manual: there is no automatic changed-file dependency analysis.
+
+### Full backend suite
+
 ```bash
 cd backend
 pip install -r requirements-dev.txt   # pytest, pytest-xdist, httpx
@@ -87,7 +132,9 @@ ops), `blockHistory` (the undo classifier) and `menuAim` (the safe-triangle
 geometry). A module is testable there when its relative imports carry the
 `.js` extension (node resolves nothing else); modules that import React can
 still be imported for their pure exports. Actual React rendering and
-interactions are exercised by the browser suite below.
+interactions are exercised by the browser suite below, plus one standalone
+browser regression: `npm run e2e:latex` bundles the block
+editor with esbuild over an in-memory fixture ([latex_editing.md](latex_editing.md)).
 
 ### Browser end-to-end suite
 
@@ -105,7 +152,7 @@ High-zoom tablet regressions: `npm run e2e -- --only "pdf touch" --keep`.
 `GAMMA_E2E_BROWSER=webkit` (after `npx playwright install webkit`) runs the
 suite in WebKit. Native touch gestures need Chromium's CDP, so under WebKit
 the touch scenario checks only the 400% PDF/ink paint and bitmap release at
-tablet dimensions and DPR 2. Browser emulation, not an iPad measurement.
+tablet dimensions and DPR 2. That is browser emulation, not an iPad measurement.
 
 `frontend/tests/e2e/run.mjs` starts an ISOLATED backend (the project venv's
 python — or the interpreter `GAMMA_E2E_PYTHON` names — over a fresh
@@ -121,8 +168,20 @@ cookie + `X-Gamma-Workspace` for API seeding, browser contexts logged in as
 that account), `makePdf` (a small real PDF with a text layer), and `step()`.
 The scenarios live in `tests/e2e/scenarios/`:
 
+- `mermaid.mjs`: note/chat diagrams, streaming fences, editing, source copying,
+  SVG downloads, theme changes and Markdown round trips. Run with `--only mermaid`;
+  implementation details in [mermaid.md](mermaid.md).
 - `mentions.mjs`: paper search, keyboard and touch selection, reference limits,
   persistence, PDF receipts and textarea shrink after clearing context. Run with `--only mentions`.
+- `chatNavigation.mjs`: a library or PDF chat reply keeps streaming and is
+  saved while the user navigates away and back, before or after it finishes.
+  `--only "chat navigation"`.
+- `mirror.mjs`: Settings → Workspaces → Clones — the server clones one of
+  its own workspaces through the dialog with a write token made via the
+  API: Sync, the empty conflicts list, opening the clone, the sync pill's
+  log and settings (cadence, detach, reattach), a same-block conflict
+  resolved on its row chip, Remove origin ([mirror.md](mirror.md)).
+  `--only mirror`.
 
 - `notes.mjs`: New page → title → first block (the seed-block insert),
   Shift+Enter / Tab / Shift+Tab / Backspace, Enter as a line break vs the
@@ -135,25 +194,32 @@ The scenarios live in `tests/e2e/scenarios/`:
   highlighting its quote on the cited page ([pdf_citations.md](pdf_citations.md)).
 - `transfers.mjs`: the Import and Export dialogs — format/source cards,
   the review step and its switches, direct export for fixed formats.
-- `ink.mjs`: handwriting — the tool strip and its presets (options row,
-  duplicate, remove, persistence), two mouse strokes becoming an
-  ink block with an `.ink` upload, persistence across a reload, the eraser
-  (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
-  lasso move + delete, the notes card's jump + outline, `/Ink` in the
-  exported PDF; pen input (coalesced sample timing, pressure and lift
-  endpoints in the uploaded file, transient prediction, palm suppression,
-  palm-first pen takeover, cleanup after `pointercancel` / lost capture);
-  Chromium's native touch and pen (finger drawing without panning, pen
-  pressure in Hand mode, finger scrolling without ink in pen-only mode);
-  synthetic Pencil events for Safari's handler order. Stylus latency and OS
-  palm rejection still need a real tablet.
-- `inkEditing.mjs`: tap-to-select and the selection menu — colour/width
+- `ink.mjs`: handwriting. The tool strip and its presets, mouse strokes
+  becoming an ink block with an `.ink` upload, persistence across a reload,
+  the eraser, stroke undo/redo, the partial eraser, a lasso move + delete,
+  the notes card's jump + outline, `/Ink` in the exported PDF. Pen input:
+  coalesced sample timing, pressure and lift endpoints in the uploaded
+  file, prediction, palm suppression and palm-first pen takeover, cleanup
+  after `pointercancel` / lost capture. Chromium's native touch and pen,
+  and synthetic Pencil events for Safari's handler order. Stylus latency
+  and OS palm rejection still need a real tablet.
+- `inkEditing.mjs`: tap-to-select and the selection menu. Colour/width
   edits keeping pressure and time, duplicate ids, selective delete, the
   Undo/Redo buttons, a finger lasso-move across groups in pen-only mode,
-  swipe/hold arbitration, a pen resuming through a selection, menu placement
-  on a small screen, view/edit shares; native Chromium touch/pen, asserting
-  on the persisted stroke files. `--only "ink edit:"`; `--only ink` runs
-  both files.
+  swipe/hold arbitration, a pen resuming through a selection, menu
+  placement on a small screen, view/edit shares. Native Chromium touch/pen,
+  asserting on the persisted stroke files. `--only "ink edit:"`; `--only
+  ink` runs both files.
+- `guide.mjs`: the first-run guide ([onboarding.md](onboarding.md)) — `?guide=`
+  starts a tour and is consumed from the URL, every registered home-view anchor
+  is present once, the demo step adds a paper by itself (pointed at an
+  uploaded PDF through `gamma-guide-vars`, so no network), the user's
+  highlight checks the next step off, Esc leaves and records the dismissal,
+  the account menu's "Take the tour" restarts it.
+- `ipad.mjs`: the installed web app ([ipad.md](ipad.md)) — the manifest
+  and its icons, `theme-color` following the theme, the standalone-mode
+  block in the bundled stylesheet (`display-mode` cannot be emulated in
+  Chromium). `--only ipad`.
 - `pdfTouch.mjs`: 400% rendering under an emulated canvas limit, distant-page
   release/repaint, live ink, native touch swipes ([pdf_loading.md](pdf_loading.md)).
   `--only "pdf touch"`.
@@ -195,17 +261,28 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
 ## Debugging surfaces
 
 - **Server log** — Settings → Server → "Server log" (admin only): the
-  in-memory ring buffer behind `GET /api/admin/logs`. Backend code must log
-  through `gamma/logbuf.py`'s `log` (never `print()`); secrets are masked at
-  insert time. Gone on restart.
+  in-memory ring buffer behind `GET /api/admin/logs`, filterable to
+  warnings / errors; the Dashboard above it counts them since startup and
+  shows the build and the update check. Backend code must log through
+  `gamma/logbuf.py`'s `log` (never `print()`); use `log.warning` for what an
+  admin should notice. Secrets are masked at insert time. Gone on restart.
 - **Session log + debug tracing** — Settings → Advanced: browser-side event
   log; the "Debug logging" toggle traces reading-position/restore/sync
   events into it and the console. Every PDF load phase lands here as
   `pdf <phase> +<ms>` (ms since the viewer started opening that url) and as
   a `performance.mark("pdf-<phase>")` for devtools' Performance panel — the
   phases and what a healthy open looks like: [pdf_loading.md](pdf_loading.md).
-- **Background tasks** — the tasks popover (`GET /api/tasks`) shows indexing
-  and download progress. The client polls it every 2 s only while the popover
+- **Background tasks** — the tasks popover shows every client-side job
+  (downloads, uploads, imports, metadata / citation / title / translation AI
+  jobs) and the server's indexing (`GET /api/tasks`). A row carries a
+  progress bar while the work can measure itself (bytes, translated pages,
+  indexed papers) and a stop button (hover) while it can be stopped: the
+  viewer's download and the export download abort their fetch, uploads abort
+  their XHR, the AI jobs and zip imports abort their request, translation
+  halts the engine, indexing asks the server (`DELETE /api/tasks/indexing`,
+  which finishes the current paper and skips the rest). A stopped row reads
+  "stopped" and ignores the job's own late reports (`cancelledTransfersRef`
+  in App.jsx). The client polls `/api/tasks` every 2 s only while the popover
   is open or indexing is known to run; otherwise a 60 s heartbeat, and
   nothing at all while the tab is hidden (one refresh when it comes back).
   Anything that starts indexing (the search panel's library query, the
@@ -242,4 +319,10 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
   fetch wrapper, `?ws=` on the websocket and in URLs); a 403 "not a member"
   on an otherwise fine request means the tab's workspace is not the one you
   expect — the id is in the URL.
+- An AI reply ending in "lost the connection to the server (network
+  error)" means the browser→Gamma connection was cut mid-stream, not that the
+  provider failed (that comes back in-band as "AI call failed: …"). The
+  streams send a keepalive line every 15 s of silence ([ai.md](ai.md)) and
+  the server logs `client closed the stream after Ns`; if it still happens,
+  a proxy in front of Gamma is closing idle responses sooner than that.
 - Timestamps are UTC ISO strings with `Z` (`page_now()`); keep the format.

@@ -1,18 +1,17 @@
-import { chromium, configureContext } from './runtime.mjs';
+// Records docs/assets/demos/demo-reference-links.webp source: click citation 36,
+// jump to its reference, fetch the linked paper. Prepared by
+// `run-case.mjs reference-links` (arXiv 0904.2557 removed so Fetch appears).
+import { chromium, configureContext, addCursor, pointer, readSession, BASE, CURATED } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
-const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
-const BLOCK = 'fy0-h_BqOHcH';        // "A quantum processor based on coherent transport of entangled atom arrays"
+const SESSION = readSession(SCRATCH);
+const BLOCK = CURATED.atoms;        // "A quantum processor based on coherent transport of entangled atom arrays"
 const VW = 1440, VH = 900;
 const beat = (ms) => page.waitForTimeout(ms);
 
 // Keep the app at its normal zoom. render-suite.py crops a fixed detail view
 // using the marks and citation/reference coordinates captured below.
-
-let cx = VW / 2, cy = VH / 2;
-async function glide(x, y, steps = 26) { await page.mouse.move(x, y, { steps }); cx = x; cy = y; await beat(120); }
 
 async function citationAnchor() {
   return await page.evaluate(() => {
@@ -107,20 +106,10 @@ const ctx = await browser.newContext({
 });
 await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
-await ctx.addInitScript(() => {
-  window.addEventListener('DOMContentLoaded', () => {
-    const c = document.createElement('div');
-    c.style.cssText = 'position:fixed;z-index:2147483647;width:16px;height:16px;border-radius:50%;'
-      + 'background:rgba(20,20,20,.35);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);'
-      + 'pointer-events:none;left:0;top:0;margin:-9px 0 0 -9px;transition:transform .05s linear';
-    document.body.appendChild(c);
-    addEventListener('mousemove', e => c.style.transform = `translate(${e.clientX}px,${e.clientY}px)`, true);
-    addEventListener('mousedown', () => c.style.background = 'rgba(60,120,255,.6)', true);
-    addEventListener('mouseup', () => c.style.background = 'rgba(20,20,20,.35)', true);
-  });
-});
+await addCursor(ctx);
 
 const page = await ctx.newPage();
+const { glide } = pointer(page, VW / 2, VH / 2);
 const T0 = Date.now();
 const mark = () => (Date.now() - T0) / 1000;
 const M = {};

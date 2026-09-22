@@ -1,4 +1,5 @@
 import React from "react";
+import { MenuSelect } from "../shared/ui/Menus";
 import { API, apiJson, setExpectedUser } from "../shared/lib/utils";
 import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
 
@@ -102,11 +103,9 @@ export default function McpConsent({ requestId }) {
     {details ? <>
       <p><strong>{details.client_name}</strong> wants to connect to Gamma.</p>
       <p className="loginConflictHint">Signed in as <strong>{details.username}</strong>.</p>
-      <label htmlFor="mcpWorkspace">Workspace</label>
-      <select id="mcpWorkspace" className="loginInput" value={workspace} disabled={busy}
-        onChange={(event) => setWorkspace(event.target.value)}>
-        {details.workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select>
+      <label>Workspace</label>
+      <MenuSelect label="Workspace" block value={workspace} onChange={setWorkspace}
+        options={details.workspaces.map((item) => [item.id, item.name])} />
       <div className="mcpPermissions">
         <strong>Read-only access</strong>
         <ul><li>Read pages, notes, highlights, and PDF text.</li>
@@ -114,7 +113,7 @@ export default function McpConsent({ requestId }) {
         <p className="loginConflictHint">Content the assistant reads is shared with its provider.</p>
       </div>
       <p className="loginConflictHint">Access lasts 90 days. Disconnect anytime in
-        Settings → AI → External assistants.</p>
+        Settings → AI → Integrations.</p>
       <details className="mcpConnectionDetails"><summary>Connection details</summary>
         <p className="loginConflictHint">The assistant provided its name. Only approve if you started this connection.</p>
         <p className="loginConflictHint mcpCallback">Returns to: {details.redirect_uri}</p>

@@ -6,7 +6,7 @@
   padding: 0 4px;
 }
 .carouselLabel {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -27,7 +27,7 @@
 .carouselTrack::-webkit-scrollbar {
   display: none;
 }
-/* The shared home card (PageCard in fileBrowser.jsx): a cover — page snapshot
+/* The shared home card (PageCard in library/FileBrowser.jsx): a cover — page snapshot
    when available, else the file/folder glyph — over a footer of title + label
    chips + kind/time. ONE geometry for every surface (both carousels, the
    pinned strip, the grid): a 16/10 cover, two reserved title lines and one
@@ -64,6 +64,15 @@
   border-color: var(--border);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
+/* Keep the gray Gamma cards distinct without bringing back white surfaces. */
+[data-theme="gamma-light"] .pageCard {
+  border-color: var(--border);
+  box-shadow: 0 1px 3px rgba(45, 40, 28, 0.12);
+}
+[data-theme="gamma-light"] .pageCard:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 3px 9px rgba(45, 40, 28, 0.16);
+}
 /* .selected / .dragOver are shared with the list rows — see the :is() rules
    next to .fileRow / .folderRow below (they must sit after those :hover
    rules to win when both apply). */
@@ -94,7 +103,7 @@
   align-self: stretch;
   width: 100%;
   padding: 9px 11px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui-font-scale, 1));
   line-height: 1.4;
   color: var(--text-muted);
   text-align: left;
@@ -114,7 +123,7 @@
 }
 .pageCardTitle {
   min-height: 2.6em;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-font-scale, 1));
   line-height: 1.3;
   font-weight: 500;
   word-break: break-word;
@@ -127,12 +136,12 @@
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui-font-scale, 1));
 }
 .pageCardTime { margin-left: auto; color: var(--text-dim); white-space: nowrap; }
-:is(.pageCardKind, .fileRowKind) { font-size: 9.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+:is(.pageCardKind, .fileRowKind) { font-size: calc(9.5px * var(--ui-font-scale, 1)); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
 .pageCardCount {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   background: var(--bg-raised);
   border-radius: 999px;
@@ -191,7 +200,7 @@
   border: 1px dashed transparent;
   background: none;
   font: inherit;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   text-align: left;
   width: 100%;
   user-select: none;
@@ -213,20 +222,20 @@
   white-space: nowrap;
 }
 .folderCount {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   background: var(--bg-raised);
   border-radius: 999px;
   padding: 1px 8px;
   flex-shrink: 0;
 }
-.folderHint { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+.folderHint { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-dim); flex-shrink: 0; }
 .folderBackRow svg { color: var(--text-muted); }
 .folderCurrent {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
+  font-size: calc(16px * var(--ui-font-scale, 1));
   font-weight: 600;
   color: var(--text-primary);
   padding: 4px 10px 8px;
@@ -238,7 +247,7 @@
 .folderNewInput {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   padding: 3px 8px;
 }
 .folderNewInput:focus { border-color: var(--accent-dark); }
@@ -262,7 +271,7 @@
   padding: 2px 10px 6px;
 }
 .homeListLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -276,7 +285,7 @@
   border-radius: 999px;
   color: var(--text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   padding: 5px 14px;
   cursor: pointer;
 }
@@ -305,7 +314,7 @@
   background: none;
   padding: 0;
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-primary);
 }
 .homeFindInput:focus { outline: none; box-shadow: none; }
@@ -393,14 +402,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   color: var(--text-primary);
 }
 .fileRowRename {
   flex: 1;
   min-width: 0;
   border-color: var(--accent-dark);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   padding: 2px 6px;
 }
 /* type/size comes from the shared :is(.pageCardKind, .fileRowKind) rule */
@@ -424,7 +433,7 @@
   background: var(--bg-raised);
   border-radius: 4px;
   padding: 0 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   white-space: nowrap;
 }
 /* line the folder-row icon up with the file-row icon column */
@@ -435,7 +444,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -473,7 +482,7 @@
 .tileRenameInput {
   width: 100%;
   border-color: var(--accent-dark);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   padding: 2px 6px;
 }
 
@@ -505,5 +514,5 @@
   background: var(--bg-raised);
   border-radius: 4px;
   padding: 0 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
 }

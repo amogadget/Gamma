@@ -1,14 +1,9 @@
 # App.jsx decomposition plan
 
-Status: file organization implemented, 2026-09-16; state decomposition remains
-proposed. The [source map](../../frontend/src/README.md) describes the current
-functional folders. They sit directly under `src/`, alongside `app/` and
-`shared/`, without an extra `features/` layer. Existing modules have moved;
-their state ownership has not been redesigned.
-
-The organization pass also moved the highlight palette to
-`shared/model/highlightColors.js` and made App import transfer dialogs directly
-from `transfers/ImportExport.jsx`, removing their re-export through shared widgets.
+The file organization is in place ([source map](../../frontend/src/README.md):
+functional folders directly under `src/`, alongside `app/` and `shared/`,
+without an extra `features/` layer). The state decomposition below is a
+proposal: modules have moved, their state ownership has not been redesigned.
 
 ## Goal and current constraints
 
@@ -25,8 +20,8 @@ may carry a PDF attachment.
 
 ## Proposed ownership
 
-Paths below are relative to `frontend/src/`. Existing folders now hold the
-relocated files; new hooks and state owners in this table remain proposals.
+Paths below are relative to `frontend/src/`. The folders exist; the hooks
+and state owners in this table are proposals.
 
 | Module or area | Responsibility | Existing code to extract |
 |---|---|---|
@@ -41,7 +36,7 @@ relocated files; new hooks and state owners in this table remain proposals.
 | `workspace/` | Dock arrangement, visibility, panel sizes, drag geometry, and phone presentation | `moveWindow`, `startWindowDock`, `renderSlotGroup`, per-page layout snapshots |
 | `pdf/` | Viewer controls, PDF/notes jumps, scroll restoration, translation, and snapshots | Existing viewer/translation files, `restorePdfScroll`, zoom and capture logic |
 | `transfers/` | Upload/import/export operations and progress reporting | `uploadFiles`, format imports, backup transfer functions, `runExport`, transfer rows |
-| `sharing/` | Share-link resolution/gates and owner share controls | `resolveShare`, `loadShareSettings`, invitation mutations, share popover |
+| `sharing/` | Share-link resolution/gates and owner share controls | `resolveShare`, `loadShareSettings`, invitation mutations (the popover itself, `SharePopover.jsx`, already lives here) |
 | `settings/` | Settings panels and AI provider form/request state | Existing settings files plus provider CRUD, catalog, OAuth, and usage handlers |
 | `chat/` | Chat attachments and page-change notifications | `addBlockToChat`, `addHighlightToChat`, image selection, existing `ChatDock` |
 | `shared/ui/`, `shared/lib/` | Reusable controls, API transport, and small shared functions | Menus, icons, selected parts of `shared/ui/Widgets.jsx` and `shared/lib/utils.js` |
@@ -81,8 +76,7 @@ restoration and typing groups.
 
 The existing `collaboration/collabSession.js` already serializes op batches
 per page and retains pending page sessions across navigation. The module tests
-cover navigating during a slow save and retrying failed batches; the former
-single pending-save slot is no longer the implementation. Preserve `flush`
+cover navigating during a slow save and retrying failed batches. Preserve `flush`
 and `hasPending`, the current typing/structural debounce policy (350/80 ms),
 and immediate commits where requested. Audit account changes and callers such
 as cross-page block moves before extracting more state: they must await the
@@ -140,8 +134,8 @@ provider/model and refresh commands rather than every form setter.
 
 Split `shared/ui/Widgets.jsx` by ownership: generic controls stay shared; transfer
 dialogs, workspace docks, and chat/editor rendering belong with their feature.
-Shared highlight colors now live in `shared/model/highlightColors.js`, so the
-block editor no longer imports the viewer for constants. Split `shared/lib/utils.js` into API transport and
+The highlight palette is `shared/model/highlightColors.js`, so the block
+editor does not import the viewer for constants. Split `shared/lib/utils.js` into API transport and
 domain helpers as actual consumers are moved; avoid another catch-all folder.
 
 ## Implementation order
@@ -166,9 +160,9 @@ domain helpers as actual consumers are moved; avoid another catch-all folder.
    transfers, sharing, metadata, and chat integration into their owners. Features
    communicate via explicit callbacks such as `onPageChanged` and
    `onTransferUpdated`, not an application-wide bag of setters.
-6. **Finish the composition root and styles.** App is now in `app/`, library and
-   settings CSS are colocated, and `main.jsx` retains the stylesheet order.
-   Continue reducing App's responsibilities and split the remaining shared
+6. **Finish the composition root and styles.** App lives in `app/`, library and
+   settings CSS are colocated, and `main.jsx` keeps the stylesheet order.
+   Reduce App's responsibilities further and split the remaining shared
    styles only when cascade interactions can be checked.
 
 Each stage should build and remain usable on its own. Keep file moves and

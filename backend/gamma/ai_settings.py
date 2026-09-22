@@ -108,6 +108,7 @@ def ai_runtime(user: str) -> dict:
     if dirty:
         save_provider_entries(user, entries)
     return {
+        "user": user,  # whose config this is — the usage recorder's key
         "providers": providers,
         "models": models,
         "default": models[0] if models else None,

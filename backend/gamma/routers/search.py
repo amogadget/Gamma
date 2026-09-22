@@ -45,6 +45,7 @@ _MAX_PAGE_CHARS = 20000   # per page
 
 _index_threads: dict[str, threading.Thread] = {}
 _index_progress: dict[str, dict] = {}  # workspace -> {"total": n, "done": m}
+_index_stop: set[str] = set()          # workspaces whose running indexer was asked to stop
 _index_lock = threading.Lock()
 
 
@@ -87,9 +88,13 @@ def _index_missing_async(ws: str, doc_ids: list[str]) -> bool:
         if t and t.is_alive():
             return False
 
+        _index_stop.discard(ws)
+
         def run():
             prog = _index_progress[ws] = {"total": len(doc_ids), "done": 0}
             for d in doc_ids:
+                if ws in _index_stop:
+                    break  # the rest stays stamped stale: the next search finishes the job
                 _index_doc(ws, d)
                 prog["done"] += 1
 
@@ -137,6 +142,21 @@ def background_tasks(request: Request):
         t = _index_threads.get(ws)
         prog = _index_progress.get(ws) or {"total": 0, "done": 0}
         return {"indexing": {**prog, "active": bool(t and t.is_alive())}}
+
+
+@router.delete("/tasks/indexing")
+def stop_indexing(request: Request):
+    """The tasks popover's stop button: the workspace's running indexer
+    finishes the paper it is on and skips the rest (they stay stamped stale,
+    so the next search picks them up). ``cancelled`` says whether one was
+    running."""
+    ws = require_ws(request, write=True)
+    with _index_lock:
+        t = _index_threads.get(ws)
+        running = bool(t and t.is_alive())
+        if running:
+            _index_stop.add(ws)
+    return {"cancelled": running}
 
 
 @router.get("/search")

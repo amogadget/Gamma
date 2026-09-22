@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
+import { MergeChip } from "../collaboration/MergeResolver";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -11,6 +12,8 @@ import { withLegacyAccessors } from "../shared/model/blockModel";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { InkCard } from "../ink/InkLayer";
 import { handleMarkdownCopy } from "../shared/ui/Widgets";
+import { MermaidDiagram, mermaidCodeProps } from "../shared/ui/MermaidDiagram";
+import { mapOutsideCodeFences, remarkMermaid, setMermaidWidth } from "../shared/lib/mermaidMarkdown.js";
 import { LinkIcon, PenIcon } from "../shared/ui/Icons";
 import { FileChip, parseUploadUrl, postFile, uploadFilesAsLines } from "../transfers/FileChip";
 import {
@@ -18,6 +21,7 @@ import {
   LatexAcPopup, MathLivePreview, mathTabJump,
 } from "./LatexEditor";
 import { BlockCmEditor, scanMathSpans } from "./BlockCmEditor";
+import { expandBlankLines } from "./mdMarks";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { filterSlashCommands, SlashMenuPopup } from "./SlashMenu";
 import { remarkCallouts } from "./callouts";
@@ -111,6 +115,10 @@ function applyOutsideSpans(text, spans, fn) {
 }
 
 function mdPreprocess(content, nested) {
+  return mapOutsideCodeFences(content, (prose) => mdPreprocessProse(prose, nested));
+}
+
+function mdPreprocessProse(content, nested) {
   // The editor centres every $$…$$ on its own row (cmMathDisplay); remark-math
   // only does that when the fences sit alone on their lines (same-line content
   // becomes "meta" and is dropped — raw source in the rendered view). So a
@@ -118,6 +126,10 @@ function mdPreprocess(content, nested) {
   // (blank-line separated, KaTeX display mode → centred like the editor); one
   // embedded mid-sentence collapses onto one line instead, which remark-math
   // reads as inline math and the sentence stays intact.
+  // Two or more blank lines stay visible (expandBlankLines): markdown would
+  // fold them into the one paragraph break. Done first and outside math, so
+  // a blank line the display-math reshape below adds is never counted.
+  content = applyOutsideSpans(content, scanMathSpans(content).map((s) => ({ from: s.from, to: s.to })), expandBlankLines);
   const displays = scanMathSpans(content).filter((s) => s.display);
   for (let i = displays.length - 1; i >= 0; i--) {
     const s = displays[i];
@@ -240,7 +252,7 @@ function toggleTaskMarker(content, idx, checked) {
 }
 
 // The file chip (`[name](/api/uploads/<hash>.ext)`, what a dropped file
-// becomes) and the upload helpers live in fileChip.jsx.
+// becomes) and the upload helpers live in transfers/FileChip.jsx.
 
 // The files on a clipboard (a screenshot, files copied in the file manager):
 // what a paste uploads instead of inserting text.
@@ -283,10 +295,26 @@ function useMathUi() {
     const before = ta.value.slice(seg.start, cursor);
     const mEnv = before.match(/\\begin\{([a-zA-Z*]*)\}?$/);
     const m = mEnv ? null : before.match(/\\([a-zA-Z]+)$/);
+    // The completion popup hangs off the caret; the preview is docked to the
+    // editor column (dock = its content box) above the span's first line
+    // — stable while typing inside a multi-line $$ block — with the caret
+    // line as the fallback when the span's edges are off screen
+    // (useCaretAnchored). `caret` marks the typing spot in the preview.
+    const previewRect = () => {
+      const box = ta.getBoundingClientRect();
+      const first = ta.caretCoords(seg.start), last = ta.caretCoords(seg.end), at = ta.caretCoords(cursor);
+      return {
+        left: first.left, top: first.top, bottom: last.bottom,
+        caretTop: at.top, caretBottom: at.bottom,
+        dock: { left: box.left, right: box.right },
+      };
+    };
     const next = {
       tex: ta.value.slice(seg.start, seg.end),
       display: seg.display,
+      caret: cursor - seg.start,
       anchor: { ...ta.caretCoords(cursor), getRect: () => ta.caretCoords(cursor) },
+      previewAnchor: { ...previewRect(), getRect: previewRect },
       ac: null,
     };
     setMathUi((prev) => {
@@ -301,7 +329,18 @@ function useMathUi() {
     if (typing) setMathAcIdx(0);
   }
 
-  return { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi };
+  // Accept an autocomplete entry into the editor `ta` and close the popup.
+  function acceptCompletion(ta, c) {
+    if (!ta || !mathUi?.ac) return;
+    const { start } = mathUi.ac;
+    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
+    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
+    setMathUi(null);
+    ta.focus();
+    updateMathUi(ta, false);
+  }
+
+  return { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion };
 }
 
 // ![[id]] transclusion: the referenced block's content rendered in a card.
@@ -315,7 +354,7 @@ function useMathUi() {
 // card is the jump link.
 function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEdit }) {
   const [draft, setDraft] = useState(null); // non-null while editing in place
-  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi } = useMathUi();
+  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion } = useMathUi();
   const editorRef = useRef(null);
   const editable = !!onEmbedEdit && refBlock?.content != null;
 
@@ -331,16 +370,7 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
     });
   };
 
-  function acceptLatexAc(c) {
-    const ta = editorRef.current;
-    if (!ta || !mathUi?.ac) return;
-    const { start } = mathUi.ac;
-    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
-    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
-    setMathUi(null);
-    ta.focus();
-    updateMathUi(ta, false);
-  }
+  function acceptLatexAc(c) { acceptCompletion(editorRef.current, c); }
 
   // Paste while editing: files upload and insert at the caret (images
   // inline, anything else — a PDF copied from the file manager — as a file
@@ -396,10 +426,15 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
       const v = applyTableEdit(refBlock?.content || "", idx, op);
       if (v != null && v !== refBlock?.content) onEmbedEdit?.(refId, v);
     },
+    mermaid: (idx, width) => {
+      const v = setMermaidWidth(refBlock?.content || "", idx, width);
+      if (v != null && v !== refBlock?.content) onEmbedEdit?.(refId, v);
+    },
   };
   const stableTask = useRef((i, c) => toolsRef.current.task(i, c)).current;
   const stableImg = useRef((i, a, p) => toolsRef.current.img(i, a, p)).current;
   const stableTbl = useRef((i, o) => toolsRef.current.tbl(i, o)).current;
+  const stableMermaid = useRef((i, w) => toolsRef.current.mermaid(i, w)).current;
 
   return (
     <span
@@ -463,14 +498,15 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
             onBlockRefClick={onBlockRefClick} nested
             onTaskToggle={editable ? stableTask : undefined}
             onImageEdit={editable ? stableImg : undefined}
-            onTableEdit={editable ? stableTbl : undefined} />
+            onTableEdit={editable ? stableTbl : undefined}
+            onMermaidEdit={editable ? stableMermaid : undefined} />
         ) : (
           <span className="blockPlaceholder">embedded note…</span>
         )}
       </span>
       {draft != null && mathUi ? (
         <>
-          <MathLivePreview tex={mathUi.tex} display={mathUi.display} anchor={mathUi.anchor} />
+          <MathLivePreview tex={mathUi.tex} display={mathUi.display} anchor={mathUi.previewAnchor} caret={mathUi.caret} />
           {mathUi.ac ? (
             <LatexAcPopup items={mathUi.ac.items} selected={mathAcIdx} anchor={mathUi.anchor} onPick={acceptLatexAc} />
           ) : null}
@@ -490,10 +526,11 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
 
 // Fenced code in the rendered view: react-markdown hands us
 // <pre><code class="language-x">text</code></pre>; re-render it through
-// highlight.js with a small language badge. Inline `code` is untouched.
+// highlight.js with a small language badge (a ```mermaid fence becomes a
+// diagram instead — BlockMarkdown's `pre`). Inline `code` is untouched.
 // The copy button is the shared DOM one (makeCopyButton — same behavior as
 // the editor's code card), mounted once outside React's reconciliation.
-function CodePre({ children }) {
+function HighlightedCodePre({ children }) {
   const codeProps = React.Children.toArray(children).find((c) => c?.props)?.props || {};
   const lang = /language-([\w+#-]+)/.exec(codeProps.className || "")?.[1] || "";
   const raw = textOf(codeProps.children).replace(/\n$/, "");
@@ -521,14 +558,15 @@ function CodePre({ children }) {
 // labels are resolved by the caller so the comparison here stays a string
 // check. onBlockRefClick/onTaskToggle are deliberately excluded from the
 // comparison — the caller passes identity-stable wrappers.
-const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refLabels, onBlockRefClick, onTaskToggle, onEmbedEdit, onImageEdit, onTableEdit, nested }) {
+const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refLabels, onBlockRefClick, onTaskToggle, onEmbedEdit, onImageEdit, onTableEdit, onMermaidEdit, nested }) {
   // GFM task-list checkboxes render in document order; this counter maps the
   // nth rendered checkbox back to the nth `[ ]`/`[x]` marker in the source so
   // clicking one toggles the right marker. Reset per render — the whole
   // element tree is rebuilt whenever this component re-renders.
-  // imgIdx/tableIdx do the same for images and tables (mdTools scans the
-  // source with matching rules, so the nth rendered one is the nth scanned).
-  let taskIdx = -1, imgIdx = -1, tableIdx = -1;
+  // imgIdx/tableIdx/mermaidIdx do the same for images, tables and diagrams
+  // (mdTools / mermaidMarkdown scan the source with matching rules, so the
+  // nth rendered one is the nth scanned).
+  let taskIdx = -1, imgIdx = -1, tableIdx = -1, mermaidIdx = -1;
   // Source-order table list; entries inside blockquotes are editable:false
   // (they still consume an index so the mapping stays aligned).
   const tableInfo = useMemo(() => scanTables(content || ""), [content]);
@@ -537,7 +575,7 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
       // remark-breaks: a single Enter inside a note renders as a real line
       // break (the editor lets you type them), not markdown's soft-break space.
       // remarkCallouts must run before it (it eats the marker line's "\n").
-      remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks, remarkMermaid]}
       rehypePlugins={[rehypeRaw, rehypeKatex]}
       // Upload URLs get the workspace / share token here (assetUrl): the
       // browser fetches <img> src and link hrefs without the API header.
@@ -583,7 +621,18 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
           }
           return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
         },
-        pre: CodePre,
+        // A foldable callout's title (callouts.js → <details><summary>):
+        // the click toggles the fold natively and must not reach the row,
+        // whose mousedown opens the editor.
+        summary: ({ node, children, ...rest }) => (
+          <summary {...rest} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>{children}</summary>
+        ),
+        pre: ({ children }) => {
+          const diagram = mermaidCodeProps(children);
+          if (!diagram) return <HighlightedCodePre>{children}</HighlightedCodePre>;
+          mermaidIdx += 1;
+          return <MermaidDiagram {...diagram} idx={mermaidIdx} onResize={onMermaidEdit} />;
+        },
         img: ({ node, src, alt, width }) => {
           imgIdx += 1;
           return <MdImage src={src} alt={alt} width={width} idx={imgIdx} onEdit={onImageEdit} />;
@@ -708,6 +757,11 @@ function BlockRow({
   aiScan,
   onAddToChat,
   peers,
+  merges,
+  onResolveMerge,
+  mergeOpen,
+  onMergeOpen,
+  mergeNav,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
@@ -727,7 +781,7 @@ function BlockRow({
   // A block the user is editing keeps its editor; the mark still shows.
   const aiMark = aiMarks?.get(block.id) || null;
   const aiText = aiLive?.tool === "edit_block" && aiLive.blockId === block.id && !block.editMode
-    ? joinBlockText(block.content || "", aiLive.content, aiLive.mode) : null;
+    ? joinBlockText(block.content || "", aiLive.content, aiLive.mode, aiLive.find) : null;
   // Whole-page read: every row rings once, staggered by its position, so
   // the read visibly sweeps down the outline. A row with its own mark keeps
   // that instead.
@@ -776,6 +830,12 @@ function BlockRow({
     }
   };
   const stableImageEdit = useRef((i, a, p) => imageEditRef.current?.(i, a, p)).current;
+  const mermaidEditRef = useRef(null);
+  mermaidEditRef.current = (idx, width) => {
+    const newVal = setMermaidWidth(block.content || "", idx, width);
+    if (newVal != null && newVal !== block.content) onChangeText(block.id, newVal);
+  };
+  const stableMermaidEdit = useRef((i, w) => mermaidEditRef.current?.(i, w)).current;
   const tableEditRef = useRef(null);
   tableEditRef.current = (idx, op) => {
     const newVal = applyTableEdit(block.content || "", idx, op);
@@ -798,7 +858,7 @@ function BlockRow({
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
   // Live LaTeX aids (preview + \command autocomplete) — the shared hook.
-  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi } = useMathUi();
+  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion } = useMathUi();
   // "/" command menu: { start, query, items, anchor }. Opened only by TYPING
   // the slash (caret moves just keep or close it), suppressed inside math.
   const [slashMenu, setSlashMenu] = useState(null);
@@ -853,16 +913,7 @@ function BlockRow({
     });
   }
 
-  function acceptLatexAc(c) {
-    const ta = ref.current;
-    if (!ta || !mathUi?.ac) return;
-    const { start } = mathUi.ac;
-    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
-    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
-    setMathUi(null);
-    ta.focus();
-    updateMathUi(ta, false);
-  }
+  function acceptLatexAc(c) { acceptCompletion(ref.current, c); }
 
   // "/" trigger: a slash starting a word, with the query typed so far after
   // it. Recomputed on edits (typing=true, may open) and caret moves
@@ -1196,6 +1247,10 @@ function BlockRow({
       }}
     >
       {rowPeers?.length ? <PeerChips peers={rowPeers} /> : null}
+      {merges?.get(block.id) ? (
+        <MergeChip conflict={merges.get(block.id)} onResolve={onResolveMerge} nav={mergeNav?.(block.id)}
+          open={mergeOpen === block.id} onOpenChange={(v) => onMergeOpen?.(v ? block.id : null)} />
+      ) : null}
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""}${aiMark ? ` ai-${aiMark.kind} aiMark${aiMark.n % 2}` : ""}${scanIdx != null ? ` ai-scan aiMark${aiScan.n % 2}` : ""}${peerEditing ? ` peerOn peer-${peerEditing.color}` : ""}`}
         style={scanIdx != null ? { animationDelay: `${Math.min(scanIdx * 45, 1600)}ms` } : undefined}
@@ -1493,7 +1548,8 @@ function BlockRow({
                   onTaskToggle={readOnly ? undefined : stableTaskToggle}
                   onEmbedEdit={readOnly ? undefined : stableEmbedEdit}
                   onImageEdit={readOnly ? undefined : stableImageEdit}
-                  onTableEdit={readOnly ? undefined : stableTableEdit} />
+                  onTableEdit={readOnly ? undefined : stableTableEdit}
+                  onMermaidEdit={readOnly ? undefined : stableMermaidEdit} />
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
               )}
@@ -1535,7 +1591,7 @@ function BlockRow({
       </div>
       {!readOnly && block.editMode && mathUi ? (
         <>
-          <MathLivePreview tex={mathUi.tex} display={mathUi.display} anchor={mathUi.anchor} />
+          <MathLivePreview tex={mathUi.tex} display={mathUi.display} anchor={mathUi.previewAnchor} caret={mathUi.caret} />
           {mathUi.ac ? (
             <LatexAcPopup items={mathUi.ac.items} selected={mathAcIdx} anchor={mathUi.anchor} onPick={acceptLatexAc} />
           ) : null}
@@ -1730,9 +1786,26 @@ function SortableBlockRow({ block, ...rowProps }) {
 // The stored text plus an addition the agent is appending/prepending (an
 // edit_block call with mode "append"/"prepend", previewed while it streams):
 // mirrors backend ai_tools.join_block_text — own line, blank line when either
-// side is a paragraph-level construct. Mode "replace" is just the new text.
+// side is a paragraph-level construct. Mode "replace" is just the new text;
+// "patch" swaps the one passage `find` names in place (ai_tools
+// .patch_block_text — exact, else whitespace-relaxed), showing the stored
+// text unchanged until the passage is found once.
 const BLOCKY_LINE = /^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||```|\$\$|---)/;
-function joinBlockText(existing, addition, mode) {
+function joinBlockText(existing, addition, mode, find) {
+  if (mode === "patch") {
+    const cur = existing || "";
+    if (!find) return cur;
+    let at = cur.indexOf(find), len = find.length;
+    if (at < 0 || cur.indexOf(find, at + 1) >= 0) {
+      const parts = find.split(/\s+/).filter(Boolean);
+      if (!parts.length) return cur;
+      const hits = [...cur.matchAll(new RegExp(parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"), "g"))];
+      if (hits.length !== 1) return cur;
+      at = hits[0].index;
+      len = hits[0][0].length;
+    }
+    return cur.slice(0, at) + (addition || "") + cur.slice(at + len);
+  }
   if (mode !== "append" && mode !== "prepend") return addition;
   const cur = (existing || "").replace(/\n+$/, "");
   const add = (addition || "").replace(/^\n+|\n+$/g, "");

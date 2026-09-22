@@ -39,14 +39,14 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   the sharer INVITES people (`users: [{name, role}]`, stored as
   `carol:edit,dave:view`) who get in with their own `view`/`edit` whatever
   general access says; everyone else goes through general access —
-  `audience` `anyone` (no session, always view), `users` (any signed-in
-  non-guest account, with the share's `role`), `list` (nobody beyond the
-  invited). When a request carries `?share=`, the token decides WHICH
-  WORKSPACE is read (the page's — a signed-in visitor sees the shared page,
-  not their own library) while the session decides whether the audience gate
-  admits them; a refused token is 401 when signing in could help, else 403.
-  `edit` shares (never valid with `anyone`) let `require_ws_writer` resolve
-  the workspace for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
+  `audience` `anyone` (no session needed, with the share's `role`), `users`
+  (any signed-in non-guest account, with the share's `role`), `list` (nobody
+  beyond the invited). When a request carries `?share=`, the token decides
+  WHICH WORKSPACE is read (the page's — a signed-in visitor sees the shared
+  page, not their own library) while the session decides whether the
+  audience gate admits them; a refused token is 401 when signing in could
+  help, else 403. `edit` shares let `require_ws_writer` resolve the
+  workspace for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
   `DELETE /blocks/{id}`, `PUT /blocks/{id}/children`, `POST /blocks/{id}/reorder`,
   `POST /pages/{id}/ops` (and the page websocket, view or edit),
   `POST /upload-image`, `POST /upload-file`, and the native annotation writers
@@ -54,6 +54,29 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   each of which confines the touched blocks to the
   shared page (no new pages, no deleting/moving the page itself, no changes to
   the page root's properties). Everything else stays session-only.
+- **Link visitors.** An `anyone` + `edit` share makes the link itself the
+  key: whoever opens it edits the page, without an account. Such a writer
+  (no session, or the guest account — `auth.is_link_visitor`) is recorded
+  as `link:<name>` (`auth.actor_of`): the display name the share view keeps
+  per browser (`src/collaboration/linkName.js`, generated "Curious Otter"
+  style, renamable from the topbar tag), sent percent-encoded as the
+  `X-Gamma-Name` header on every API call (`utils.js` injects it) and as
+  `?name=` on the page websocket; cleaned server-side (`auth.link_name`:
+  control characters out, 40 chars, `Anonymous` when empty). A label, not
+  an identity — usernames cannot contain `:`, so the log never confuses the
+  two. Link visitors alone are rate limited per IP (`auth.link_ratelimit`:
+  `collab.LINK_OPS_PER_MINUTE` op batches, `uploads.LINK_UPLOADS_PER_5_MIN`
+  uploads); their uploads count against the page's workspace like any
+  share editor's. Flipping the share back to `view`, or stopping it,
+  revokes the link's writes at once (the grant is re-read per request).
+- **Unknown tokens.** A `?share=` that names no share is counted per IP
+  (`auth.note_share_miss`, from `share_grant`, `GET /share/{token}` and the
+  page socket): past `auth.SHARE_MISSES_PER_5_MIN` (30) in five minutes the
+  address gets 429 for the rest of the window and the server log carries
+  one warning per window — the admin's only signal that someone is probing
+  for links. Tokens are 96 random bits, so guessing one is hopeless; the
+  throttle is about noise and visibility, not about protecting the space.
+  The link-visitor throttles above log the same way.
   Keep that read/write + scope distinction when adding endpoints.
 - **Assets** are served from the request's workspace
   (`GET /uploads/{filename}`, `GET /assets/{filename}`), and a `?share=` request
@@ -78,7 +101,9 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   `SESSION_MAX_AGE` (expired rows are deleted in the middleware) and are revoked
   when the account's password is changed.
 - `/api/login` and `/api/login-guest` are rate-limited per IP/username
-  (`gamma/ratelimit.py`, in-process fixed windows → 429). Not an edge WAF; add
+  (`gamma/ratelimit.py`, in-process fixed windows → 429), as are share-link
+  visitors' writes and unknown share tokens (above; those log a warning
+  once per window through `check`'s `on_first_exceed`). Not an edge WAF; add
   one for large public deployments.
 - Every response carries baseline hardening headers (`X-Content-Type-Options`,
   `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Content-Security-Policy:
@@ -103,7 +128,7 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/workspaces` | create a personal one (`{name}`; guests 403); admins may add `kind: "shared"`, `owner`, `access`, `public_role`, `quota_mb` |
-| GET | `/workspaces/mine` | Settings → Workspaces: every workspace I can open with its `used_bytes`, plus `account` (my limits and the usage of all my personal workspaces) |
+| GET | `/workspaces/mine` | Settings → Workspaces: every workspace I can open with its `used_bytes` (and `mirror_of`, the remote workspace's name when it is an offline copy — [mirror.md](mirror.md)), plus `account` (my limits and the usage of all my personal workspaces) |
 | GET/PUT/DELETE | `/workspaces/{id}` | kind + members + quota + `personal_of` + `default` (any member; admins) / rename `{name}` (owner), `default: true` (a personal workspace's owner), kind, access + public role, workspace quota (admin) / delete (owner; not an account's last personal one) |
 | GET/POST | `/workspaces/{id}/backups` | the workspace's server-kept snapshots (any member) / take one now `{label?, uploads?}` (owner; at most `ws_backup.MAX_PER_WORKSPACE`) |
 | GET | `/workspaces/{id}/backups/{name}/download` | the snapshot as a zip — the same zip `/export` gives (any member) |
@@ -127,7 +152,7 @@ never returned by the generic endpoint.
 |---|---|---|
 | GET/POST | `/blocks/by-doc/{doc_id}` | lookup / create the page BY ATTACHMENT — the page whose PDF is `doc_id` (POST creates it: `{default_title, source_url?, original_filename?, folder?}`, `folder` files a NEW page only); the PDF-ingest + extension-dedup path, and what "Open as document" on a PDF file chip calls (the file is already stored under that hash). Text-only pages come from `POST /pages` |
 | GET | `/blocks/{id}/children`, `/{id}/subtree`, `/{id}/backlinks` | tree reads; the root listing (`/blocks/root/children`) additionally gives every page a `preview` — the first ~240 chars of its first non-highlight child blocks joined with ` · ` (one window query, `""` when empty) |
-| POST/PUT/DELETE | `/blocks`, `/blocks/{id}` | CRUD — inside a page these are thin wrappers over the op path (`gamma/ops.py`): logged, fanned out to the page's room; `PUT` takes `content` and/or a properties PATCH (a null value deletes the key). A new page (`parent_id: "root"`) and deleting a page stay direct writes |
+| POST/PUT/DELETE | `/blocks`, `/blocks/{id}` | CRUD — inside a page these are thin wrappers over the op path (`gamma/ops.py`): logged, fanned out to the page's room; `PUT` takes `content` and/or a properties PATCH (a null value deletes the key). A new page (`parent_id: "root"`) is a plain insert (`blocks_store.create_page`); deleting a page is `ops.delete_page`: subtree + its op log gone, a `deleted_pages` tombstone left |
 | PUT | `/blocks/{id}/children` | replace the whole subtree (delete + reinsert; triggers orphan-upload cleanup) — bulk paths only (imports, tests); the page's room gets a `reload`. The editor itself sends ops |
 | POST | `/blocks/{id}/reorder` | move within the page (an op) or, with `parent_id` on another page, across pages (the source room sees a `delete`, the target reloads) |
 | GET | `/block-search` | fuzzy note/page/highlight search; empty `q` returns recently edited blocks (feeds the `[[ref]]` popup's initial suggestions) |
@@ -142,12 +167,14 @@ the tree reflects (the live session catches up from it).
 |---|---|---|
 | POST | `/pages/{id}/ops` | apply a batch of block ops `{client, ops: [set / insert / move / delete], cursor?: {block, anchor, head}}` (a `set` may carry `base`, the text its `content` was edited from: when the block changed meanwhile the edit is applied as a patch onto the current text — a three-way merge, `gamma/textmerge.py` — and the echoed op carries the merged text) (`cursor`: the writer's caret in the text after the batch, fanned out with it and stored as the writer's presence) in one transaction → `{seq, at, ops (as applied — re-keyed positions carry their final value), removed_uploads}`; a workspace editor or an edit share (confined to the shared page; the page root's properties stay the workspace's); a bad op fails the whole batch (400/403/404/413) |
 | GET | `/pages/{id}/ops?since=` | the op log after a seq → `{seq, batches: [{seq, actor, client, at, ops}]}`; 410 when pruned past `since` (reload the tree) |
+| GET | `/sync/whoami` | who the credential is on this server: `{user, workspace: {id, name}, role, scope}` — `scope` is an integration token's (`read` / `write`), `session` for a browser; what a mirror checks before it is created and at the start of every round |
+| GET | `/sync/changes?since=&limit=` | the workspace change feed (`gamma/routers/sync.py`): pages whose root was stamped after the cursor (`pages: [{id, created_at, updated_at, seq}]`, `seq` the page's latest op) and pages deleted after it (`deleted: [{id, deleted_at, actor}]`, from `deleted_pages`), one time-ordered stream of at most `limit` (≤ 2000) entries → `{since, cursor, more, pages, deleted}`. `since=""` lists everything. The cursor is `<time>|<id>` while `more`, else the server time minus a 60 s grace, so the last minute is re-listed on every poll — the feed is a hint for a copy of the workspace (a mirror, a merge) to know which pages to look at; the page's own `seq` / `GET /pages/{id}/ops` is the truth, and the consumer must be idempotent. Any member (viewers too); no share tokens |
 | WS | `/ws/page/{id}[?ws=&share=&client=]` | the page's live channel: `hello` / `join` / `leave` / `cursor` presence, every applied `ops` batch (with the writer's `cursor` when the batch carried one), `reload`; the client only ever sends `cursor`. Auth like HTTP (session cookie + `?ws=` (else the default workspace) or share token, resolved in the handler — the middleware doesn't run for websockets); viewers join too |
 
 ### Pages (`pages.py`) — page first, PDF as an action on it
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/pages` | create a text-only root page: body `{title?, folder?}` (title defaults to `Untitled`, `folder` → `properties.folder`) → the block dict |
+| POST | `/pages` | create a text-only root page: body `{title?, folder?, id?, properties?}` (title defaults to `Untitled`, `folder` → `properties.folder`; `id` keeps a page's id when a mirror brings it over — 400 when malformed, 409 when taken; `properties` seeds the page's own) → the block dict |
 | POST | `/pages/by-docs` | which pages these stored files became: body `{doc_ids: [<hash>, ...]}` (≤500) → `{pages: {hash: {id, title}}}` — a hash matches the page carrying it as its PDF (`doc_id`) or the note page imported from it (a markdown upload's `markdown_import`); hashes with no page absent; any member. The file chips ask once per page render for their "open page" button and the menu's "Open page" / "Add to library" |
 | POST | `/pages/from-file` | "Add to library" on a markdown file chip: body `{filename: "<hash>.md", original?, folder?}` → `{page, created, imported?}` — the stored upload becomes a note page through the `/import/markdown` importer (title from front matter, else `original` minus its extension), filed in `folder`; idempotent (a page whose `markdown_import` is the hash is returned with `created: false`); the file is untouched, the page is a copy. 400 for anything but a stored markdown name, 404 when the file is not in the workspace; workspace editors |
 | POST | `/pages/{page_id}/attachment` | attach a PDF to a page that has none: body `{doc_id?, source_url?, original_filename?}` (at least one of `doc_id`/`source_url`; `doc_id` is shape-validated only — a URL-opened PDF's id is the URL hash and the proxy fetches it lazily, like `by-doc`; `source_url` defaults to `/api/uploads/<doc_id>.pdf`). While the title is still automatic (`Untitled`/empty) it becomes the file name / URL tail and is marked `auto_title`. → the updated block. 400 bad input / not a root page, 404 unknown page, 409 `{"detail": "page already has an attachment"}`, 409 `{"detail": "attachment belongs to another page", "page_id"}` |
@@ -184,7 +211,7 @@ guarded fetch path.
 | GET, HEAD | `/uploads/{filename}` | serve stored files (HEAD: the headers alone, which is how the viewer learns a file's size before choosing its transport); with their media type (`storage.FILE_MEDIA_TYPES`, else `application/octet-stream`); pdf / images / txt / md render inline, everything else is `Content-Disposition: attachment` (html additionally sandboxed like svg); blocked or malformed extensions 400. A native asset name (`<64hex>.pkdrawing|png|m4a|inkjson`) is served by the native handler instead — same bytes, same scope and private cache headers as `/assets/{filename}` (`native_ink.asset_response`) |
 | GET | `/quota` | the limits that apply to uploads into the request's workspace — the account's for a personal one (`used_bytes` = all its personal workspaces), the workspace's own for a shared one — with `workspace_bytes` and `account` (the person, or "") |
 | POST | `/share/{page_id}` | create the page's share link (defaults `anyone`/`view`; optional body `{audience, role, users}` applies to a NEW link) or return the existing one unchanged — root blocks only (400 otherwise); workspace editors and owners |
-| GET/PUT/DELETE | `/share-settings/{page_id}` | read settings (`{token: null}` when unshared; any member) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: `edit`+`anyone` → 400, unknown usernames or roles → 400; the token stays) / stop sharing (the token dies) — editors and owners |
+| GET/PUT/DELETE | `/share-settings/{page_id}` | read settings (`{token: null}` when unshared; any member) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: unknown usernames or roles → 400; the token stays; `edit`+`anyone` is allowed — see "Link visitors" above) / stop sharing (the token dies) — editors and owners |
 | GET | `/share/{token}` | resolve a link for this viewer → `{page_id, doc_id, username (who shared it), workspace_id, audience, role, can_edit, viewer, viewer_is_guest}` (`doc_id` = the page's PDF attachment id via `page_attachment`, `""` without one; `viewer`/`viewer_is_guest` let the share view offer "Open in my library" or "Add to my library"); 404 unknown, 401 sign in first, 403 signed in but not allowed |
 
 #### Blank notebooks (`blank_pdf.py`)
@@ -269,6 +296,7 @@ non-native upload cleanup is unchanged. No schema migration was needed.
 | GET | `/pdf-search` | the PDF-only predecessor (same `pdf_fts` index; hits `{block_id, doc_id, title, page, snippet}`) — the Ctrl+F panel's library group still uses it (with `/block-search` for notes: fuzzy/regex + flags that FTS does not offer) |
 | POST | `/search-reindex` | full rebuild (PDF text re-extracted in the background, every note page stamped stale for the next search), or just `doc_ids` from the body |
 | GET | `/tasks` | background task progress (indexing, downloads) |
+| DELETE | `/tasks/indexing` | stop the workspace's running indexer after the current paper (`{cancelled}`); the skipped papers stay stale and index on the next search; editors and owners |
 
 The notes index is rebuilt lazily per page: a search first refreshes every
 page whose `block_fts_meta` row is missing, older than `textnorm.INDEX_VERSION`,
@@ -310,12 +338,14 @@ the request's workspace — the extension names none, so its personal one.
 ### AI (`ai.py`) — all config is per-user GUI entries, no env API keys
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/ai/chat` | chat; NDJSON stream of `{context}` (first line: per-page coverage — native/text, pages shown of total; `doc_id` `""` for a page without a PDF) then `{delta}`/`{action}`/`{progress}`/`{error}`; `progress` previews an edit_block/create_block call still being written (target id + markdown so far). Context is `pages` (several) or `page_id` (one; its PDF attachment derived server-side; `doc_id` is accepted as a compatibility input and resolves to its page), plus model id, effort, images, files, the agent scope, and the notes pointers `focus_block_id` (cursor block), `context_blocks` (attached block ids), `note_passages` (Ctrl-selected note text). See [ai.md](ai.md) |
+| POST | `/ai/chat` | chat; NDJSON stream of `{context}` (first line: per-page coverage — native/text, pages shown of total; `doc_id` `""` for a page without a PDF) then `{delta}`/`{action}`/`{progress}`/`{usage}`/`{error}`; `usage` is the provider's token report `{input, output, cache_read, cache_write}`, one line per provider turn (the client sums an agent reply's rounds; non-stream replies carry one summed `usage` field); `progress` previews an edit_block/create_block call still being written (target id + markdown so far). Context is `pages` (up to 7 page ids, de-duplicated; they also become the tool scope's `context_pages`) or `page_id` (one; its PDF attachment derived server-side; `doc_id` is accepted as a compatibility input and resolves to its page), plus model id, effort, images, files, the agent scope, and the notes pointers `focus_block_id` (cursor block), `context_blocks` (attached block ids), `note_passages` (Ctrl-selected note text). See [ai.md](ai.md) |
 | GET | `/ai/models` | model registry (each model carries `native_pdf`: whether its provider accepts the PDF file itself) + default prompts (feeds the model switchers and prompt editor) |
 | GET | `/ai/settings` | masked provider list (key hints only) |
 | POST/PUT/DELETE | `/ai/providers[/{id}]` | manage provider entries |
 | POST | `/ai/providers/{id}/test` | live probe of one credential (model: the entry's `test_model`, else the request's `model` — the client sends its metadata model — else the first model); failures carry an `auth` flag for expired/rejected credentials |
 | POST | `/ai/providers/{id}/usage` | ChatGPT subscription allowance windows; explicitly unavailable for generic API-key providers; an expired sign-in returns `{available: false, auth: true}` in-body |
+| GET | `/ai/usage` | the account's token usage as the providers reported it: `windows` (today / week / month / all → calls + the four counts), the 30-day split by `kinds` and by `models`; see [ai.md](ai.md) "Token usage" |
+| DELETE | `/ai/usage` | forget the account's usage rows |
 | POST | `/ai/health` | login connection check of one entry (`{provider_id, mode}`; `""` = first entry): `mode: "ping"` is the free credential check (OAuth → usage endpoint, API key → `/v1/models`), `"test"` the tiny live completion; always answers in-body `{configured, ok, auth?, error?}` |
 | POST | `/ai/model-catalog` | list models available to a credential |
 | POST | `/ai/oauth/chatgpt/start`, `/complete` | ChatGPT OAuth (PKCE, pasted callback URL) |
@@ -324,6 +354,12 @@ the request's workspace — the extension names none, so its personal one.
 | GET | `/pdf-text-status` | whether a doc has extractable text |
 
 ### Chats (`chats.py`, prefix `/api/chats`)
+
+`GET /chats/{page_id}?share=<token>` exposes only the shared page's active
+saved conversation, subject to the link's audience. Shared pages show this in
+a read-only AI chat window on desktop and mobile, with search and copy.
+Chat mutations reject share tokens, including links that allow page editing;
+archived conversation browsing remains session-only.
 | Method | Path | Purpose |
 |---|---|---|
 | GET/PUT/DELETE | `/chats/{key:path}` | the ACTIVE conversation per bucket: page id, `home`, or `home:<folder>` (hence `:path`); GET → `{messages, title}`, PUT `{messages, title?}` (title omitted = keep) |
@@ -341,7 +377,13 @@ the request's workspace — the extension names none, so its personal one.
 | POST | `/import/markdown-zip` | zip of Markdown notes → one page per `.md` (multipart `file`, optional `folder` prefix): Obsidian vaults (wikilinks/embeds → mentions and synced blocks, `^id` anchors and headings as link targets, `tags` → labels, `aliases` kept, comments and fold markers dropped, `.obsidian/` skipped), Notion "Markdown & CSV" exports (subpage folders → folder labels, databases → table pages, links → mentions, images uploaded), Gamma Markdown / Obsidian exports (folder/source/meta/bibtex restored) or any zipped notes. Idempotent by file digest / `notion_id`; the report says `obsidian: true` for a vault |
 | POST | `/markdown-blocks` | parse markdown text into a `{content, children}` tree without storing anything (the editor's paste-as-blocks helper; same parser as `/import/markdown`, 5 MB cap) |
 | POST | `/import/pdf-annotations` | import annotations embedded in the PDF (idempotent; optional `strip`) |
-| POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key` |
+| POST | `/import/zotero/preview` | Read-only import plan (multipart `file`, optional `folder` prefix; workspace writer). Archive entries, destination pages with PDF/page and create/merge status, folder paths, attachment warnings. Uses the same planner as import; stores no pages or files |
+| POST | `/import/review` | Shared staged upload/review for `zotero`, `markdown-zip`, `markdown-file`, `gamma` (multipart `file`, `source`, optional `folder`, `strip`). Returns `review_id`, archive entries, destinations, source selection IDs and warnings; writes no library content |
+| POST | `/import/review/{id}` | Import the staged file with JSON `{selected: [source IDs]}`. Account/workspace bound, workspace write access rechecked, concurrent commit blocked, completed retries return the saved report; no second upload |
+| DELETE | `/import/review/{id}` | Discard the staged upload/review; running imports cannot be discarded |
+| POST | `/import/markdown-zip/preview`, `/import/markdown-file/preview`, `/import/gamma/preview` | Format-specific read-only review adapters. Markdown single-file review shares the ZIP engine. Gamma requires a non-guest workspace |
+| POST | `/import/markdown-file`, `/import/gamma` | Reviewed single-note or additive Gamma import; multipart `file`, `selected` JSON source IDs (required for Gamma). ZIP Markdown/Zotero imports also accept optional `selected` (omitted = all, empty = none) |
+| POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items and standalone/additional PDFs→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key`; returns page destinations and warnings |
 | GET | `/pages/{id}/export` | page export (`?mode=readable|obsidian|notes-pdf|logseq-graph|zotero-rdf|gamma` + `highlights=&notes=&pdf=`); `obsidian` = a vault zip (`<folder>/<Title>.md`, wikilinks, `attachments/`, `.obsidian/app.json`); `notes-pdf` = the notes typeset as their own PDF (works without a paper); `gamma` = scoped backup for `/import-data?mode=merge` |
 | GET | `/pages/{id}/export-pdf` | the page's own PDF with annotations written back (`?highlights=&notes=`), including native PencilKit preview/replay pictures as raster page content; `X-Native-Ink-Drawn` counts those separately from `X-Annotations-Written`. Does not mutate the stored PDF; format/fidelity limits are in [import_export.md](import_export.md) |
 | GET | `/folders/export` | whole-folder export, same modes/flags (`?name=` + `mode=`); subfolders become Zotero collections or vault directories, `notes-pdf` one PDF for the whole folder |
@@ -355,6 +397,46 @@ the request's workspace — the extension names none, so its personal one.
 | PUT | `/page-snaps/{page_id}` | store a cover (JPEG data URL body `{img, at}`; per-page newest-`at` wins, count-capped server-side) |
 | DELETE | `/page-snaps/{page_id}` | drop a cover (the recents card's ×) |
 
+### Integrations and MCP (`routers/integrations.py`, `mcp_oauth.py`, `mcp_server.py`) — see [mcp.md](mcp.md)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/integrations/tokens` | the current workspace's assistant connections (manual tokens and OAuth grants: id, name, dates), the MCP URL and whether browser sign-in is available; session only, never a guest |
+| POST | `/integrations/tokens` | mint a manual token `{name, scope?: read \| write, expires_in_days?}` (shown once); at most 20 unexpired per account; `write` (a mirror's push credential, [mirror.md](mirror.md)) is refused to a viewer |
+| DELETE | `/integrations/tokens/{id}` | revoke a connection |
+
+A manual token (`gamma_…`, not an OAuth one) is also accepted on every `/api/*` route as `Authorization: Bearer` (`auth.py`): the request runs as the account behind it, in the token's workspace only (`?ws=` / the header may only repeat it — 403 otherwise), writes only with the `write` scope (403 "this token is read-only"), never as an admin, and never as a session that manages tokens or accounts (`require_personal_user` refuses it with 403).
+
+### Mirrors (`routers/mirrors.py`, prefix `/api/mirrors`) — see [mirror.md](mirror.md)
+
+| method | path | what |
+|---|---|---|
+| GET | `/mirrors` | the caller's offline copies with their sync status |
+| POST | `/mirrors` | `{remote_url, token, name?, mode?: two-way \| pull, workspace_id?, adopt?: theirs \| mine}` → the mirror: a new personal workspace that follows the remote workspace the token belongs to, or with `workspace_id` an existing personal workspace of the caller's whose pages adopt one side's version (validated against the remote's `/sync/whoami` first; a read token or a viewer's role gives `pull`); the first fill runs in the background |
+| GET | `/mirrors/{ws}` | one mirror, with `conflicts_open` (unresolved merges), `pending_local` (a local write no round has pushed yet; two-way copies only), `poll_s` / `on_change` (its cadence), `detached`, `interval_s` (0 = the loop is off); `status.progress` `{done, total, page, first, file?}` while a round runs |
+| PATCH | `/mirrors/{ws}` | `{poll_s?, on_change?, mode?}` |
+| POST | `/mirrors/{ws}/detach` | detach, the link kept |
+| POST | `/mirrors/{ws}/relink` | `{token?, remote_url?, adopt?}` — link again |
+| POST | `/mirrors/{ws}/force` | `{direction: pull \| push}` — replace one side with the other |
+| POST | `/mirrors/{ws}/sync[?wait=1]` | a sync round now (`wait=1` answers with the round's status) |
+| DELETE | `/mirrors/{ws}` | stop mirroring; the workspace stays |
+| GET | `/mirrors/{ws}/log?limit=` | what the last rounds did, page by page, newest first: `{changes: [{id, at, page_id, title, action, stats, changes, exists}]}` — `stats` the git-style block counts `{add, del, mod}` (`{}` on rows from before they were kept), `changes` what each edit did block by block (`[{k: add \| del \| mod \| props \| move, id, text, old?}]`) |
+| GET | `/mirrors/{ws}/conflicts[?resolved=1][&page=]` | the merges the engine decided on its own (kinds `merged`, `diverged`, `kept_local_edit`, `restored_remote_edit`, `page_restored`, `page_restored_from_remote`) |
+| POST | `/mirrors/{ws}/conflicts/{id}` | `{choice: keep \| mine \| theirs}` |
+
+Session only, the mirror's owner, never a guest.
+| GET | `/integrations/oauth/request?request_id=` | the pending consent (client name, the account's workspaces) for the consent screen |
+| POST | `/integrations/oauth/consent` | approve or deny a pending sign-in for one workspace |
+| GET | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource` | OAuth discovery for MCP clients (no `/api` prefix) |
+| POST | `/oauth/register`; GET `/oauth/authorize`; POST `/oauth/token` | dynamic client registration, the authorization redirect, the PKCE code exchange (no `/api` prefix) |
+| POST | `/mcp` | the Streamable HTTP MCP endpoint (bearer token or OAuth access token; no `/api` prefix, browser origins refused) |
+
+### Publisher sessions (`routers/publisher_sessions.py`) — see [extension.md](extension.md)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/publisher-sessions` | the account's connected publisher hosts (metadata only) and the supported roots |
+| POST | `/publisher-sessions` | store a cookie snapshot for one host (JSON, 256 KiB cap; HTTPS or localhost, personal accounts only) |
+| DELETE | `/publisher-sessions/{host}` | forget a host |
+
 ### Admin (`admin.py`, prefix `/api/admin`)
 | Method | Path | Purpose |
 |---|---|---|
@@ -365,8 +447,9 @@ the request's workspace — the extension names none, so its personal one.
 | GET/POST | `/admin/backups` | list the whole-data-directory snapshots under `backups/` / take one now (`{label?, uploads?}` — databases, plus every upload with `uploads: true`); per-workspace snapshots are `/workspaces/{id}/backups` |
 | GET | `/admin/backups/{name}/download` | the snapshot as a zip |
 | DELETE | `/admin/backups/{name}` | delete a snapshot (restoring is `manage.py backups --restore`, server stopped — [migrations.md](migrations.md)) |
-| GET/PUT | `/admin/settings` | server-wide storage defaults |
+| GET/PUT | `/admin/settings` | server-wide storage defaults, plus `public_url` / `public_url_source` (the admin-confirmed public server URL, [mcp.md](mcp.md)) |
 | GET | `/admin/logs?after=<seq>` | scrubbed in-memory server log |
+| GET | `/admin/server-info?refresh=` | the Server dashboard (`gamma/version.py`): `version` / `commit` / `label` (from `GAMMA_VERSION` / `GAMMA_COMMIT` — the Docker build and the desktop shell set them; a checkout is a "development build"), `started_at`, `uptime_seconds`, `python`, `platform`, `schema_version`, `frozen`, `log_counts` `{info, warning, error}` since startup, `latest` (`{version, url, published_at}` from the GitHub Releases API, cached six hours, ten minutes after a failure, `refresh=1` refetches; `GAMMA_UPDATE_CHECK=off` disables) or `latest_error`, `update_available` (True/False, None without a version to compare), `image`, `releases_url`. Sync: it may hit the network |
 
 Rails: the guest account is untouchable, no self-delete, the last admin
 can't be demoted or deleted.

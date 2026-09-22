@@ -8,21 +8,21 @@ from ai_fixtures import ALL_PERMS, ALL_TOOLS, folder
 
 def test_registry_scopes_and_permissions():
     assert [t["name"] for t in agent_tools("folder")] == [
-        "list_pages", "read_page", "read_block", "search_library", "search_papers",
+        "list_pages", "read_page", "read_block", "view_pdf_page", "search_library", "search_papers",
         "fetch_paper", "rename_page", "move_page", "edit_block", "create_block", "move_block"]
     # Paper chats never rename/move pages; the note-block tools exist there.
     assert [t["name"] for t in agent_tools("page")] == [
-        "read_page", "read_block", "search_library", "search_papers", "fetch_paper",
+        "read_page", "read_block", "view_pdf_page", "search_library", "search_papers", "fetch_paper",
         "edit_block", "create_block", "move_block"]
     assert agent_tools("") == []  # plain chat
     assert [t["name"] for t in agent_tools(
         "folder", {"rename": False, "move": False, "block_edit": False})] == [
-        "list_pages", "read_page", "read_block", "search_library", "search_papers", "fetch_paper"]
+        "list_pages", "read_page", "read_block", "view_pdf_page", "search_library", "search_papers", "fetch_paper"]
     names = [t["name"] for t in agent_tools("folder", {"search": False})]
     assert "search_library" not in names and "read_page" in names
     # One permission gates all three note-editing tools.
     names = [t["name"] for t in agent_tools("page", {"block_edit": False})]
-    assert names == ["read_page", "read_block", "search_library", "search_papers", "fetch_paper"]
+    assert names == ["read_page", "read_block", "view_pdf_page", "search_library", "search_papers", "fetch_paper"]
     # The two web tools have their own permissions.
     names = [t["name"] for t in agent_tools("page", {"web_search": False, "web_read": False})]
     assert "search_papers" not in names and "fetch_paper" not in names and "read_page" in names
@@ -47,7 +47,7 @@ def test_agent_system_mentions_scope_and_armed_tools():
 
 
 def test_block_tools_gated_by_permissions():
-    armed = {t["name"] for t in agent_tools("page", {"block_read": False, "block_edit": False,
+    armed = {t["name"] for t in agent_tools("page", {"block_read": False, "block_edit": False, "view": False,
                                                         "web_search": False, "web_read": False})}
     assert armed == {"read_page", "search_library"}
 

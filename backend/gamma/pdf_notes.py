@@ -37,7 +37,7 @@ others substitute, and the raw text is still in the annotation popup.
 import io
 import math
 
-from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2 import PdfWriter
 from PyPDF2._page import PageObject
 from PyPDF2.generic import (
     DecodedStreamObject,
@@ -46,10 +46,10 @@ from PyPDF2.generic import (
     RectangleObject,
 )
 
-from . import vector_text
+from . import pdf_text, vector_text
 from .logbuf import log
 from .note_markup import TEXT, latex_spans, parse_note
-from .pdf_export import parse_css_color
+from .pdf_export import ExportPdfReader, parse_css_color
 from .pdf_glyphs import GlyphFonts
 from .pdf_image import XObjectStore
 from .pdf_typeset import (
@@ -408,7 +408,7 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
     ``uploads_dir`` is where ``/api/uploads/…`` refs are read from; without it
     images degrade to their alt text.
     """
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+    reader = ExportPdfReader(io.BytesIO(pdf_bytes))
     writer = PdfWriter()
     writer.append(reader)
 
@@ -425,6 +425,13 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
     if not by_page:
         return pdf_bytes, 0
 
+    # pdfium is not thread-safe: the whole walk holds pdf_text's lock, and
+    # every page is closed explicitly (pdf_text.py explains why).
+    with pdf_text._lock:
+        return _draw_notes(pdf_bytes, writer, by_page, uploads_dir)
+
+
+def _draw_notes(pdf_bytes, writer, by_page, uploads_dir):
     try:
         import pypdfium2 as pdfium
         doc = pdfium.PdfDocument(pdf_bytes)
@@ -454,7 +461,11 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
                     pdfium_page = doc[page_num - 1]
                 except Exception:
                     pdfium_page = None
-            space = _page_occupancy(pdfium_page, to_display, disp_w, disp_h)
+            try:
+                space = _page_occupancy(pdfium_page, to_display, disp_w, disp_h)
+            finally:
+                if pdfium_page is not None:
+                    pdfium_page.close()
 
             placements = []
             for items, pos, color in entries:

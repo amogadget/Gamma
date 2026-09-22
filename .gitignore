@@ -24,8 +24,13 @@ HANDOFF.md.bak
 docker-compose.yml
 run-local.bat
 
-# Private workspace exports, media captures, and render intermediates
+# Disposable scratch
 /tmp
+/todos
+
+# Local source recordings, workspace exports, debugging inputs and render output.
+/artifacts/*
+!/artifacts/README.md
 
 # Machine-local deployment evidence (not upstream source)
 /DEPLOYMENT.md

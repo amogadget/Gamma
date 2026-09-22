@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gamma PDF — Read papers. Keep what you learn.</title>
+  <meta name="description" content="Gamma is an open-source, self-hosted PDF annotator with outliner notes for researchers: highlight papers, draw on them, keep notes with live math, ask an AI, and search your whole library — on your own machine.">
+  <link rel="canonical" href="https://gammapdf.com/">
+  <link rel="icon" type="image/svg+xml" href="/media/favicon.svg">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1b1b1a" media="(prefers-color-scheme: dark)">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Gamma PDF">
+  <meta property="og:title" content="Gamma PDF — Read papers. Keep what you learn.">
+  <meta property="og:description" content="Open-source, self-hosted PDF annotation with outliner notes, live math, AI chat and full-library search.">
+  <meta property="og:url" content="https://gammapdf.com/">
+  <meta property="og:image" content="https://gammapdf.com/media/hero-light.png">
+  <meta property="og:image:width" content="1920">
+  <meta property="og:image:height" content="1080">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Gamma PDF",
+    "applicationCategory": "EducationalApplication",
+    "operatingSystem": "Windows, macOS, Linux, Docker",
+    "url": "https://gammapdf.com/",
+    "downloadUrl": "https://github.com/tim4431/Gamma/releases/latest",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "description": "Open-source, self-hosted PDF annotation with outliner notes for researchers."
+  }
+  </script>
+</head>
+<body>
+<!--#include header -->
+
+<main id="main">
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap hero__text">
+      <p class="eyebrow">Open source · self-hosted · for people who read papers</p>
+      <h1>Read papers.<br>Keep what you learn.</h1>
+      <p class="lead">Gamma is a PDF annotator with outliner notes. Highlight and draw on papers, keep what you learn as nested blocks with live math, ask an AI about them, and search your whole library — on your own machine or a server you host.</p>
+      <div class="cta">
+        <a class="btn btn--primary btn--lg" href="https://github.com/tim4431/Gamma/releases/latest" data-download>
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4-4-4M3 15v2h14v-2"/></svg>
+          <span data-download-label>Download</span>
+        </a>
+        <a class="btn btn--ghost btn--lg" href="#selfhost">Self-host with Docker</a>
+      </div>
+      <p class="hero__meta">
+        <span>Windows · macOS · Linux · Docker</span>
+        <span class="dot" aria-hidden="true">·</span>
+        <a href="https://github.com/tim4431/Gamma/releases/latest" data-version-link>Latest release <span data-version></span></a>
+        <span class="dot" aria-hidden="true">·</span>
+        <a href="https://github.com/tim4431/Gamma">Source on GitHub</a>
+      </p>
+      <ul class="chips" aria-label="Highlights">
+        <li>Highlights &amp; ink</li>
+        <li>Outliner notes</li>
+        <li>Markdown + LaTeX</li>
+        <li>Ask an AI about your papers</li>
+        <li>Library search</li>
+        <li>Shared workspaces</li>
+        <li>Obsidian &amp; Zotero import</li>
+      </ul>
+    </div>
+    <div class="wrap wrap--wide">
+      <figure class="frame frame--hero">
+        <div class="frame__bar" aria-hidden="true"><i></i><i></i><i></i></div>
+        <img src="/media/app.png" width="1680" height="1000" alt="Gamma with a Nature paper open: a highlighted passage on the left, its outliner notes and an AI chat on the right" fetchpriority="high">
+      </figure>
+    </div>
+  </section>
+
+  <!-- Pillars -->
+  <section class="pillars wrap">
+    <div class="pillar">
+      <h3>Your library, on your machine</h3>
+      <p>Everything is SQLite and files in one folder — on your disk with the desktop app, or on a server you run. No account with us, no telemetry, no one else reads your papers.</p>
+    </div>
+    <div class="pillar">
+      <h3>Papers and notes are one thing</h3>
+      <p>A highlight is a block. Nest it, link it, embed it in another page, search it, share it. Click it and the PDF jumps to the passage. The notes and the paper never drift apart.</p>
+    </div>
+    <div class="pillar">
+      <h3>Open source, open formats</h3>
+      <p>Export a page or a folder as Markdown, an Obsidian vault, a Logseq graph, a Zotero library or an annotated PDF whenever you like. The code is on GitHub.</p>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <div id="features" class="features">
+
+    <section class="feature feature--flip wrap">
+      <div class="feature__text">
+        <p class="eyebrow">Read from any place</p>
+        <h2>One library. Every device. An offline copy that syncs itself.</h2>
+        <ul>
+          <li><b>Any browser</b> — the office desktop, the iPad with the Pencil, your phone: reading position, open tabs and zoom follow your account from device to device.</li>
+          <li><b>Offline copy</b> — keep a full copy of a workspace on your laptop with the desktop app (one click on the workspace's <i>clone</i> chip) or on any second Gamma. Read and write it on the train; it syncs when the connection returns.</li>
+          <li><b>Merges, not losses</b> — edits merge block by block; the rare conflict is shown on its block with both versions to pick from.</li>
+        </ul>
+      </div>
+      <picture class="feature__media feature__media--plain">
+        <img src="/media/anywhere-light.svg" width="1920" height="1080" loading="lazy" alt="One library on the lab server, open on a desktop, an iPad and a phone; a note typed from the iPad appears on every other device as the sync between them runs">
+      </picture>
+    </section>
+
+    <section class="feature wrap">
+      <div class="feature__text">
+        <p class="eyebrow">Highlight, annotate &amp; draw</p>
+        <h2>Mark up the paper. Every mark becomes a note.</h2>
+        <p>Open a paper by pasting any link — arXiv, DOI or a publisher page; Gamma finds the PDF and falls back to a legal open-access copy when the DOI is paywalled — or drag the file in. Then:</p>
+        <ul>
+          <li><b>Highlight</b> — select text or drag a box around a figure, pick a color, add a comment. Each highlight becomes a block. Highlights already saved in the file by SumatraPDF, Acrobat or Preview are imported as blocks too.</li>
+          <li><b>Draw</b> — use a stylus or mouse to circle a claim, sketch an arrow or highlight freely. Lasso strokes to move, resize, rotate or recolor them; erase whole strokes or just part of one. Ink becomes a note block linked to its place in the PDF.</li>
+          <li><b>Dockable panels</b> — drag any window's grip to the left, right or bottom; double-click to collapse.</li>
+        </ul>
+      </div>
+      <figure class="feature__media">
+        <img src="/media/demo-annotate-and-ink.webp" width="1040" height="586" loading="lazy" alt="Highlighting a sentence, adding a linked annotation, then circling a claim and drawing an arrow with ink">
+      </figure>
+    </section>
+
+    <section class="feature feature--flip wrap">
+      <div class="feature__text">
+        <p class="eyebrow">Take notes</p>
+        <h2>An outliner with live math, right next to the paper.</h2>
+        <p>Highlights and free notes are the same kind of block, so a paper's notes and a plain page are edited the same way.</p>
+        <ul>
+          <li><b>Outliner</b> — Enter for a new block, Tab / Shift+Tab to nest, drag to reorder, one undo history for the whole page.</li>
+          <li><b>Live preview, Obsidian-style</b> — markdown, <code>$…$</code> / <code>$$…$$</code> math, code fences, callouts and tables render in place while the block you're on stays raw. Math gets bracket-pair coloring, <code>\command</code> autocomplete and Tab hops between <code>{}</code> arguments.</li>
+          <li><b>Link and embed</b> — <code>[[page]]</code> mentions, <code>![[block]]</code> embeds that edit the source in place, and a "/" menu for everything else.</li>
+          <li><b>Pictures and tables</b> — paste an image and drag its edge to resize it; edit tables cell by cell.</li>
+        </ul>
+      </div>
+      <figure class="feature__media">
+        <img src="/media/demo-notes.webp" width="1120" height="630" loading="lazy" alt="Typing markdown and a live LaTeX equation, adding a callout, then pasting a picture and dragging to resize it">
+      </figure>
+    </section>
+
+    <section class="feature wrap">
+      <div class="feature__text">
+        <p class="eyebrow">Native agentic</p>
+        <h2>Ask an AI about your papers. Follow its citations back.</h2>
+        <p>Chat with the open PDF, or several at once. Answers cite the page, and clicking a citation jumps to the passage it came from.</p>
+        <ul>
+          <li><b>See what it sees</b> — paste figures, dictate by voice, or attach the whole PDF so the model reads tables and plots.</li>
+          <li><b>Your provider, your key</b> — Anthropic or OpenAI models, or sign in with your ChatGPT subscription. Nothing is sent to any AI service until you add one.</li>
+          <li><b>Mention a paper</b> — type <code>@</code> to attach a library page; its details and text stay in context.</li>
+          <li><b>Put the agent to work</b> — search your library, read papers, compare findings, rename pages or file them into folders. Expand each tool step to inspect it.</li>
+        </ul>
+      </div>
+      <figure class="feature__media">
+        <img src="/media/demo-native-agentic.webp" width="960" height="540" loading="lazy" alt="Asking a question in PDF chat, following a citation to the source passage, then box-selecting a figure for a follow-up question">
+      </figure>
+    </section>
+
+    <section class="feature feature--stack wrap">
+      <div class="feature__text feature__text--center">
+        <p class="eyebrow">Link and organize</p>
+        <h2>Papers arrive labeled. Ideas stay connected.</h2>
+        <p>Metadata fills itself in when a paper arrives. Labels and folders keep the library in shape. Citations lead to the next paper, and <b>Back</b> returns you to where you were reading.</p>
+      </div>
+      <picture class="illustration">
+        <img src="/media/library-light.svg" width="1920" height="1080" loading="lazy" alt="Bring a paper in with an arXiv or DOI link and its metadata fills in; search titles, notes and PDF text narrowed by folder and label; follow a reference to a linked paper and come back">
+      </picture>
+      <div class="trio">
+        <article class="card">
+          <img src="/media/demo-reference-links.webp" width="1040" height="662" loading="lazy" alt="Following a citation to its reference, then fetching the cited arXiv paper into Gamma with one click">
+          <h3>Reference links</h3>
+          <p>Citations in the PDF are clickable: jump to the reference, unwind jumps across documents with a global Back, and fetch a cited arXiv or DOI paper into your library in one click.</p>
+        </article>
+        <article class="card">
+          <img src="/media/demo-library.webp" width="1120" height="630" loading="lazy" alt="Searching titles and PDF text from home, narrowing with a folder chip, and opening a highlighted match">
+          <h3>Search everything</h3>
+          <p><kbd>Ctrl</kbd>+<kbd>F</kbd> searches notes, highlights and the full text of every PDF at once, with match-case, whole-word and regex toggles. Narrow by label (an author) or by folder (<code>qc</code> pulls in everything beneath it). "3000" still finds "3,000-qubit" across a line break.</p>
+        </article>
+        <article class="card">
+          <img src="/media/demo-metadata.webp" width="1120" height="714" loading="lazy" alt="A freshly opened paper resolves its title, authors and venue; one click copies BibTeX or a slide-ready citation">
+          <h3>Metadata &amp; citations</h3>
+          <p>On open, each paper is resolved (arXiv → DOI → AI) so title, authors and venue auto-fill; any field can be hand-edited. One click copies BibTeX or a slide-ready citation that pastes into PowerPoint with real italics.</p>
+        </article>
+      </div>
+      <p class="feature__note">Folders are paths: drop a paper into <code>qc/neutral-atom</code> and the hierarchy builds itself, and one paper can live in several folders. Labels are flat tags for cross-cutting facets like an author or a keyword.</p>
+    </section>
+
+    <section class="feature feature--flip wrap">
+      <div class="feature__text">
+        <p class="eyebrow">Connect your research</p>
+        <h2>At home in the tools you already use.</h2>
+        <ul>
+          <li><b>Gamma Connector</b> — a browser extension that saves the paper you're reading in one click: PDF, metadata, folder and labels, straight from the arXiv, DOI or publisher tab. Right-click clips a link or a selection into your notes; its cookie button keeps your publisher sign-in per journal so the server can fetch that journal's PDFs on its own.</li>
+          <li><b>Import</b> — Logseq PDF exports and Zotero libraries come in with their annotations; Markdown folders, Obsidian vaults (wikilinks, block embeds, tags) and Notion exports come in as notes.</li>
+          <li><b>Export</b> — a page or folder as annotated PDF, Markdown, an Obsidian vault, a Logseq graph, a Zotero library, or a Gamma zip another Gamma can merge.</li>
+          <li><b>Assistants</b> — Codex, Claude Code or any MCP client can search and read your papers, notes and highlights, read-only, for a workspace you approve: "@Gamma, in the Rydberg arrays paper, how is the blockade radius measured?"</li>
+        </ul>
+      </div>
+      <picture class="feature__media feature__media--plain">
+        <img src="/media/connections-light.svg" width="1920" height="1080" loading="lazy" alt="Gamma in the middle of an assistant prompt that mentions @Gamma and a paper, the Obsidian, Notion and Zotero import and export arrows, and the Gamma Connector saving a paper with the publisher sign-in kept per journal">
+      </picture>
+    </section>
+
+    <section class="feature wrap">
+      <div class="feature__text">
+        <p class="eyebrow">Share, sync and move your data</p>
+        <h2>Your space. A shared place.</h2>
+        <ul>
+          <li><b>Workspaces</b> — keep separate personal libraries, or collaborate in a shared library with owners, editors and viewers.</li>
+          <li><b>Share a page</b> — send a link to an annotated paper; invite people with view or edit rights, or open it to anyone with the link.</li>
+          <li><b>Edit together</b> — changes and cursors appear live; edits to different blocks coexist, same-block edits merge.</li>
+          <li><b>Tabs follow you</b> — open tabs and reading positions sync per account and workspace.</li>
+          <li><b>Back up</b> — export a workspace, or all of them, as one zip; keep server-side snapshots; restore or merge on another Gamma.</li>
+        </ul>
+      </div>
+      <picture class="feature__media feature__media--plain">
+        <img src="/media/workspaces-light.svg" width="1920" height="1080" loading="lazy" alt="Personal workspaces next to a shared research library where an owner and an editor type into two blocks of the same page at the same time and a viewer reads along">
+      </picture>
+    </section>
+
+  </div>
+
+  <!-- Download -->
+  <section id="download" class="download">
+    <div class="wrap">
+      <p class="eyebrow">Get Gamma</p>
+      <h2>Free, on every desk.</h2>
+      <p class="lead">The desktop app is a self-contained Gamma with local libraries on your disk — no Docker, Python or Node. It also opens any Gamma server you host as another workspace. <a href="https://github.com/tim4431/Gamma/releases/latest" data-version-link>Latest release <span data-version></span></a>.</p>
+      <div class="dl">
+        <article class="dl__card" data-os="windows">
+          <h3>Windows</h3>
+          <a class="store" href="https://apps.microsoft.com/detail/9N8WGWR2J2MV"><img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get it from the Microsoft Store" width="200" height="72" loading="lazy" data-store-badge></a>
+          <a class="btn btn--primary store--text" href="https://apps.microsoft.com/detail/9N8WGWR2J2MV">Microsoft Store</a>
+          <p>Or the <a href="https://github.com/tim4431/Gamma/releases/latest" data-asset="exe">standalone installer</a>. SmartScreen: <i>More info → Run anyway</i>. Updates itself.</p>
+        </article>
+        <article class="dl__card" data-os="macos">
+          <h3>macOS</h3>
+          <a class="btn btn--primary" href="https://github.com/tim4431/Gamma/releases/latest" data-asset="dmg">Download .dmg</a>
+          <p>Not notarized: on first launch, <i>System Settings → Privacy &amp; Security → Open Anyway</i>, once.</p>
+        </article>
+        <article class="dl__card" data-os="linux">
+          <h3>Linux</h3>
+          <a class="btn btn--primary" href="https://github.com/tim4431/Gamma/releases/latest" data-asset="deb">Download .deb</a>
+          <p>Debian / Ubuntu, x64. Install with <code>sudo apt install ./Gamma-*.deb</code>. Updates itself.</p>
+        </article>
+        <article class="dl__card dl__card--wide">
+          <h3>Server</h3>
+          <div class="code"><pre><code>docker run -d --name gamma -p 9001:9001 -v gamma-data:/data ghcr.io/tim4431/gamma:latest</code></pre><button class="copy" type="button" data-copy>Copy</button></div>
+          <p>Multi-user, with shared workspaces. Open <code>localhost:9001</code> and sign in as <code>admin</code>; the password is printed once to <code>docker logs gamma</code>. <a href="#selfhost">More on self-hosting ↓</a></p>
+        </article>
+        <article class="dl__card">
+          <h3>Browser extension</h3>
+          <a class="btn btn--ghost" href="https://github.com/tim4431/Gamma/releases?q=extension-v&expanded=true" data-asset="extension">Gamma Connector (.zip)</a>
+          <p>Unzip, then <code>chrome://extensions</code> → <i>Developer mode</i> → <i>Load unpacked</i>. Chrome, Edge and other Chromium browsers.</p>
+        </article>
+        <article class="dl__card">
+          <h3>Codex &amp; MCP</h3>
+          <a class="btn btn--ghost" href="https://github.com/tim4431/Gamma/blob/main/docs/dev/mcp.md">Connection guide</a>
+          <p>In Gamma, <i>Settings → AI → External assistants</i> gives a one-line setup command for the Codex plugin, and the server URL for any other MCP client.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- Self-host -->
+  <section id="selfhost" class="selfhost wrap">
+    <div class="selfhost__text">
+      <p class="eyebrow">Self-host</p>
+      <h2>One container. Your whole lab.</h2>
+      <p>The server is one Docker image (linux/amd64 and arm64) with everything inside: the API, the app, SQLite and your uploads under a single <code>/data</code> volume that survives upgrades. No environment variables are needed.</p>
+      <ul>
+        <li>Accounts are managed in the app: an admin creates users, resets passwords and grants admin from the account menu.</li>
+        <li>Shared workspaces with owner / editor / viewer roles, per-workspace storage caps, and server-side backups in Settings.</li>
+        <li>AI providers are per user and stored server-side; keys are never sent back to the browser.</li>
+        <li>Put a TLS reverse proxy (Caddy, nginx) in front of port 9001 to use a domain — then the desktop app, the extension and MCP assistants can reach it too.</li>
+      </ul>
+      <p><a href="https://github.com/tim4431/Gamma#install">Full install notes on GitHub →</a></p>
+    </div>
+    <div class="selfhost__code">
+      <div class="code"><pre><code># Quickstart
+docker run -d --name gamma -p 9001:9001 \
+  -v gamma-data:/data ghcr.io/tim4431/gamma:latest
+docker logs gamma        # the seeded admin password, printed once</code></pre><button class="copy" type="button" data-copy>Copy</button></div>
+      <div class="code"><pre><code># Docker Compose (recommended)
+services:
+  gamma:
+    image: ghcr.io/tim4431/gamma:latest
+    container_name: gamma
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    volumes:
+      - gamma-data:/data
+volumes:
+  gamma-data:</code></pre><button class="copy" type="button" data-copy>Copy</button></div>
+    </div>
+  </section>
+
+  <!-- Privacy -->
+  <section class="privacy">
+    <div class="wrap">
+      <p class="eyebrow">Your data stays yours</p>
+      <h2>Runs on your machine. We never see your papers.</h2>
+      <div class="facts">
+        <div><h3>Nothing is collected</h3><p>No telemetry, analytics, crash reporting or accounts hosted by us. The desktop app's only outbound call of its own is the update check against GitHub Releases.</p></div>
+        <div><h3>Plain storage</h3><p>A data directory of SQLite databases and your files. Copy it, back it up, move it to another computer or server.</p></div>
+        <div><h3>Network only when you ask</h3><p>Metadata lookups go to arXiv, Crossref and Unpaywall; AI requests go to the provider you configured with your own key. Nothing else.</p></div>
+        <div><h3>Leave any time</h3><p>Export everything as Markdown, an Obsidian vault, Logseq, Zotero, annotated PDFs, or one zip that any Gamma can restore.</p></div>
+      </div>
+      <p class="privacy__link"><a href="/privacy/">Read the privacy policy →</a></p>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq" class="faq wrap">
+    <p class="eyebrow">Questions</p>
+    <h2>Frequently asked</h2>
+    <details>
+      <summary>Is Gamma free?</summary>
+      <p>Yes. Gamma is open source. Download the desktop app or run the Docker image; there are no plans, no seats and no account with us.</p>
+    </details>
+    <details>
+      <summary>Where is my data?</summary>
+      <p>In a data directory: SQLite databases plus your PDFs and images. With the desktop app it is a folder on your disk; on a server it is the <code>/data</code> volume. You can export a workspace, or all of them, as a zip at any time and restore it elsewhere.</p>
+    </details>
+    <details>
+      <summary>Do I need an API key for the AI features?</summary>
+      <p>Only if you want them. Add an Anthropic or OpenAI key in Settings, or sign in with a ChatGPT Plus/Pro subscription with no key at all. Until you do, Gamma contacts no AI service. Keys are stored on your own Gamma, per user.</p>
+    </details>
+    <details>
+      <summary>Can I bring notes from Zotero, Obsidian, Logseq or Notion?</summary>
+      <p>Yes. Zotero libraries and Logseq PDF exports import with their annotations; Obsidian vaults, Markdown folders and Notion exports import as notes. Export goes the other way too: Markdown, an Obsidian vault, a Logseq graph, a Zotero library, or annotated PDFs.</p>
+    </details>
+    <details>
+      <summary>Can I work with my group?</summary>
+      <p>A server administrator creates shared workspaces with owners, editors and viewers. Any page can also be shared by link with view or edit rights. Edits and cursors show up live for everyone on the page.</p>
+    </details>
+    <details>
+      <summary>What about handwriting and tablets?</summary>
+      <p>Ink works with a stylus or a mouse in the browser and the desktop app: draw, lasso, move, resize, erase part of a stroke, undo. There is no native tablet app yet.</p>
+    </details>
+    <details>
+      <summary>Which platforms?</summary>
+      <p>Desktop: Windows (Microsoft Store or installer), macOS (dmg), Debian/Ubuntu (deb). Server: Docker on linux/amd64 and arm64, or from source with Python 3.11+ and Node 18+. The desktop app can open a hosted server as another workspace.</p>
+    </details>
+  </section>
+
+  <!-- Closing -->
+  <section class="closing">
+    <div class="wrap">
+      <h2>Start with the next paper you open.</h2>
+      <div class="cta cta--center">
+        <a class="btn btn--primary btn--lg" href="https://github.com/tim4431/Gamma/releases/latest" data-download>
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10m0 0 4-4m-4 4-4-4M3 15v2h14v-2"/></svg>
+          <span data-download-label>Download</span>
+        </a>
+        <a class="btn btn--ghost btn--lg" href="https://github.com/tim4431/Gamma">View on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!--#include footer -->
+</body>
+</html>

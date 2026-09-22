@@ -6,6 +6,16 @@
          zoomed-in page puts the toolbars out of reach. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/media/icons/favicon.svg" />
+    <!-- Installable web app (iPad "Add to Home Screen", Chrome/Edge "Install"):
+         docs/dev/ipad.md. The status bar takes theme-color, which App.jsx
+         keeps equal to the topbar's background for the active theme. -->
+    <link rel="manifest" href="/media/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/media/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Gamma" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="theme-color" content="#1b1b1a" />
     <title>Gamma — Annotate PDFs, Share Your Thinking</title>
     <!-- A pinned theme (Settings → General) must win before the bundle loads,
          or the splash flashes the OS color; the control size likewise, or the
@@ -14,7 +24,7 @@
     <script>
       try {
         var t = localStorage.getItem("gamma-theme");
-        if (t === "light" || t === "dark" || t === "sepia" || t === "solarized" || t === "gray") document.documentElement.setAttribute("data-theme", t);
+        if (["light", "dark", "gamma-light", "gamma-dark", "sepia", "solarized", "gray"].includes(t)) document.documentElement.setAttribute("data-theme", t);
         var s = parseFloat(localStorage.getItem("gamma-ui-scale"));
         if (s >= 0.7 && s <= 1.6) document.documentElement.style.setProperty("--ui-scale", s); // UI_SCALE in prefs.js
       } catch (e) {}
@@ -30,6 +40,10 @@
       html[data-theme="light"] { color-scheme: light; }
       html[data-theme="dark"], html[data-theme="dark"] body, html[data-theme="dark"] #root { background: #111; }
       html[data-theme="dark"] { color-scheme: dark; }
+      html[data-theme="gamma-light"], html[data-theme="gamma-light"] body, html[data-theme="gamma-light"] #root { background: #e7e5de; }
+      html[data-theme="gamma-light"] { color-scheme: light; }
+      html[data-theme="gamma-dark"], html[data-theme="gamma-dark"] body, html[data-theme="gamma-dark"] #root { background: #1b1b1a; }
+      html[data-theme="gamma-dark"] { color-scheme: dark; }
       html[data-theme="sepia"], html[data-theme="sepia"] body, html[data-theme="sepia"] #root { background: #f0e9d6; }
       html[data-theme="sepia"] { color-scheme: light; }
       html[data-theme="solarized"], html[data-theme="solarized"] body, html[data-theme="solarized"] #root { background: #eee8d5; }

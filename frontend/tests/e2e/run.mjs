@@ -15,20 +15,26 @@ import {
   openPage, results, sleep, step, until,
 } from "./harness.mjs";
 import { noteScenarios } from "./scenarios/notes.mjs";
+import { mermaidScenarios } from "./scenarios/mermaid.mjs";
 import { pdfScenarios } from "./scenarios/pdf.mjs";
 import { fileScenarios } from "./scenarios/files.mjs";
 import { collabScenarios } from "./scenarios/collab.mjs";
 import { shareScenarios } from "./scenarios/share.mjs";
 import { settingsScenarios } from "./scenarios/settings.mjs";
 import { mcpScenarios } from "./scenarios/mcp.mjs";
+import { mirrorScenarios } from "./scenarios/mirror.mjs";
 import { mentionScenarios } from "./scenarios/mentions.mjs";
+import { chatNavigationScenarios } from "./scenarios/chatNavigation.mjs";
 import { transferScenarios } from "./scenarios/transfers.mjs";
 import { inkScenarios } from "./scenarios/ink.mjs";
+import { guideScenarios } from "./scenarios/guide.mjs";
+import { contextualGuideScenarios } from "./scenarios/contextualGuide.mjs";
 import { inkEditingScenarios } from "./scenarios/inkEditing.mjs";
 import { pdfLoadScenarios } from "./scenarios/pdfload.mjs";
 import { pdfTouchScenarios } from "./scenarios/pdfTouch.mjs";
 import { nativeScenarios } from "./scenarios/nativeInk.mjs";
 import { blankPdfScenarios } from "./scenarios/blankPdf.mjs";
+import { ipadScenarios } from "./scenarios/ipad.mjs";
 
 const server = new Server();
 let browser;
@@ -84,14 +90,20 @@ try {
 
   await settingsScenarios(env);
   await mcpScenarios(env);
+  await mirrorScenarios(env);
   await mentionScenarios(env);
+  await chatNavigationScenarios(env);
   await transferScenarios(env);
+  await mermaidScenarios(env);
   const notes = await noteScenarios(env);
   const pdf = await pdfScenarios(env, notes);
   await inkScenarios(env);
+  await guideScenarios(env);
+  await contextualGuideScenarios(env);
   await inkEditingScenarios(env);
   await pdfLoadScenarios(env);
   await pdfTouchScenarios(env);
+  await ipadScenarios(env);
   await fileScenarios(env);
   await collabScenarios(env);
   await shareScenarios(env, { ...notes, ...pdf });

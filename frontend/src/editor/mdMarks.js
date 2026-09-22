@@ -169,3 +169,70 @@ export function insertLink(text, from, to, url = "") {
 }
 
 export const isUrl = (s) => /^https?:\/\/\S+$/i.test((s || "").trim());
+
+// Images: `![alt](url)`, sized Obsidian-style (`![alt|300](url)`) or with the
+// legacy Logseq `{:width N}` suffix. `![[embeds]]` can't match — their "alt"
+// holds an unclosed "[" and no "(". Every occurrence in text, in order:
+// [{from, to, alt, url, width}] with from/to including the whole construct;
+// callers that must skip code/math spans filter the result.
+const IMG_RE = /!\[([^\]\n]*)\]\(([^)\n]+)\)(\{:width\s+(\d+)\})?/g;
+const ALT_WIDTH_RE = /^(.*?)\|(\d+)(?:x\d+)?$/;
+export function scanImageSyntax(text) {
+  const out = [];
+  for (const m of text.matchAll(IMG_RE)) {
+    let alt = m[1], width = m[4] ? Number(m[4]) : null;
+    const pipe = ALT_WIDTH_RE.exec(alt);
+    if (pipe) {
+      alt = pipe[1];
+      if (width == null) width = Number(pipe[2]);
+    }
+    out.push({ from: m.index, to: m.index + m[0].length, alt, url: m[2], width });
+  }
+  return out;
+}
+
+// Blank lines the rendered view keeps. Markdown folds any run of blank lines
+// into one paragraph break, so in a note "a / blank / blank / b" looked like
+// "a / b" once the editor closed while the editor showed both empty rows.
+// One blank line stays the paragraph break; every further one becomes an
+// empty (`&nbsp;`) paragraph, i.e. a visible empty line. Whitespace-only
+// lines count as blank. Callers keep code and math spans out of it.
+export function expandBlankLines(text) {
+  return text.replace(/\n(?:[ \t]*\n){2,}/g, (run) => {
+    const breaks = run.split("\n").length - 1;
+    return "\n\n" + "&nbsp;\n\n".repeat(breaks - 2);
+  });
+}
+
+// Colored text, the Obsidian way: markdown has no color syntax, so a colored
+// run is inline HTML — `<span style="color:#e5484d">text</span>` or a tinted
+// `<span style="background:#fde04766">text</span>` — which every markdown
+// renderer that allows HTML (Obsidian, GitHub-flavored previews, this
+// app's rendered view via rehype-raw) shows as intended and the rest show
+// as plain text. TEXT_COLORS is the palette the "/" menu offers (Notion's
+// set); the scanner accepts any color value, so hand-written spans work.
+export const TEXT_COLORS = [
+  { name: "red", color: "#e5484d" }, { name: "orange", color: "#f76b15" },
+  { name: "yellow", color: "#d4a017" }, { name: "green", color: "#30a46c" },
+  { name: "blue", color: "#3b82f6" }, { name: "purple", color: "#8e4ec6" },
+  { name: "pink", color: "#e93d82" }, { name: "gray", color: "#8b8d98" },
+];
+
+// Every color span in the text, in order, innermost never nested (a span's
+// content may not open another): [{from, to, openLen, closeLen, style}].
+// `style` is the inline CSS the run carries (color and/or background).
+const COLOR_SPAN_RE = /<span style="((?:color|background(?:-color)?):[^";<>]+;?(?:\s*(?:color|background(?:-color)?):[^";<>]+;?)?)">([^<\n]*)<\/span>/g;
+export function scanColorSpans(text) {
+  const out = [];
+  for (const m of text.matchAll(COLOR_SPAN_RE)) {
+    const openLen = m[0].length - m[2].length - "</span>".length;
+    out.push({ from: m.index, to: m.index + m[0].length, openLen, closeLen: 7, style: m[1].trim() });
+  }
+  return out;
+}
+
+// The span markup for a color choice: text color, or a translucent
+// background tint of the same hue.
+export function colorSpan(color, background) {
+  return `<span style="${background ? `background:${color}55` : `color:${color}`}">`;
+}

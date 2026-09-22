@@ -1,0 +1,15 @@
+{
+  "name": "gammapdf-site",
+  "private": true,
+  "description": "The gammapdf.com website: static pages served by a Cloudflare Worker.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "marked": "^15.0.0",
+    "wrangler": "^4.0.0"
+  }
+}

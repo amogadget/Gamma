@@ -7,11 +7,11 @@ browsers signed into the same account also work. Backend: `gamma/ops.py`, `gamma
 `src/collaboration/Presence.jsx`, plus small hooks in `app/App.jsx`, `editor/BlockTree.jsx`,
 `editor/BlockCmEditor.jsx` and `editor/blockHistory.js`.
 
-Block undo/redo returns a description of the action (`describeTransition`),
-derived from the before/after trees so a rebased remote change is not named
-as ours, and the status pill shows it: note creation/deletion/move, a text
-edit with a short preview, a properties or highlight edit. The handwriting
-stroke history is separate ([handwriting.md](handwriting.md)).
+Block undo/redo returns a description of the action (`describeTransition`):
+note creation/deletion/move, a text edit with a short preview, a properties
+or highlight edit. It is derived from the before/after trees, so a rebased
+remote change is never named as ours. The status pill shows it. The
+handwriting stroke history is separate ([handwriting.md](handwriting.md)).
 
 ## The model in one paragraph
 
@@ -55,11 +55,20 @@ derived-data work and publishes; `commit_ops(ws, page_id, ops, actor=)` is both
 on a fresh connection — `ws` the workspace id, `actor` the account making the
 change. Every server-side writer
 goes through them — the single-block endpoints in `routers/blocks.py` are thin
-wrappers, page attach/detach, the metadata write, the clip endpoints, the AI
+wrappers, page attach/detach, the metadata write, the clip endpoints, the
+attachment-marker backfill of `get_or_create_doc_page`, the `annot_stripped`
+marks after an embedded-annotation strip, and the AI
 tools (`edit_block`, `create_block`, `move_block`, `rename_page`, `move_page`)
 and the native iPad writers (`routers/native_ink.py`, `routers/native_highlights.py`)
 call them directly — so everything a page's viewers see comes from one path
-and one log. Writers that rewrite a tree wholesale (`PUT /blocks/{id}/children`,
+and one log. Reads never write: a stored shape that needs repairing is a
+`normalize.py` step ([migrations.md](migrations.md)), not a fix-up on a
+listing. Pages themselves are not blocks of any page: creating one is
+`blocks_store.create_page` (a plain insert) and deleting one is
+`ops.delete_page` — the subtree, the page's log rows, then a `deleted_pages`
+tombstone (`page_id`, `deleted_at`, `actor`; cleared if the id is created
+again), so another copy of the workspace can tell "deleted" from "never
+seen". Writers that rewrite a tree wholesale (`PUT /blocks/{id}/children`,
 imports into an existing page, the target half of a cross-page move) log and
 publish a `reload` instead; a cross-page move's source page gets a `delete`
 (`record_ops`).
@@ -186,12 +195,48 @@ path.
 (`db.PAGES_SCHEMA`), one row per applied batch, `seq` counting up per page
 (the write lock is taken up front with `BEGIN IMMEDIATE`, so it never
 collides). `actor` is the account that made the change (a share editor's own
-name), `client` the tab's id, `"ai"` for an agent write or `"native"` for an
-iPad annotation. Pruned to the newest `KEEP_OPS` rows
+name, or the named edit-link visitor via `actor_of`), `client` the tab's id,
+`"ai"` (the agent's tools), `"native"` (iPad annotations), or `"meta"` (the
+paper-metadata worker's property writes — the one content write opening a
+page can cause, [paper_metadata.md](paper_metadata.md)). Pruned to the newest `KEEP_OPS` rows
 per page, checked every `PRUNE_EVERY` batches. `GET /api/pages/{id}/ops?since=`
 returns the batches after a seq (410 when the log no longer reaches back: the
 client reloads the tree); `GET /blocks/{id}/subtree` on a page carries the
 `seq` its tree reflects.
+
+## Commit listeners
+
+`ops.commit_listeners` is a list of `fn(ws, client)` called after every
+committed write — a batch (`after_commit`), a page deletion, a cross-page
+move's `record_ops`, a `note_reload`. An offline copy's engine registers
+one at import (`sync_engine._on_commit`) for its sync-on-change; a listener
+that raises is logged and never breaks the write.
+
+## The change feed (`gamma/routers/sync.py`)
+
+`GET /api/sync/changes?since=&limit=` is the workspace-wide view the
+per-page log lacks: the pages whose root block was stamped after a cursor,
+each with its latest `seq`, and the `deleted_pages` tombstones written after
+it, as one time-ordered stream. It exists for anything that keeps a copy of
+a workspace in step (a mirror, [mirror.md](mirror.md); a backup merge) so it
+can find out *which* pages to look at without walking the library; what
+actually changed on a page is still its op log (`seq`,
+`GET /pages/{id}/ops?since=`), and a page whose log no longer reaches back
+is refetched whole.
+
+It is a hint, not a ledger, and the consumer must be idempotent: while a
+walk is paginating the cursor is `<time>|<id>` and strict (nothing repeats),
+but a caught-up answer's cursor is the server time minus a 60 s grace, so
+the last minute is re-listed on every poll. That covers writers whose
+timestamp predates their commit (an import holds one `now` for its whole
+run; `create_page` stamps before its insert) without a workspace-wide
+sequence that every writer would have to append to. Every writer stamps the
+page root once per batch — `apply_ops`, `record_ops` (a cross-page move's
+source), `log_reload` (a subtree replace, an import into an existing page),
+the raw import paths — so a page never changes without the feed noticing.
+Deleting a page (`ops.delete_page`) drops its log rows and leaves the
+tombstone the feed reports; the tombstone goes when the id is created
+again.
 
 ## Rooms and the socket (`gamma/collab.py`, `routers/collab.py`)
 
@@ -208,8 +253,10 @@ cookie itself (`auth.session_lookup`), the workspace (`?ws=`, else the
 account's default — `auth.workspace_access`) and the share grant with the
 same rules as HTTP (`share_lookup` + `share_access` on the socket's
 `state`): a member joins with their workspace role (viewers presence-only),
-a share token admits its audience (view or edit); anything else is closed
-before accept. Messages:
+a share token admits its audience (view or edit — an anyone-with-the-link
+edit share admits a visitor without an account, who joins under the display
+name in `?name=`, [api.md](api.md) "Link visitors"); anything else is
+closed before accept. Messages:
 
 - server → client: `hello {client, color, seq, peers}` on join; `join {peer}`
   / `leave {client}`; `cursor {client, block, anchor, head}`; `ops {seq, at,
@@ -224,8 +271,11 @@ before accept. Messages:
   to flush queued edits with a keepalive fetch.
 
 A peer is `{client, user, name, color, can_edit, block, anchor, head}`; colour
-is an index into an 8-slot palette handed out per room (CSS `--peer-N`);
-anonymous share viewers are `Anonymous`.
+is an index into an 8-slot palette handed out per room (CSS `--peer-N`).
+A share-link visitor without an account has `user: ""` and `name` = their
+display name (`?name=`, else `Anonymous`); their op batches carry
+`actor: "link:<name>"`. A rename in the share view reconnects the socket
+(`usePageCollab`'s `reconnect`) so presence picks up the new name.
 
 ## The client (`src/collaboration/collabSession.js`, `src/collaboration/usePageCollab.js`, `src/shared/model/blockOps.js`)
 
@@ -325,7 +375,8 @@ state in App instead of the tree.
 ## What the user sees (`src/collaboration/Presence.jsx`, CSS in `shared/styles/app.css`)
 
 - the header avatar stack (initial, peer colour; faded while only viewing;
-  click jumps to the person's block);
+  click jumps to the person's block; the tooltip marks an account-less
+  share-link visitor "(via link)");
 - small avatar chips before the row a person is on (in the ⋮⋮ handle
   column, fading while the row is hovered — never over the row's content or
   an embed card's controls), and a coloured left edge
@@ -365,14 +416,16 @@ state in App instead of the tree.
   along), undo after a remote edit
   keeps the remote edit, a rename reaches the other tab, an edit made offline
   lands once the network is back, a remote delete, a highlight made by the
-  other person; `share.mjs` covers the invited editor on a share link.
+  other person; `share.mjs` covers the invited editor on a share link and
+  the stranger typing through an anyone-with-the-link edit share under a
+  renamed display name.
 
 ## Limits and next steps
 
 - Queued edits live in memory, not in durable offline storage. Keepalive
   saves on tab close are best effort and subject to browser limits; a network
   outage followed by closing the tab can lose unsaved work.
-- Same-block simultaneous typing merges by span (three-way merge above);
+- Same-block simultaneous typing merges by span (three-way merge above); a set whose content already is the block's text (the same edit sent twice, a retried batch, a clone pushing what it already pulled) merges nothing — patching it in again would double the change;
   two people changing the *same* characters within one save window still
   resolve by server order for that span. If character-exact convergence
   ever matters, the upgrade path is CodeMirror's collab rebase on just the
@@ -387,6 +440,10 @@ state in App instead of the tree.
 - The op log has `actor` and `at` per batch but nothing reads them yet: an
   activity view ("who changed what") and a page version history are both
   derivable from it.
+- A mirror of a workspace (a desktop copy that syncs) is built on the
+  change feed and the tombstones: [mirror.md](mirror.md). It works from
+  trees, not from replaying this log, so a copy that was away longer than
+  `KEEP_OPS` batches needs no fallback.
 
 The survey behind this design (OT vs record-level LWW vs CRDT, why the old
 snapshot autosave could not be patched) is in

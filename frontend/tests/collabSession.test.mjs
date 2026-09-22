@@ -1,7 +1,7 @@
 // The page session's transport logic over fakes for HTTP, the socket and
 // timers: ordering of acks and socket batches, same-block reconciliation,
 // retries, navigation during a save, presence and the caret throttle. No
-// React, no DOM — collab.js is a thin wrapper around this; browser behaviour
+// React, no DOM — collaboration/usePageCollab.js is a thin wrapper around this; browser behaviour
 // is the e2e collab scenario.
 import assert from "node:assert/strict";
 import { test } from "node:test";

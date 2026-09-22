@@ -280,36 +280,23 @@ export function UsersSettings({ value, selfOnly = false }) {
             {u.is_admin ? <span className="uiTag admin">admin</span> : null}
             {u.is_guest ? <span className="uiTag">guest</span> : null}
           </span>
-          <span className="aiProvDesc">
-            {u.is_guest
-              ? "shared demo workspace, resets daily"
-              : u.created_at // absent on the self row: non-admins can't list accounts
-                ? `since ${new Date(u.created_at).toLocaleDateString()}`
-                : "signed in"}
-            {u.max_upload_mb != null ? ` · max file ${u.max_upload_mb} MB` : ""}
-            {u.quota_mb != null ? (u.quota_mb ? ` · quota ${u.quota_mb} MB` : " · unlimited") : ""}
-          </span>
+          {u.is_guest || u.max_upload_mb != null ? (
+            <span className="aiProvDesc">
+              {[u.is_guest ? "shared demo workspace, resets daily" : "",
+                u.max_upload_mb != null ? `max file ${u.max_upload_mb} MB` : ""].filter(Boolean).join(" · ")}
+            </span>
+          ) : null}
           <QuotaMeter usedBytes={u.used_bytes} quotaMb={u.quota_mb ?? defaults?.quota_mb} />
         </span>
         <span className="aiProvActions">
           {isAdmin ? (
             <>
-              <button
-                className="uiBtn sm iconSq" disabled={busy}
-                title={`Storage limits for ${u.username}`}
-                aria-label="Storage limits"
-                onClick={() => openStorage(u)}
-              >
-                <HardDriveIcon size={13} />
+              <button className="uiBtn sm" disabled={busy} title={`Storage limits for ${u.username}`} onClick={() => openStorage(u)}>
+                <HardDriveIcon size={13} /> Storage
               </button>
               {!u.is_guest ? (
-                <button
-                  className="uiBtn sm iconSq" disabled={busy}
-                  title={`Rename ${u.username}, set a password, or grant admin`}
-                  aria-label="Edit account"
-                  onClick={() => openAccount(u)}
-                >
-                  <PenIcon size={13} />
+                <button className="uiBtn sm" disabled={busy} title={`Rename ${u.username}, set a password, or grant admin`} onClick={() => openAccount(u)}>
+                  <PenIcon size={13} /> Edit
                 </button>
               ) : null}
             </>
@@ -345,15 +332,7 @@ export function UsersSettings({ value, selfOnly = false }) {
 
   return (
     <>
-      {isAdmin && !selfOnly ? (
-        <PaneHead icon={UsersIcon} title="Users">
-          Accounts on this server, each with its personal workspaces. The last admin can never be demoted or deleted.
-        </PaneHead>
-      ) : (
-        <PaneHead icon={UserIcon} title="Account">
-          Your profile and storage limits. Account changes are managed by an administrator.
-        </PaneHead>
-      )}
+      {isAdmin && !selfOnly ? <PaneHead icon={UsersIcon} title="Users" /> : <PaneHead icon={UserIcon} title="Account" />}
       {isAdmin && !info && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
       {(selfOnly ? rows.filter((row) => row.username === me) : rows).map(userRow)}
       {edit?.kind === "account" ? accountDialog() : null}

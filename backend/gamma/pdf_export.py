@@ -44,6 +44,7 @@ from PyPDF2.generic import (
     DictionaryObject,
     FloatObject,
     NameObject,
+    NullObject,
     NumberObject,
     RectangleObject,
     TextStringObject,
@@ -56,6 +57,23 @@ from .pdf_image import image_xobject
 _RGBA_RE = re.compile(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([0-9.]+)\s*)?\)")
 _HEX_RE = re.compile(r"#([0-9a-fA-F]{6})$")
 DEFAULT_COLOR = (1.0, 226 / 255, 143 / 255, 0.65)  # the viewer's yellow
+
+
+class ExportPdfReader(PdfReader):
+    """Keep dangling optional references from breaking PyPDF2's clone path."""
+
+    def get_object(self, indirect_reference):
+        obj = super().get_object(indirect_reference)
+        if obj is None:
+            # Missing indirect objects have PDF null semantics. PyPDF2 reads
+            # them as Python None, which its writer cannot clone. Retain the
+            # reference so the null is registered/deduplicated in the writer.
+            obj = NullObject()
+            obj.indirect_reference = indirect_reference
+            self.cache_indirect_object(
+                indirect_reference.generation, indirect_reference.idnum, obj
+            )
+        return obj
 
 
 def parse_css_color(value):
@@ -610,7 +628,7 @@ def annotate_pdf_result(pdf_bytes: bytes, highlights, author: str = "", ink=(),
     ``{"pdf": bytes, "annotations": n, "native_ink": n}`` — ``annotations``
     counts the /Highlight, /Square and /Ink annotations, ``native_ink`` the
     native PencilKit pictures placed as page content."""
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+    reader = ExportPdfReader(io.BytesIO(pdf_bytes))
     writer = PdfWriter()
     writer.append(reader)
 

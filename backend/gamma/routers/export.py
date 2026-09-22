@@ -823,7 +823,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
                 ink=_collect_ink(blocks, uploads_dir),
                 native_ink=_collect_native_ink(blocks, uploads_dir))
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
+            raise HTTPException(status_code=400, detail=f"could not annotate PDF: {str(e) or type(e).__name__}") from e
         pdf_bytes = result["pdf"]
         written, native_drawn = result["annotations"], result["native_ink"]
 

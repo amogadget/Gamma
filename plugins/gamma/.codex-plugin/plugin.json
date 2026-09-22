@@ -1,6 +1,6 @@
 {
   "name": "gamma",
-  "version": "0.1.0+codex.20260917001608",
+  "version": "0.2.1",
   "description": "Search and read Gamma PDF libraries, pages, highlights, and notes.",
   "author": {
     "name": "Gamma",
@@ -11,7 +11,7 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Gamma PDF",
-    "shortDescription": "Pick and read Gamma papers, notes, and highlights.",
+    "shortDescription": "Read Gamma page links, notes, and highlights.",
     "longDescription": "Use a configured Gamma MCP connection to search your workspace and answer questions with citations to pages and PDF passages.",
     "developerName": "Gamma",
     "category": "Productivity",
@@ -20,7 +20,7 @@
     "logoDark": "./skills/gamma/assets/icon.png",
     "capabilities": [],
     "defaultPrompt": [
-      "Let me choose a paper from Gamma.",
+      "Read this Gamma page link and help me understand it.",
       "Find my Gamma notes on this topic.",
       "Summarize the papers in my Gamma library."
     ]

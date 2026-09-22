@@ -12,11 +12,12 @@ import {
   placeholder as cmPlaceholder,
 } from "@codemirror/view";
 import { defaultKeymap } from "@codemirror/commands";
-import { escapedAt, findMathAtCursor, renderKatex } from "./LatexEditor";
-import { emptyLeftPair, leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
+import { findMathAtCursor, renderKatex } from "./LatexEditor";
+import { emptyLeftPair, escapedAt, leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
 import { calloutType } from "./callouts";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
-import { insertLink, isUrl, scanMarks, toggleMark } from "./mdMarks";
+import { insertLink, isUrl, scanColorSpans, scanImageSyntax, scanMarks, toggleMark } from "./mdMarks";
+import { assetUrl } from "../shared/lib/utils";
 
 // All CLOSED math spans in the text: [{from, to, display}] with from/to
 // including the delimiters. Same tokenizer as latexEditor's findMathAtCursor
@@ -180,6 +181,46 @@ class HrWidget extends WidgetType {
   }
 }
 
+// An `![alt](url)` the caret isn't touching shows the picture (sized like the
+// rendered view, alt as its caption). Clicking it drops the caret into the
+// alt text so the source expands. The upload URL gets the workspace / share
+// token like the rendered view's <img> — the browser fetches it without the
+// API header.
+class ImageWidget extends WidgetType {
+  constructor(url, alt, width) {
+    super();
+    this.url = url;
+    this.alt = alt;
+    this.width = width;
+  }
+  eq(other) { return other.url === this.url && other.alt === this.alt && other.width === this.width; }
+  toDOM(view) {
+    const span = document.createElement("span");
+    span.className = "cmImgWidget";
+    const img = document.createElement("img");
+    img.className = "mdImg";
+    img.src = assetUrl(this.url);
+    img.alt = this.alt;
+    if (this.width) img.width = this.width;
+    img.draggable = false;
+    // The line grows when the picture arrives: re-measure so the caret and
+    // the row's layout follow.
+    img.addEventListener("load", () => view.requestMeasure());
+    span.appendChild(img);
+    if (this.alt) {
+      const cap = document.createElement("span");
+      cap.className = "mdImgCaption";
+      cap.textContent = this.alt;
+      span.appendChild(cap);
+    }
+    span.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      placeCaretInside(view, span, 2);
+    });
+    return span;
+  }
+}
+
 // Live inline rendering (Obsidian-style): math as KaTeX, [[id]] refs as
 // chips, and markdown constructs — heading/quote prefixes hidden with the
 // line styled, **bold** / *italic* / `code` / ~~strike~~ / [text](url) shown
@@ -296,6 +337,21 @@ function buildInlineDecos(state, labelsRef) {
     }).range(from, to));
   }
 
+  // ![alt](url): the picture itself, like the rendered view (same syntax
+  // scan as mdTools' image editing). Claimed before the inline marks so a
+  // `*` in the URL or alt never reads as emphasis, and skipped inside code
+  // and math like every other construct.
+  if (text.includes("![")) {
+    for (const im of scanImageSyntax(text)) {
+      if (overlapsClaimed(im.from, im.to)) continue;
+      claimed.push([im.from, im.to]);
+      if (touched(im.from, im.to)) continue;
+      ranges.push(Decoration.replace({
+        widget: new ImageWidget(im.url, im.alt, im.width),
+      }).range(im.from, im.to));
+    }
+  }
+
   // Inline marks (**bold** etc., table in mdMarks.js — shared with the
   // formatting hotkeys): delimiters hidden, inner text gets the mark class.
   for (const { marker, cls, from, to } of scanMarks(text, claimed)) {
@@ -306,8 +362,23 @@ function buildInlineDecos(state, labelsRef) {
     ranges.push(Decoration.replace({}).range(to - dlen, to));
   }
 
-  // [text](url): show just the text, link-styled. Images (![...]) stay raw —
-  // the rendered view shows the actual picture.
+  // Colored runs (`<span style="color:…">` / background tints, mdMarks
+  // scanColorSpans — the Obsidian-compatible inline HTML the "/" color
+  // commands write): tags hidden, the text shown in its color; touched, the
+  // raw markup comes back like any other mark.
+  for (const s of scanColorSpans(text)) {
+    if (overlapsClaimed(s.from, s.to)) continue;
+    claimed.push([s.from, s.to]);
+    // An empty span (just inserted by the "/" command) stays raw too — there
+    // is nothing to color, and a zero-length mark decoration throws.
+    if (touched(s.from, s.to) || s.to - s.closeLen <= s.from + s.openLen) continue;
+    ranges.push(Decoration.replace({}).range(s.from, s.from + s.openLen));
+    ranges.push(Decoration.mark({ class: "cmColorSpan", attributes: { style: s.style } })
+      .range(s.from + s.openLen, s.to - s.closeLen));
+    ranges.push(Decoration.replace({}).range(s.to - s.closeLen, s.to));
+  }
+
+  // [text](url): show just the text, link-styled.
   for (const m of text.matchAll(/\[([^\]\n]+)\]\(([^)\n]+)\)/g)) {
     const from = m.index, to = m.index + m[0].length;
     if (text[from - 1] === "!" || text[from + 1] === "[") continue;
@@ -339,7 +410,9 @@ function buildInlineDecos(state, labelsRef) {
   const quoteRun = [];
   const flushQuoteRun = () => {
     if (!quoteRun.length) return;
-    const co = quoteRun[0].line.text.match(/^> ?\[!(\w+)\][ \t]*/);
+    // The marker may carry Obsidian's fold flag ("[!note]-" / "+"), hidden
+    // with the rest of it (callouts.js CALLOUT_MARKER_RE).
+    const co = quoteRun[0].line.text.match(/^> ?\[!(\w+)\][-+]?[ \t]*/);
     const type = co ? calloutType(co[1]) : null;
     quoteRun.forEach(({ line, prefixLen, lineTouched }, i) => {
       let cls = "cmQuoteLine";
@@ -875,6 +948,7 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
       ref={hostRef}
       className={className}
       data-block-id={dataBlockId}
+      data-guide="notes.editor"
     />
   );
 });

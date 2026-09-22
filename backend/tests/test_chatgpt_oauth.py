@@ -334,6 +334,24 @@ def test_api_model_catalog_does_not_retry_auth_error(erin, monkeypatch):
     assert calls == 1
 
 
+def test_catalog_uses_edited_endpoint_and_protocol(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+
+    monkeypatch.setattr(ai_mod, "load_provider_entries", lambda user: [{
+        "id": "saved", "protocol": "openai", "api_key": "stored-key",
+        "base_url": "https://old.example",
+    }])
+    calls = []
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", lambda req: calls.append(req) or {"data": []})
+    for fields in ({}, {"base_url": ""}, {"protocol": "anthropic", "base_url": "https://new.example"}):
+        response = erin.post("/api/ai/model-catalog", json={"provider_id": "saved", **fields})
+        assert response.status_code == 200
+    assert calls[0].full_url == "https://old.example/v1/models"
+    assert calls[1].full_url == "https://api.openai.com/v1/models"
+    assert calls[2].full_url == "https://new.example/v1/models?limit=100"
+    assert calls[2].get_header("X-api-key") == "stored-key"
+
+
 # --- Wire protocol ------------------------------------------------------------
 
 def test_chatgpt_request_shape_with_pdf_and_image():

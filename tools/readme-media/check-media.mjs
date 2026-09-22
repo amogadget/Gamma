@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chromium, ROOT } from './runtime.mjs';
 
 const directory = path.join(ROOT, 'docs/assets/demos');
-const scratch = path.join(ROOT, 'tmp/readme-media/qa');
+const scratch = path.join(ROOT, 'artifacts/readme-media/qa');
 fs.mkdirSync(scratch, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 try {

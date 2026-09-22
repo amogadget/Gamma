@@ -17,6 +17,7 @@ by id, never by account).
 import os
 import re
 import sqlite3
+from urllib.parse import urlsplit
 
 import bcrypt
 from fastapi import APIRouter, HTTPException, Request
@@ -28,6 +29,7 @@ from .. import backups, workspaces
 from ..auth import require_admin
 from ..db import connect_users_db
 from ..logbuf import tail as _log_tail
+from .. import version
 from ..seed import create_account
 from ..server_settings import (
     QUOTA_MB_MAX,
@@ -35,6 +37,9 @@ from ..server_settings import (
     UPLOAD_MB_MAX,
     UPLOAD_MB_MIN,
     get_defaults,
+    public_url_settings,
+    set_public_url,
+    validate_public_url,
     set_default_max_upload_mb,
     set_default_quota_mb,
     usage_bytes,
@@ -80,6 +85,17 @@ def _check_password(password: str) -> str:
     return password
 
 
+@router.get("/server-info")
+def server_info(request: Request, refresh: bool = False):
+    """The Settings → Server dashboard: build, uptime, log counts by level,
+    the latest GitHub release and whether it is newer (``update_available``:
+    True/False, or None for an unversioned build). ``refresh=1`` bypasses
+    the release cache. Sync on purpose: the release check is a network
+    call."""
+    require_admin(request)
+    return version.server_info(refresh=refresh)
+
+
 @router.get("/logs")
 async def get_logs(request: Request, after: int = 0):
     """Scrubbed in-memory server log (see gamma.logbuf) for the Settings →
@@ -94,12 +110,13 @@ async def get_settings(request: Request):
     """Server-wide default storage limits (per-user overrides live on the
     users list) for the admin rows in the Settings dialog."""
     require_admin(request)
-    return {**get_defaults(),
+    return {**get_defaults(), **public_url_settings(),
             "max_upload_mb_range": [UPLOAD_MB_MIN, UPLOAD_MB_MAX],
             "quota_mb_range": [QUOTA_MB_MIN, QUOTA_MB_MAX]}
 
 
 class SettingsUpdateRequest(BaseModel):
+    public_url: str | None = None
     max_upload_mb: int | None = None
     quota_mb: int | None = None  # 0 = unlimited
 
@@ -108,13 +125,26 @@ class SettingsUpdateRequest(BaseModel):
 async def update_settings(payload: SettingsUpdateRequest, request: Request):
     require_admin(request)
     try:
+        if payload.public_url is not None:
+            origin = request.headers.get("origin")
+            if (request.headers.get("sec-fetch-site") == "cross-site"
+                    or (origin and urlsplit(origin).netloc.lower() != request.url.netloc.lower())):
+                raise HTTPException(403, "Cross-origin server settings changes are not allowed.")
+            validate_public_url(payload.public_url)
+        # Validate the complete request before persisting any setting.
+        if payload.max_upload_mb is not None:
+            validate_upload_mb(payload.max_upload_mb)
+        if payload.quota_mb is not None:
+            validate_quota_mb(payload.quota_mb)
+        if payload.public_url is not None:
+            set_public_url(payload.public_url)
         if payload.max_upload_mb is not None:
             set_default_max_upload_mb(payload.max_upload_mb)
         if payload.quota_mb is not None:
             set_default_quota_mb(payload.quota_mb)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return get_defaults()
+    return {**get_defaults(), **public_url_settings()}
 
 
 @router.get("/users")
@@ -320,7 +350,6 @@ async def delete_user(username: str, request: Request):
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
-        conn.execute("DELETE FROM publisher_sessions WHERE username = ?", (username,))
         conn.commit()
         users = _user_list(conn)
     return {"users": users, "deleted_workspaces": deleted, "warning": ""}

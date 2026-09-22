@@ -8,7 +8,7 @@
 // the same normalized view of the page text (normalizeChars).
 //
 // Results are grouped by how directly they answer the query: matching paper
-// titles first (relevance-ranked via scoreTitle — the filter-chip listing
+// titles first (relevance-ranked via `createTitleScorer` in library/librarySearch.js — the filter-chip listing
 // sorts through the same scorer), then the open paper (its notes, then its
 // PDF text with
 // highlighted, navigable matches), then other notes, reference links, and
@@ -288,6 +288,7 @@ export default function SearchPanel({
       <button
         className={`iconBtn ${open ? "activeIcon" : ""}`}
         onClick={() => onOpenChange(!open)}
+        data-guide="header.search"
         title="Search everything (Ctrl+F)"
         aria-label="Search"
       >

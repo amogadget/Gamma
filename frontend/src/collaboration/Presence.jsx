@@ -1,4 +1,4 @@
-// Who else is on the page (collab.js `peers`): the avatar stack in the page
+// Who else is on the page (collaboration/usePageCollab.js `peers`): the avatar stack in the page
 // header, and the small chips on the block a person is on. Colours are the
 // room's per-peer index (CSS --peer-N); an open editor shows as a full
 // avatar, a mere viewer as a faded one.
@@ -11,7 +11,8 @@ function initial(peer) {
 
 function describe(peer) {
   const what = peer.anchor >= 0 ? "editing" : peer.block ? "on a block" : "viewing";
-  return `${peer.name || "Anonymous"} · ${what}`;
+  // No account behind the peer: a share-link visitor under a chosen name.
+  return `${peer.name || "Anonymous"}${peer.user ? "" : " (via link)"} · ${what}`;
 }
 
 export function PeerAvatar({ peer, onClick, title }) {

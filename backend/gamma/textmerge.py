@@ -26,7 +26,7 @@ def merge(base: str, ours: str, theirs: str) -> tuple[str, bool]:
     clean)``; ``clean`` is False when a hunk could not be placed."""
     if theirs == base:
         return ours, True
-    if ours == base:
+    if ours == base or ours == theirs:
         return theirs, True
     patches = _dmp.patch_make(base, ours)
     text, results = _dmp.patch_apply(patches, theirs)

@@ -17,7 +17,8 @@ async function refreshAccount() {
   }
   try {
     const me = await whoAmI();
-    status("server-status", `Connected to ${settings.server}.`, "ok");
+    $("server").value = me.origin;
+    status("server-status", `Connected to ${me.origin}.`, "ok");
     $("signed-out").classList.toggle("hidden", !!me.user);
     $("signed-in").classList.toggle("hidden", !me.user);
     if (me.user) $("who").textContent = me.user;
@@ -61,6 +62,7 @@ async function saveDefaults() {
     labels: $("labels").value.split(",").map((s) => s.trim()).filter(Boolean),
     allowOa: $("allow-oa").checked,
     saveCopy: $("save-copy").checked,
+    autoRefreshSessions: $("auto-sessions").checked,
   });
   status("save-status", "Saved.", "ok");
   setTimeout(() => status("save-status", ""), 1500);
@@ -73,11 +75,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("labels").value = (s.labels || []).join(", ");
   $("allow-oa").checked = !!s.allowOa;
   $("save-copy").checked = !!s.saveCopy;
+  $("auto-sessions").checked = s.autoRefreshSessions !== false;
   $("connect").onclick = connect;
   $("server").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
   $("login-form").addEventListener("submit", doLogin);
   $("login").onclick = doLogin;
   $("logout").onclick = doLogout;
-  for (const id of ["folder", "labels", "allow-oa", "save-copy"]) $(id).addEventListener("change", saveDefaults);
+  for (const id of ["folder", "labels", "allow-oa", "save-copy", "auto-sessions"]) $(id).addEventListener("change", saveDefaults);
   await refreshAccount();
 });

@@ -31,6 +31,5 @@ export function LibraryDisplaySettings({ value }) {
         </div>
       </div>
     </div>
-    <p className="libraryDisplayHint">Thumbnails appear in Recently viewed. Folders and labels appear throughout your library.</p>
   </div>;
 }

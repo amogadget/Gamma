@@ -370,3 +370,64 @@ def test_orphan_cleanup_spares_fresh_uploads(guest, monkeypatch):
     monkeypatch.setattr(storage, "UPLOAD_GRACE_S", 0)
     guest.delete(f"/api/blocks/{guest.post('/api/blocks', json={'parent_id': 'root', 'content': 'x'}).json()['id']}")
     assert not path.exists()
+
+
+# --- the page log's hygiene ---------------------------------------------------------
+
+def _pages_conn(user="guest"):
+    from gamma.db import connect_pages_db
+    return connect_pages_db(workspace_of(user))
+
+
+def test_root_listing_is_a_pure_read(guest):
+    """A leaked upload path is repaired by the migration/restore normalizer
+    (gamma/normalize.py), never by a listing: reads write nothing."""
+    from gamma.normalize import normalize_pages_db
+
+    page = make_page(guest, "dir/leaked.pdf")
+    with _pages_conn() as conn:
+        conn.execute("UPDATE unified_blocks SET properties = ? WHERE id = ?",
+                     ('{"original_filename": "dir/leaked.pdf", "auto_title": "dir/leaked.pdf"}', page["id"]))
+        conn.commit()
+    listed = {b["id"]: b for b in guest.get("/api/blocks/root/children").json()["children"]}
+    assert listed[page["id"]]["content"] == "dir/leaked.pdf"
+    assert listed[page["id"]]["properties"]["original_filename"] == "dir/leaked.pdf"
+    with _pages_conn() as conn:
+        assert normalize_pages_db(conn)["upload_path_titles"] == 1
+    fixed = guest.get(f"/api/blocks/{page['id']}").json()
+    assert fixed["content"] == "leaked.pdf" and fixed["properties"]["original_filename"] == "leaked.pdf"
+
+
+def test_deleting_a_page_leaves_a_tombstone_and_drops_its_op_log(guest):
+    from gamma.blocks_store import create_page
+
+    page = make_page(guest, "Doomed")
+    guest.post("/api/blocks", json={"parent_id": page["id"], "content": "note"}).raise_for_status()
+    with _pages_conn() as conn:
+        assert conn.execute("SELECT count(*) FROM page_ops WHERE page_id = ?", (page["id"],)).fetchone()[0] == 1
+    r = guest.delete(f"/api/blocks/{page['id']}")
+    assert r.status_code == 200, r.text
+    with _pages_conn() as conn:
+        assert conn.execute("SELECT count(*) FROM page_ops WHERE page_id = ?", (page["id"],)).fetchone()[0] == 0
+        row = conn.execute("SELECT actor FROM deleted_pages WHERE page_id = ?", (page["id"],)).fetchone()
+        assert row == ("guest",)
+        # a page brought back under the same id is no longer "deleted"
+        create_page(conn, "Back", block_id=page["id"])
+        assert conn.execute("SELECT 1 FROM deleted_pages WHERE page_id = ?", (page["id"],)).fetchone() is None
+    assert guest.get(f"/api/blocks/{page['id']}").json()["content"] == "Back"
+
+
+def test_by_doc_backfill_on_an_existing_page_is_an_op(guest):
+    """get_or_create_doc_page's marker backfill is a logged op batch on the
+    page, like every write to an existing page."""
+    doc_id = _upload_pdf(guest, PDF_BYTES + b"backfill")
+    page = guest.post(f"/api/blocks/by-doc/{doc_id}", json={"default_title": "paper.pdf"}).json()
+    seq0 = guest.get(f"/api/blocks/{page['id']}/subtree").json()["seq"]
+    again = guest.post(f"/api/blocks/by-doc/{doc_id}", json={
+        "default_title": "paper.pdf", "original_filename": "paper.pdf"}).json()
+    assert again["id"] == page["id"] and again["properties"]["original_filename"] == "paper.pdf"
+    log = guest.get(f"/api/pages/{page['id']}/ops?since={seq0}").json()
+    assert len(log["batches"]) == 1
+    (op,) = log["batches"][0]["ops"]
+    assert op["op"] == "set" and op["id"] == page["id"] and op["props"] == {"original_filename": "paper.pdf"}
+    assert log["batches"][0]["actor"] == "guest"
