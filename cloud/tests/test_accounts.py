@@ -182,6 +182,17 @@ def test_admin_flag_in_me(client):
     assert client.get("/api/me").json()["account"]["is_admin"] is True
 
 
+def test_mail_failure_is_a_503(client, monkeypatch):
+    def boom(*a, **k):
+        raise mail.MailError("domain not verified")
+    monkeypatch.setattr(mail, "send", boom)
+    r = client.post("/api/register", json={"email": "z@example.org", "username": "zed", "password": "correct horse battery",
+                                           "invite": invite()})
+    assert r.status_code == 503 and "could not send" in r.json()["detail"].lower()
+    r = client.post("/api/reset/request", json={"email": "z@example.org"})
+    assert r.status_code in (200, 503)  # no account → nothing to send; the answer never says which
+
+
 def test_health_and_config(client):
     assert client.get("/api/health").json() == {"ok": True}
     cfg = client.get("/api/config").json()

@@ -49,9 +49,20 @@ def portal_account(conn, request: Request):
     return account
 
 
+def send_mail(to: str, subject: str, body: str) -> None:
+    """A mail that cannot be sent is a 503 with a plain message, never a
+    stack trace: the provider being down or the domain unverified is an
+    operator's problem, logged as a warning."""
+    try:
+        mail.send(to, subject, body)
+    except mail.MailError as e:
+        log.warning("mail to %s failed: %s", to, e)
+        raise HTTPException(503, "We could not send the e-mail right now. Try again in a few minutes.") from e
+
+
 def send_verify(conn, account) -> None:
     token = accounts.issue_email_token(conn, account["id"], "verify", config.VERIFY_TOKEN_TTL)
-    mail.send(account["email"], *accounts.verify_mail(account, token))
+    send_mail(account["email"], *accounts.verify_mail(account, token))
 
 
 def _problem(e: Problem):
@@ -286,7 +297,7 @@ def reset_request(body: ResetRequestBody, request: Request):
         account = accounts.by_email(conn, email)
         if account:
             token = accounts.issue_email_token(conn, account["id"], "reset", config.RESET_TOKEN_TTL)
-            mail.send(email, *accounts.reset_mail(account, token))
+            send_mail(email, *accounts.reset_mail(account, token))
             db.audit(conn, "account.reset_request", account["id"], account["id"], ip)
             conn.commit()
     return {"ok": True}
@@ -340,7 +351,7 @@ def email_change(body: EmailChangeBody, request: Request):
         if conn.execute("SELECT 1 FROM accounts WHERE email = ?", (new_email,)).fetchone():
             raise HTTPException(409, "There is already an account with that e-mail address.")
         token = accounts.issue_email_token(conn, account["id"], "change-email", config.VERIFY_TOKEN_TTL, new_email)
-        mail.send(new_email, *accounts.change_email_mail(account, new_email, token))
+        send_mail(new_email, *accounts.change_email_mail(account, new_email, token))
         conn.commit()
     return {"ok": True}
 
@@ -360,7 +371,10 @@ def email_confirm(body: TokenBody, request: Request):
             conn.rollback()
             _problem(e)
         conn.commit()
-    mail.send(old_email, *accounts.email_changed_notice(account, new_email))
+    try:
+        mail.send(old_email, *accounts.email_changed_notice(account, new_email))
+    except mail.MailError as e:  # the change is done; the courtesy notice may fail
+        log.warning("mail to %s failed: %s", old_email, e)
     return {"ok": True, "email": new_email}
 
 

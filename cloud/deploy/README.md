@@ -28,16 +28,21 @@ with `compose.yml` + `compose.build.yml` from a copy of `cloud/` in
 `src/` (the GHCR image does not exist until the first merge to `main`;
 after that, drop `compose.build.yml` and `docker compose pull`). The
 admin account `tim` and a first invite exist. Mail is still `console`
-(the links show in `docker compose logs account`) until SMTP is set, and
-Caddy is waiting for the DNS record to obtain its certificate.
+(the links show in `docker compose logs account`) until the Resend domain
+is verified — the SMTP credential is already in `.env`.
 
 ## First deployment on a VPS
 
 1. **DNS.** In the Cloudflare zone add `A account → <the VPS address>`,
-   **DNS only** (grey cloud) at first, so Let's Encrypt can reach Caddy
-   directly for the HTTP challenge. Once the certificate exists you may
-   turn the proxy on with SSL mode *Full (strict)*, which adds the WAF and
-   rate rules in front.
+   proxied (orange cloud), and set SSL/TLS mode to **Full** for the zone
+   (or a configuration rule for the hostname). Cloudflare holds the public
+   certificate; between Cloudflare and the host Caddy serves its own
+   internal certificate (`tls internal` in the Caddyfile), because Let's
+   Encrypt cannot validate a proxied hostname. *Full (strict)* needs a
+   Cloudflare Origin CA certificate mounted into Caddy instead (see the
+   Caddyfile). A 521 from Cloudflare means it could not reach port 443 of
+   the address in the record; a 526 means strict mode with the internal
+   certificate.
 2. **The folder** on the host:
 
    ```bash
@@ -61,7 +66,9 @@ Caddy is waiting for the DNS record to obtain its certificate.
    ```
 
    The `issuer` in the answer must be exactly `https://account.gammapdf.com`.
-   `docker compose logs caddy` shows the certificate being obtained.
+   `docker compose logs caddy` shows the internal certificate being made;
+   from the host, `curl -k --resolve account.gammapdf.com:443:127.0.0.1
+   https://account.gammapdf.com/api/health` must answer 200.
 4. **The first admin and invites** (inside the container, where `manage.py`
    and `/data` are):
 
