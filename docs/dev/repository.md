@@ -11,6 +11,7 @@ launcher, and desktop release workflows use these locations.
 | `tests/shared/` | JSON cases for rules mirrored between backend and frontend (search normalization, folder paths), read by both test suites |
 | `frontend/src/` | React code grouped by function (`editor/`, `pdf/`, `settings/`, etc.), orchestration in `app/`, reused code/assets in `shared/`; [source map](../../frontend/src/README.md) |
 | `frontend/public/` | Files copied as-is into the frontend build |
+| `cloud/` | The Gamma Cloud account server (`gammacloud` package, `manage.py`, `tests/`, its own Dockerfile and requirements); imports nothing from `backend/` ([cloud_accounts.md](cloud_accounts.md)) |
 | `desktop/` | Electron shell and desktop packaging |
 | `extension/` | Browser connector, loaded unpacked without a build step |
 | `sites/` | The gammapdf.com website: static pages deployed as a Cloudflare Worker; its build copies the branding, demos and screenshot from `docs/assets/` ([sites/README.md](../../sites/README.md)) |

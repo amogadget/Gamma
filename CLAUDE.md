@@ -43,6 +43,7 @@ Topic docs live in `docs/dev/` — **read the relevant one before working in tha
 - [docs/dev/settings.md](docs/dev/settings.md) — where every setting is stored (localStorage / synced prefs / server), the Settings dialog's pane and file layout, storage limits.
 - [docs/dev/ui-design.md](docs/dev/ui-design.md) — the unified control classes, settings primitives, theme system, layout rules, frontend file map.
 - [docs/dev/debugging.md](docs/dev/debugging.md) — run/test/debug: commands, test suite, log surfaces, common gotchas.
+- [docs/dev/cloud_accounts.md](docs/dev/cloud_accounts.md) — the Gamma Cloud account server (`cloud/`, package `gammacloud`): accounts and the portal, the OpenID Connect provider every Gamma server signs people in through (the built-in public desktop client with loopback redirects, confidential share-host/container clients, EdDSA ID tokens, rotating refresh tokens), the admin API + `manage.py`, `cloud.db` and its versioned upgrade. The plan it serves: [todos/gamma-cloud-plan.md](todos/gamma-cloud-plan.md). Read before touching anything in `cloud/`.
 - [docs/dev/github_actions.md](docs/dev/github_actions.md) — the CI/release workflows: `check` (PR), `desktop`, `extension`, `docker` — a merge to main publishes only Docker, the desktop app and extension release through the `release` skill (workflow dispatch); triggers, the tag-derived version rule (files are only a floor), the "latest release" invariant the updater depends on, Store submission, secrets, dispatch commands.
 
 ## Commands
@@ -66,6 +67,10 @@ python -m pytest tests/test_mcp_oauth.py -q  # select files relevant to the chan
 # Frontend tests — from frontend/
 node --test tests/settings.test.mjs      # select relevant pure-module tests
 npm run build && npm run e2e -- --only settings  # for changes to this UI flow
+
+# Account server (Gamma Cloud) — from cloud/, the backend venv has its deps
+python manage.py setup && uvicorn app:app --port 9002 --reload
+python -m pytest tests -q
 ```
 
 Test affected modules and their direct consumers by default; do not run full suites after every edit. Prefer whole backend test files (some tests within a file share state), and omit `-n auto` for small selections. UI behavior changes need the relevant browser flow; build once after the final frontend edit before running it. Documentation-only changes need no application tests. Broaden coverage for shared contracts, auth, storage, migrations, or uncertain impact. Full suites remain in PR CI; run them locally for broad changes, explicit requests, or unresolved regression concerns. Report the checks run and relevant gaps. See [the test selection policy](docs/dev/debugging.md#local-changes-test-the-affected-modules).
@@ -121,6 +126,10 @@ Frontend has no linter. UI changes are verified by relevant flows in the browser
 ### Browser extension (`extension/`)
 
 - Gamma Connector, a Zotero-Connector-style Chrome MV3 extension, no build step (plain ES modules; load unpacked). `detect.js` (content script) finds the paper on a page, `worker.js` keeps per-tab state + badge and runs saves through ONE server call, `POST /api/clip` (`gamma/routers/clip.py`), which reuses `pdf.resolve_source` / `pdf.download_pdf`, `blocks_store.get_or_create_doc_page` and `metadata.fetch_page_metadata` — keep the ingest logic in those helpers, never re-implement it in the extension. Auth is the app's session cookie (the extension holds a runtime host permission for the server origin, so `SameSite=Lax` is sent); no tokens, no CORS. Details: [docs/dev/extension.md](docs/dev/extension.md).
+
+### Account server (`cloud/`)
+
+- The Gamma Cloud account server, a separate FastAPI service (package `gammacloud`, one SQLite file `cloud.db`, env `GAMMA_CLOUD_*`), the identity every Gamma server can accept: accounts (e-mail, unique handle = the username on Gamma servers, bcrypt, verified-e-mail gate), the portal pages, and an OpenID Connect provider (PKCE authorization code, EdDSA ID tokens with `handle`/`plan`/`email`/`email_verified` claims, opaque access tokens, rotating refresh tokens for the built-in public desktop client only). Imports nothing from `backend/`; the shared pieces (rate limiter, PKCE rules) are copies. Gamma's own "Sign in with Gamma Cloud" client is not built yet. Everything: [docs/dev/cloud_accounts.md](docs/dev/cloud_accounts.md).
 
 ### Desktop app (`desktop/`)
 

@@ -21,6 +21,7 @@ import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "../li
 import ChatDock from "../chat/ChatDock";
 import { createChatSession } from "../chat/chatSession";
 import SearchPanel from "../search/SearchPanel";
+import QuickOpen from "../library/QuickOpen";
 import { ContextMenu, MenuItem, MenuLabel, MenuSelect, SubMenuItem } from "../shared/ui/Menus";
 import {
   ActivityIcon, AlertCircleIcon, ArrowLeftIcon, ArrowUpDownIcon, BookIcon, CheckIcon, CopyIcon, DatabaseIcon, DownloadIcon, ExportIcon,
@@ -2288,6 +2289,7 @@ function LibraryApp() {
   const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
+  const [quickOpen, setQuickOpen] = useState(false); // the Ctrl+P page palette
   useEffect(() => {
     if (!openPopover) return;
     function onDown(e) {
@@ -2385,6 +2387,13 @@ function LibraryApp() {
           if (homeFind) { homeFind.focus(); homeFind.select(); return; }
         }
         setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+        // Ctrl+P: the quick-open page palette (library/QuickOpen.jsx) instead
+        // of the browser's print. A share view has no library to pick from.
+        if (shareMode) return;
+        e.preventDefault();
+        setOpenPopover(null);
+        setQuickOpen((v) => !v);
       } else if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
         goBackNavRef.current?.();
@@ -2405,6 +2414,7 @@ function LibraryApp() {
         if (inEditor || applied) e.preventDefault();
       } else if (e.key === "Escape") {
         setOpenPopover(null);
+        setQuickOpen(false);
         setHomeMenu(null);
         setSelectedPages((prev) => (prev.size ? new Set() : prev));
       }
@@ -9023,6 +9033,15 @@ function LibraryApp() {
           </div>
         </div>
       ) : null}
+      <QuickOpen
+        open={quickOpen}
+        onClose={() => setQuickOpen(false)}
+        pages={homeBlocks}
+        recentViews={recentViews}
+        openTabs={openTabs}
+        currentPageId={focusedBlockId}
+        onOpen={openPage}
+      />
       <GuideOverlay guide={guide} />
       <SettingsDialog
         activePane={settingsOpen}

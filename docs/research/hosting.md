@@ -10,6 +10,17 @@ was picked. The current mechanics live in
 [dev/collab.md](../dev/collab.md) and [dev/migrations.md](../dev/migrations.md);
 nothing here is implemented.
 
+**Superseded (2026-09-21).** The shape below — sharded multi-tenant nodes
+behind an edge router — was replaced by the plan in
+[todos/gamma-cloud-plan.md](../../todos/gamma-cloud-plan.md): a paid
+customer gets a container of their own (the unchanged self-hosted image),
+the free tier lives in the desktop app, one small shared instance hosts
+published pages, and one account server ([dev/cloud_accounts.md](../dev/cloud_accounts.md),
+built) is the identity every Gamma server accepts. The couplings listed
+here are still the reasons: with one container per customer none of them
+has to be undone. This note stays as the record of why sharding was
+considered and what it would have cost.
+
 ## Where the code assumes one machine
 
 Four couplings were found; they differ a lot in how hard they are to undo.
