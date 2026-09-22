@@ -22,8 +22,13 @@ targets:
           - "**/*.md"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.gamma.pdfnotes.ipad
+        PRODUCT_BUNDLE_IDENTIFIER: net.blitzbuild.gamma
+        DEVELOPMENT_TEAM: A436A36DDC
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "2"
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Gamma
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Record audio notes linked to your Gamma document when you tap Record.
@@ -47,7 +52,7 @@ targets:
       - target: GammaIPad
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.gamma.pdfnotes.ipad.tests
+        PRODUCT_BUNDLE_IDENTIFIER: net.blitzbuild.gamma.tests
         GENERATE_INFOPLIST_FILE: YES
 schemes:
   GammaIPad:
