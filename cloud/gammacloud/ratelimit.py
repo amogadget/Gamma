@@ -1,0 +1,49 @@
+"""A tiny in-process rate limiter for the abuse-prone endpoints (register,
+login, reset, token). Fixed-window counters in a dict — resets on restart.
+The first line of defence is Cloudflare's rate rules in front of the
+server; this one stops trivial guessing from a single host."""
+
+import time
+from collections import defaultdict
+
+from fastapi import HTTPException, Request
+
+_buckets: dict[str, list] = defaultdict(lambda: [0.0, 0])
+
+
+def client_ip(request: Request) -> str:
+    """Trusts the first X-Forwarded-For hop (Cloudflare sets it), else the
+    socket peer."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "?"
+
+
+_MAX_KEYS = 50000
+
+
+def check(key: str, max_hits: int, window_seconds: int) -> None:
+    now = time.monotonic()
+    if len(_buckets) > _MAX_KEYS:
+        # Keys are per IP and per e-mail, so a scan can grow the dict: drop
+        # every window that is over (an hour is the longest one used).
+        for k in [k for k, b in _buckets.items() if now - b[0] >= 3600]:
+            del _buckets[k]
+    bucket = _buckets[key]
+    if now - bucket[0] >= window_seconds:
+        bucket[0], bucket[1] = now, 0
+    bucket[1] += 1
+    if bucket[1] > max_hits:
+        retry = max(1, int(window_seconds - (now - bucket[0])))
+        raise HTTPException(status_code=429, detail="Too many attempts. Wait a bit and try again.",
+                            headers={"Retry-After": str(retry)})
+
+
+def reset(key: str) -> None:
+    _buckets.pop(key, None)
+
+
+def clear() -> None:
+    """Tests."""
+    _buckets.clear()

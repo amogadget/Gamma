@@ -38,6 +38,11 @@ the extension zip, and for the star count. Every element keeps a working
 fallback link if that call fails. There are no cookies and no analytics, in
 line with the app's privacy policy.
 
+The header's **Sign in** link and the `/login`, `/account` and `/signup`
+short links go to the Gamma Cloud account server at `account.gammapdf.com`
+([docs/dev/cloud_accounts.md](../docs/dev/cloud_accounts.md)); the site
+itself has no accounts.
+
 `_redirects` gives the short links (`/download`, `/download/windows`,
 `/docs`, `/github`, …); its sources must be relative paths, so the `www.` to
 apex redirect is the Worker script's job. `_headers` sets the security

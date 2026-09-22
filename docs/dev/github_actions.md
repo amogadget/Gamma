@@ -7,10 +7,10 @@ is bumped or tagged by hand: versions are computed from the tags.
 
 | Workflow | File | Runs when | Produces |
 |---|---|---|---|
-| `check` | `check.yml` | every pull request to `main` | pass/fail: brand asset consistency, backend pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
+| `check` | `check.yml` | every pull request to `main` | pass/fail: brand asset consistency, backend pytest, the account server's pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
 | `desktop` | `desktop.yml` | manual dispatch only (`release` skill) | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
 | `extension` | `extension.yml` | manual dispatch only (`release` skill) | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
-| `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
+| `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64; and `ghcr.io/tim4431/gamma-cloud:latest`, the account server (`cloud/Dockerfile`, amd64) |
 | `site` | `site.yml` | a push to `main` touching `sites/`, the artwork and demos it copies, or `PRIVACY.md`; or manual dispatch | gammapdf.com: `sites/dist` built and deployed as a Cloudflare Worker (static assets only; needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`; [sites/README.md](../../sites/README.md)) |
 | `Codex plugin package` | `codex-plugin.yml` | PRs touching the plugin or its tooling, or manual dispatch | installer tests on Windows/macOS/Linux and preview plugin release assets (pins `checkout@v4`/`setup-python@v5`/`upload-artifact@v4`, older than the rule below) |
 
@@ -129,8 +129,10 @@ The Chrome Web Store upload stays manual
 
 ## `check.yml`
 
-Four parallel Ubuntu jobs on every PR to `main`: backend pytest (Python
-3.12, `requirements.txt` + `requirements-dev.txt`, `-n auto` over pytest-xdist), the frontend unit tests
+Five parallel Ubuntu jobs on every PR to `main`: backend pytest (Python
+3.12, `requirements.txt` + `requirements-dev.txt`, `-n auto` over pytest-xdist), the account
+server's pytest (`cloud/`, its own requirements files,
+[cloud_accounts.md](cloud_accounts.md)), the frontend unit tests
 + build (Node 22, `npm test` then `npm run build`), the browser suite
 (`npm run e2e -- --continue` against a backend started from the checkout
 with `GAMMA_E2E_PYTHON=python` — both requirements files, since a scenario
@@ -145,7 +147,10 @@ fixed on the branch as normal work.
 
 buildx for amd64 + arm64, `latest` on every push to `main`. When dispatched
 with a `version` input (the desktop publish job does this on the release
-tag) it also pushes `<version>` and `<major.minor>`. Setup notes:
+tag) it also pushes `<version>` and `<major.minor>`. A second job builds
+the account server from `cloud/Dockerfile` as `gamma-cloud` (amd64 only,
+`latest` and `<version>`) — it is deployed by hand to the one box that
+runs it. Setup notes:
 [docs/dev/debugging.md](debugging.md) and the memory note on GHCR.
 
 ## Running and watching by hand

@@ -33,6 +33,8 @@ import { inkEditingScenarios } from "./scenarios/inkEditing.mjs";
 import { pdfLoadScenarios } from "./scenarios/pdfload.mjs";
 import { pdfTouchScenarios } from "./scenarios/pdfTouch.mjs";
 import { ipadScenarios } from "./scenarios/ipad.mjs";
+import { quickOpenScenarios } from "./scenarios/quickOpen.mjs";
+import { cloudSignInScenarios } from "./scenarios/cloudSignIn.mjs";
 
 const server = new Server();
 let browser;
@@ -88,8 +90,10 @@ try {
 
   await settingsScenarios(env);
   await mcpScenarios(env);
+  await cloudSignInScenarios(env);
   await mirrorScenarios(env);
   await mentionScenarios(env);
+  await quickOpenScenarios(env);
   await chatNavigationScenarios(env);
   await transferScenarios(env);
   await mermaidScenarios(env);

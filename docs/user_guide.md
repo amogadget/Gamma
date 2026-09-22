@@ -97,6 +97,7 @@ The home page is a recents feed of all your pages, with a **Recently viewed** st
 **Ctrl+F** searches everything at once: page titles, this paper's notes, this PDF's text, other notes, reference links, and the full text of every PDF in the library — with match-case, whole-word and regex toggles.
 
 - **Filter chips**: type a label or folder name and press Tab — label chips match exactly, folder chips include everything beneath them (`qc` pulls in `qc/neutral-atom`).
+- **Ctrl+P** is the quick way to another page: a palette listing your recent pages, filtered by title as you type — ↑↓ and Enter open it.
 - **Enter / Shift+Enter** step through matches; the chevron collapses the result lists into a compact find bar (make that the default in Settings → Reading & editing).
 - Matching is forgiving: "3000" finds "3,000-qubit", even across a line break. Opening a library hit loads the paper and scrolls to the highlighted match.
 
@@ -248,6 +249,7 @@ Preferences apply immediately; browser-only ones (theme, layout) are marked *Thi
 | Keys | Does |
 |---|---|
 | Ctrl+F | Search everything (find-in-chat when the chat is focused) |
+| Ctrl+P | Quick open: pick a page by title (recent pages first) |
 | Enter / Shift+Enter | In search: next / previous match. In notes: line break / new note (swappable). In chat: send / newline |
 | Tab / Shift+Tab | Indent / outdent a note · accept a search filter chip · hop between `{}` arguments in math · hop table cells |
 | Ctrl+B / I / E / Shift+X / Shift+H | Bold / italic / code / strike / highlight |

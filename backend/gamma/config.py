@@ -39,6 +39,21 @@ def publisher_session_key() -> str:
     return os.environ.get("GAMMA_PUBLISHER_SESSION_KEY", "")
 
 
+def cloud_env() -> dict:
+    """Sign in with Gamma Cloud (gamma/cloud_auth.py) as a provisioned
+    container gets it: ``GAMMA_CLOUD_ISSUER`` (the account server; set, it
+    overrides the saved settings), ``GAMMA_CLOUD_CLIENT_ID`` /
+    ``GAMMA_CLOUD_CLIENT_SECRET`` (a confidential client; unset = the public
+    desktop client), ``GAMMA_CLOUD_POLICY`` (refuse / claim / provision) and
+    ``GAMMA_CLOUD_ADMIN_SUBJECT`` (the cloud account that becomes this
+    server's admin on first sign-in)."""
+    return {"issuer": os.environ.get("GAMMA_CLOUD_ISSUER", "").strip().rstrip("/"),
+            "client_id": os.environ.get("GAMMA_CLOUD_CLIENT_ID", "").strip(),
+            "client_secret": os.environ.get("GAMMA_CLOUD_CLIENT_SECRET", ""),
+            "policy": os.environ.get("GAMMA_CLOUD_POLICY", "").strip().lower(),
+            "admin_subject": os.environ.get("GAMMA_CLOUD_ADMIN_SUBJECT", "").strip()}
+
+
 def sync_interval_s() -> int:
     """Seconds between mirror sync rounds (gamma/sync_engine.py); 0 turns
     the background loop off (the API's "sync now" still works)."""

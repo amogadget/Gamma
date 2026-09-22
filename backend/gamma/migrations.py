@@ -436,6 +436,15 @@ def _v13_sync_conflict_base(conn: sqlite3.Connection) -> None:
             pdb.commit()
 
 
+def _v14_identities(conn: sqlite3.Connection) -> None:
+    """Adds ``identities`` (+ its unique index) in users.db: the cloud
+    identity linked to an account (gamma/cloud_auth.py)."""
+    for stmt in USERS_SCHEMA:
+        if "identities" in stmt:
+            conn.execute(stmt)
+    conn.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
@@ -450,4 +459,5 @@ STEPS = [
     (11, "mirror_cadence", _v11_mirror_cadence),
     (12, "sync_log_stats", _v12_sync_log_stats),
     (13, "sync_conflict_base", _v13_sync_conflict_base),
+    (14, "identities", _v14_identities),
 ]

@@ -40,8 +40,7 @@ from .routers import (
     sync,
     uploads,
     workspaces,
-    ws_backups,
-)
+    ws_backups, cloud_auth as cloud_auth_router)
 from .seed import ensure_admin_seed
 from .storage import cleanup_orphan_uploads
 
@@ -124,6 +123,7 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     app.include_router(auth_router.router)
+    app.include_router(cloud_auth_router.router)
     app.include_router(admin.router)
     app.include_router(workspaces.router)
     app.include_router(ws_backups.router)

@@ -166,6 +166,21 @@ def ensure_admin_seed():
     return username, password
 
 
+def create_cloud_account(username: str, is_admin: bool = False) -> str:
+    """An account only its cloud identity can sign in as: a real (non-guest)
+    row with an EMPTY password hash — the password login refuses those —
+    plus its personal workspace (gamma/cloud_auth.py ``provision``)."""
+    from . import workspaces
+
+    with connect_users_db() as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) VALUES (?, '', 0, ?, ?)",
+            (username, 1 if is_admin else 0, page_now()),
+        )
+        conn.commit()
+    return workspaces.ensure_personal(username)
+
+
 def create_account(username: str, password: str | None, is_admin: bool = False) -> str:
     """Insert an account row (a missing password makes a guest-style
     account) and its personal workspace. Returns the workspace id. Shared by

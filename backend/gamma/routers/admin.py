@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from .. import backups, workspaces
+from .. import backups, cloud_auth, workspaces
 from ..auth import require_admin
 from ..db import connect_users_db
 from ..logbuf import tail as _log_tail
@@ -110,7 +110,7 @@ async def get_settings(request: Request):
     """Server-wide default storage limits (per-user overrides live on the
     users list) for the admin rows in the Settings dialog."""
     require_admin(request)
-    return {**get_defaults(), **public_url_settings(),
+    return {**get_defaults(), **public_url_settings(), "cloud": cloud_auth.settings(),
             "max_upload_mb_range": [UPLOAD_MB_MIN, UPLOAD_MB_MAX],
             "quota_mb_range": [QUOTA_MB_MIN, QUOTA_MB_MAX]}
 
@@ -119,6 +119,11 @@ class SettingsUpdateRequest(BaseModel):
     public_url: str | None = None
     max_upload_mb: int | None = None
     quota_mb: int | None = None  # 0 = unlimited
+    # Sign in with Gamma Cloud (gamma/cloud_auth.py); the secret is write-only.
+    cloud_issuer: str | None = None
+    cloud_client_id: str | None = None
+    cloud_client_secret: str | None = None
+    cloud_policy: str | None = None
 
 
 @router.put("/settings")
@@ -142,9 +147,13 @@ async def update_settings(payload: SettingsUpdateRequest, request: Request):
             set_default_max_upload_mb(payload.max_upload_mb)
         if payload.quota_mb is not None:
             set_default_quota_mb(payload.quota_mb)
+        if any(v is not None for v in (payload.cloud_issuer, payload.cloud_client_id, payload.cloud_client_secret,
+                                       payload.cloud_policy)):
+            cloud_auth.save_settings(issuer=payload.cloud_issuer, client_id=payload.cloud_client_id,
+                                     client_secret=payload.cloud_client_secret, policy=payload.cloud_policy)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {**get_defaults(), **public_url_settings()}
+    return {**get_defaults(), **public_url_settings(), "cloud": cloud_auth.settings()}
 
 
 @router.get("/users")
@@ -291,6 +300,7 @@ def rename_account_rows(conn: sqlite3.Connection, old: str, new: str) -> None:
     conn.execute("UPDATE users SET username = ? WHERE username = ?", (new, old))
     conn.execute("UPDATE sessions SET username = ? WHERE username = ?", (new, old))
     conn.execute("UPDATE integration_tokens SET username = ? WHERE username = ?", (new, old))
+    conn.execute("UPDATE identities SET username = ? WHERE username = ?", (new, old))
     conn.execute("UPDATE shares SET created_by = ? WHERE created_by = ?", (new, old))
     conn.execute("UPDATE workspace_members SET username = ? WHERE username = ?", (new, old))
     conn.execute("UPDATE workspace_members SET added_by = ? WHERE added_by = ?", (new, old))
@@ -346,6 +356,7 @@ async def delete_user(username: str, request: Request):
         if row[2] and _admin_count(conn) <= 1:
             raise HTTPException(status_code=400, detail="cannot delete the last admin")
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
+        conn.execute("DELETE FROM identities WHERE username = ?", (username,))
         conn.commit()
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:

@@ -1,0 +1,16 @@
+# TLS for the account server. The hostname is proxied by Cloudflare, so the
+# public certificate is Cloudflare's; between Cloudflare and this host Caddy
+# serves its own internal certificate (Cloudflare SSL/TLS mode "Full").
+# Let's Encrypt cannot validate a proxied hostname, hence `tls internal`. For
+# "Full (strict)" install a Cloudflare Origin CA certificate instead:
+#   tls /certs/origin.pem /certs/origin.key
+{$CADDY_HOST} {
+	tls internal
+	encode gzip
+	reverse_proxy account:9002
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

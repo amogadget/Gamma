@@ -5,6 +5,13 @@ Code: [FileBrowser.jsx](../../frontend/src/library/FileBrowser.jsx),
 [libraryUtils.js](../../frontend/src/library/libraryUtils.js),
 [Menus.jsx](../../frontend/src/shared/ui/Menus.jsx), glue in App.jsx.
 
+Quick open ([QuickOpen.jsx](../../frontend/src/library/QuickOpen.jsx)) is the
+keyboard way into the library from anywhere: Ctrl+P (App.jsx's global key
+listener; not in a share view) opens a palette over the page titles. With no
+query the order is the recents queue, then open tabs, then the rest by last
+edit; a query ranks through `createTitleScorer` with recency as the
+tie-break. Enter opens through `openPage`, the same path as a card double-click.
+
 ## Folders and labels
 
 Folders are "folder labels" — `properties.folder` on a page block is a

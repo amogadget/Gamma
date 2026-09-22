@@ -3805,6 +3805,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   font-family: inherit;
 }
 .loginBtn:disabled { opacity: 0.5; cursor: default; }
+.loginCloudBtn { display: block; text-align: center; text-decoration: none; margin-bottom: 14px; box-sizing: border-box; }
 .loginBtn:hover:not(:disabled) { filter: brightness(1.1); }
 .loginGuestBtn {
   display: block;
