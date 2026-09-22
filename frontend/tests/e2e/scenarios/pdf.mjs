@@ -88,6 +88,48 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("pdf: interface scale keeps note badges anchored and Tours consistent", async () => {
+    for (const scale of [0.7, 1, 1.6]) {
+      await page.evaluate((value) => localStorage.setItem("gamma-ui-scale", String(value)), scale);
+      await page.reload();
+      await waitForPdf(page);
+      const badge = page.getByRole("button", { name: "Show highlight note", exact: true }).first();
+      await badge.waitFor();
+      const measure = async () => badge.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const marks = [...el.closest("[data-page]").querySelectorAll("div[data-hl-id]")]
+          .filter((mark) => mark.dataset.hlId === el.dataset.hlId)
+          .map((mark) => mark.getBoundingClientRect());
+        const end = marks.sort((a, b) => b.top - a.top || b.right - a.right)[0];
+        return { width: box.width, dx: box.left - end.right, dy: box.top - end.top };
+      });
+      for (const zoom of [false, true]) {
+        if (zoom) await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+        await until(async () => {
+          const { width, dx, dy } = await measure();
+          return Math.abs(width - 15 * scale) < 1 && Math.abs(dx - 2) < 1 && Math.abs(dy + 8) < 1;
+        }, { what: `badge stays at passage end with interface scale ${scale}` });
+      }
+      await page.getByRole("button", { name: "Account & settings", exact: true }).click();
+      const settings = page.getByRole("button", { name: "Settings…", exact: true });
+      const tours = page.locator('summary[data-guide="account.tour"]');
+      const settingsBox = await settings.boundingBox();
+      const toursBox = await tours.boundingBox();
+      assert(Math.abs(settingsBox.height - toursBox.height) < 1, "Tours matches adjacent menu controls");
+      await tours.click();
+      const tour = page.getByRole("menuitem", { name: "Your first paper", exact: true });
+      assert(Math.abs((await tour.boundingBox()).height - toursBox.height) < 1, "submenu scales once");
+      await settings.click();
+      const font = await page.getByText("Interface size", { exact: true }).evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+      assert(Math.abs(font - 13 * scale) < 0.1, "ordinary settings text follows interface size");
+      await page.getByRole("button", { name: "Close settings", exact: true }).click();
+      assertNoProblems(page);
+    }
+    await page.evaluate(() => localStorage.removeItem("gamma-ui-scale"));
+    await page.reload();
+    await waitForPdf(page);
+  });
+
   await step("pdf: search finds PDF text on page 2, the details list it, clicking marks it", async () => {
     await page.click("button[aria-label='Search']");
     await page.waitForSelector(".searchPopover .searchInput");

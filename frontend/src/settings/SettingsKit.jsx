@@ -182,7 +182,7 @@ export function SubDialog({ title, onClose, children, draft, className = "", clo
           }
           if (event.key === "Tab") {
             event.stopPropagation();
-            const targets = [...ref.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary')]
+            const targets = [...ref.current.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary')]
               .filter((el) => el.getClientRects().length && !el.closest("[inert]"));
             const first = targets[0], last = targets.at(-1);
             if (event.shiftKey && (document.activeElement === first || !targets.includes(document.activeElement))) { event.preventDefault(); last?.focus(); }

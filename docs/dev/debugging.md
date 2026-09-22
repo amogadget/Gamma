@@ -319,4 +319,10 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
   fetch wrapper, `?ws=` on the websocket and in URLs); a 403 "not a member"
   on an otherwise fine request means the tab's workspace is not the one you
   expect — the id is in the URL.
+- An AI reply ending in "lost the connection to the server (network
+  error)" means the browser→Gamma connection was cut mid-stream, not that the
+  provider failed (that comes back in-band as "AI call failed: …"). The
+  streams send a keepalive line every 15 s of silence ([ai.md](ai.md)) and
+  the server logs `client closed the stream after Ns`; if it still happens,
+  a proxy in front of Gamma is closing idle responses sooner than that.
 - Timestamps are UTC ISO strings with `Z` (`page_now()`); keep the format.

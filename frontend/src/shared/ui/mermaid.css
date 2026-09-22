@@ -13,8 +13,8 @@
 .mermaidFigure .mdResizeGrip { opacity: 0; }
 .mermaidFigure:hover .mdResizeGrip { opacity: 0.55; }
 .mermaidFigure .mdResizeGrip:hover, .mermaidFigure .mdResizeGrip:active { opacity: 0.9; }
-.mermaidStatus, .mermaidError { padding: 8px 12px; color: var(--text-muted); font-size: 12px; }
+.mermaidStatus, .mermaidError { padding: 8px 12px; color: var(--text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); }
 .mermaidError { color: var(--danger); }
-.mermaidDiagram pre.mermaidSource, .mermaidError pre { margin: 0; padding: 12px; overflow: auto; max-height: 400px; white-space: pre; font-size: 12px; }
+.mermaidDiagram pre.mermaidSource, .mermaidError pre { margin: 0; padding: 12px; overflow: auto; max-height: 400px; white-space: pre; font-size: calc(12px * var(--ui-font-scale, 1)); }
 .mermaidDiagram.showingSource pre.mermaidSource { padding-right: 120px; }
 .mermaidError pre { padding: 6px 0; white-space: pre-wrap; }

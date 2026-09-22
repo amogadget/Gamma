@@ -62,7 +62,7 @@
   min-height: 18px;
 }
 .guideStep {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-muted);
@@ -79,10 +79,10 @@
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   color: var(--text-muted);
 }
-.guideFailed { color: var(--danger); text-transform: none; letter-spacing: 0; font-size: 11px; }
+.guideFailed { color: var(--danger); text-transform: none; letter-spacing: 0; font-size: calc(11px * var(--ui-font-scale, 1)); }
 /* While a demo acts, the whole sheet swallows clicks (the hole included) so
    a stray click can't derail it; the card stays usable for Skip / leave. */
 .guideShield { position: absolute; inset: 0; pointer-events: auto; }
@@ -108,27 +108,27 @@
   border-radius: 5px;
   background: var(--bg-elevated);
   color: var(--text-primary);
-  font: 600 11px system-ui;
+  font: 600 calc(11px * var(--ui-font-scale, 1)) system-ui;
 }
 @media (prefers-reduced-motion: reduce) {
   .guideCursor, .guideCursor.dragging, .guideDimFill { transition: none; }
   .guideRing, .guideCard { animation: none; }
 }
 .guideTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   font-weight: 600;
   line-height: 1.3;
 }
-.guideCardCentered .guideTitle { font-size: 17px; }
+.guideCardCentered .guideTitle { font-size: calc(17px * var(--ui-font-scale, 1)); }
 .guideBody {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-font-scale, 1));
   line-height: 1.5;
   color: var(--text-secondary);
 }
 .guideBody p { margin: 0; }
 .guideBody p + p { margin-top: 6px; }
 .guideBody code {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-font-scale, 1));
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--bg-raised);
@@ -152,7 +152,7 @@
 .guideBtns { display: inline-flex; gap: 6px; }
 .guideInvitation .guideCard { border-top: 2px solid var(--accent); gap: 8px; }
 .guideInvitation .guideStep { color: var(--accent); }
-.guideInvitation .guideTitle { font-size: 16px; }
+.guideInvitation .guideTitle { font-size: calc(16px * var(--ui-font-scale, 1)); }
 
 /* Narrow screens: the card becomes a bottom sheet; the spotlight stays. */
 @media (max-width: 640px) {

@@ -94,4 +94,72 @@ export async function chatNavigationScenarios(env) {
       });
     }
   }
+
+  await step("chat navigation: two papers answer at once, each with its own Stop", async () => {
+    await alice.api(`/api/chats/${pdf.id}`, { method: "PUT", body: { messages: [] } });
+    await alice.api(`/api/chats/${target.id}`, { method: "PUT", body: { messages: [] } });
+    const ctx = await alice.context(browser);
+    await ctx.addInitScript(() => {
+      localStorage.setItem("gamma-ai-login-check", "off");
+      window.chatStreams = []; // one fake stream per /api/ai/chat call, in send order
+      const fetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        if (String(input).endsWith("/api/ai/chat")) {
+          return Promise.resolve(new Response(new ReadableStream({
+            start(controller) {
+              window.chatStreams.push({
+                pageId: JSON.parse(init.body).page_id,
+                push: (event) => controller.enqueue(new TextEncoder().encode(JSON.stringify(event) + "\n")),
+                finish: () => controller.close(),
+              });
+              init.signal.addEventListener("abort", () => controller.error(new DOMException("Stopped", "AbortError")));
+            },
+          }), { headers: { "Content-Type": "application/x-ndjson" } }));
+        }
+        return fetch(input, init);
+      };
+    });
+    const page = await openPage(ctx, `${server.base}/?ws=${alice.ws}&page=${pdf.id}`);
+    try {
+      const input = page.getByRole("combobox", { name: "Message AI" });
+      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      await input.waitFor();
+      await page.waitForLoadState("networkidle");
+      await input.fill("Summarize the first paper");
+      await input.press("Enter");
+      await page.waitForFunction(() => window.chatStreams.length === 1);
+      await page.evaluate((id) => window.chatStreams[0].push({ delta: `First paper: see [Linked paper](/?page=${id}), ` }), target.id);
+      await stop.waitFor();
+      // Walk to the other page while the first reply streams: its composer is
+      // free — the first paper's Stop is not this conversation's.
+      await page.locator(".chatPanel").getByRole("link", { name: "Linked paper" }).click();
+      await until(() => new URL(page.url()).searchParams.get("block") === target.id);
+      await input.waitFor();
+      assertEq(await stop.count(), 0, "the other page's composer is not blocked by the first reply");
+      await input.fill("Summarize the second paper");
+      await input.press("Enter");
+      await page.waitForFunction(() => window.chatStreams.length === 2);
+      assertEq((await page.evaluate(() => window.chatStreams.map((s) => s.pageId))).join(), `${pdf.id},${target.id}`);
+      await page.evaluate(() => { window.chatStreams[0].push({ delta: "still going." }); window.chatStreams[1].push({ delta: "Second paper: " }); });
+      await until(async () => (await page.locator(".chatPanel").innerText()).includes("Second paper:"));
+      assert(!(await page.locator(".chatPanel").innerText()).includes("First paper"), "the first reply stays in its own conversation");
+      // Stop here aborts only the second paper's reply.
+      await stop.click();
+      await until(async () => !(await stop.count()));
+      await page.evaluate(() => { window.chatStreams[0].push({ delta: " Done." }); window.chatStreams[0].finish(); });
+      let first, second;
+      await until(async () => {
+        first = await alice.api(`/api/chats/${pdf.id}`);
+        second = await alice.api(`/api/chats/${target.id}`);
+        return first.messages?.at(-1)?.text?.includes("Done.") && !first.messages.at(-1).partial
+          && second.messages?.at(-1)?.text?.includes("(stopped)") && !second.messages.at(-1).partial;
+      });
+      assert(first.messages.at(-1).text.endsWith(", still going. Done."), "the first reply streamed to its end");
+      assertEq(second.messages.at(-1).text, "Second paper: \n\n*(stopped)*");
+      await page.getByRole("button", { name: "Back", exact: true }).click();
+      await until(async () => (await page.locator(".chatPanel").innerText()).includes("still going. Done."));
+      assertEq(await stop.count(), 0);
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
 }

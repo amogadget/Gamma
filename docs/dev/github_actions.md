@@ -133,7 +133,8 @@ Four parallel Ubuntu jobs on every PR to `main`: backend pytest (Python
 3.12, `requirements.txt` + `requirements-dev.txt`, `-n auto` over pytest-xdist), the frontend unit tests
 + build (Node 22, `npm test` then `npm run build`), the browser suite
 (`npm run e2e -- --continue` against a backend started from the checkout
-with `GAMMA_E2E_PYTHON=python`, Playwright's Chromium installed with its
+with `GAMMA_E2E_PYTHON=python` — both requirements files, since a scenario
+builds its Zotero fixture from a backend test module — Playwright's Chromium installed with its
 system deps; on a failure the harness's `failures/` folders — screenshots,
 page problems, the error, the server log tail — are uploaded as the
 `e2e-failures` artifact), and a manifest parse + zip of the extension. No

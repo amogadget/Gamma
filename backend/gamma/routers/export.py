@@ -753,7 +753,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
             pdf_bytes, written = annotate_pdf(pdf_bytes, marks, author=request.state.user or "",
                                               ink=_collect_ink(blocks, ws_uploads_dir(ws)))
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
+            raise HTTPException(status_code=400, detail=f"could not annotate PDF: {str(e) or type(e).__name__}") from e
 
     drawn = 0
     if notes:

@@ -457,7 +457,11 @@ html, body, #root {
 
 /* Suppress browser double-tap zoom on every layout, including portaled menus.
    Keep native panning and pinch zoom; drawing surfaces override this with none. */
-html { touch-action: manipulation; }
+html {
+  touch-action: manipulation;
+  --ui-font-scale: var(--ui-scale, 1);
+  font-size: calc(16px * var(--ui-font-scale));
+}
 
 body {
   font-family: Arial, sans-serif;
@@ -500,7 +504,7 @@ body {
   color: var(--text-primary);
   border: 1px solid var(--border-light);
   border-radius: 8px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
 }
 
 .topbar button {
@@ -511,7 +515,7 @@ body {
   border-radius: 6px;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
 }
 
 .topbar button:hover {
@@ -530,7 +534,7 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
-  font-size: 16px;
+  font-size: calc(16px * var(--ui-font-scale, 1));
   flex-shrink: 0;
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -549,7 +553,7 @@ body {
   background: none;
   border: none;
   border-radius: 50%;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   line-height: 1;
   color: var(--text-dim);
   cursor: pointer;
@@ -560,8 +564,8 @@ body {
 }
 .uiClose:hover { background: var(--bg-subtle); color: var(--text-bright); }
 .uiClose:active { transform: scale(0.82); }
-.uiClose.uiCloseLg { width: 28px; height: 28px; font-size: 20px; }
-.uiClose.uiCloseSm { width: 16px; height: 16px; font-size: 12px; }
+.uiClose.uiCloseLg { width: 28px; height: 28px; font-size: calc(20px * var(--ui-font-scale, 1)); }
+.uiClose.uiCloseSm { width: 16px; height: 16px; font-size: calc(12px * var(--ui-font-scale, 1)); }
 .uiClose.uiCloseDanger:hover { background: rgba(224, 92, 92, 0.15); color: #e05c5c; }
 /* out-specify the generic ".topbar button" pill for close buttons in the topbar */
 .topbar .uiClose {
@@ -576,7 +580,7 @@ body {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-tertiary);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   min-height: 38px;
 }
 
@@ -593,7 +597,7 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
@@ -614,7 +618,7 @@ body {
   }
   .topbar button {
     padding: 7px 10px;
-    font-size: 13px;
+    font-size: calc(13px * var(--ui-font-scale, 1));
   }
 
 }
@@ -662,7 +666,7 @@ body {
 
 .pageTitleRow h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: calc(18px * var(--ui-font-scale, 1));
   flex: 1;
   min-width: 0;
 }
@@ -724,7 +728,7 @@ body {
   color: var(--text-muted);
   cursor: pointer;
   padding: 0;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
 }
 
 .blockBody {
@@ -734,7 +738,7 @@ body {
 
 .blockMeta {
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   letter-spacing: 0.02em;
   margin-bottom: 2px;
 }
@@ -749,7 +753,7 @@ body {
   border: none;
   outline: none;
   font: inherit;
-  font-size: calc(15px * var(--text-scale, 1));
+  font-size: calc(15px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   line-height: 1.45;
   padding: 0;
 }
@@ -762,7 +766,7 @@ body {
 .blockEditorCm .cm-editor.cm-focused { outline: none; }
 .blockEditorCm .cm-scroller {
   font-family: inherit;
-  font-size: calc(15px * var(--text-scale, 1));
+  font-size: calc(15px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   line-height: 1.45;
   overflow: visible; /* auto-grow with content, no inner scrollbars */
 }
@@ -937,7 +941,7 @@ body {
   position: absolute;
   top: 5px;
   right: 9px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-family: var(--font-ui, inherit);
   color: var(--text-muted);
   user-select: none;
@@ -1002,7 +1006,7 @@ body {
 
 .blockRendered {
   color: var(--text-primary);
-  font-size: calc(15px * var(--text-scale, 1));
+  font-size: calc(15px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   line-height: 1.45;
   white-space: normal;
   cursor: text;
@@ -1150,7 +1154,7 @@ body {
   background: var(--bg-input);
   color: var(--text-dim);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 1;
   cursor: pointer;
   opacity: 0;
@@ -1169,7 +1173,7 @@ body {
   color: var(--text-secondary);
   border-radius: 6px;
   line-height: 1;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   cursor: grab;
   touch-action: none;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
@@ -1259,7 +1263,7 @@ body {
 .mdImgCaption {
   display: block;
   margin: 2px 0 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-secondary);
   text-align: center;
 }
@@ -1269,7 +1273,7 @@ body {
   margin: 2px 0 4px;
   padding: 3px 8px;
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border);
@@ -1294,7 +1298,7 @@ body {
   border-radius: 8px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
 }
-.mdLightboxCaption { margin-top: 10px; font-size: 13px; color: #ddd; }
+.mdLightboxCaption { margin-top: 10px; font-size: calc(13px * var(--ui-font-scale, 1)); color: #ddd; }
 .blockRendered .katex-display { margin: 6px 0; overflow-x: auto; overflow-y: hidden; }
 /* GFM task items: hide the list bullet, the checkbox is the marker. */
 .blockRendered li:has(> .mdTaskCheckbox) { list-style: none; margin-left: -18px; }
@@ -1407,7 +1411,7 @@ body {
 .blockEmbedSrc {
   display: block;
   margin-top: 2px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui-font-scale, 1));
   color: var(--text-dim);
 }
 
@@ -1419,7 +1423,7 @@ body {
   color: var(--text-secondary);
   white-space: pre-wrap;
   line-height: 1.45;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
 }
 
 /* Area-selection crop on a note card — quote-style left border in the
@@ -1614,7 +1618,7 @@ body {
   background: rgba(40, 80, 160, 0.2);
   border: 3px dashed var(--accent-dark);
   color: var(--text-bright);
-  font-size: 24px;
+  font-size: calc(24px * var(--ui-font-scale, 1));
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -1714,7 +1718,7 @@ body {
 .rowHandles > .dragHandle {
   height: 22px;
   margin-right: 0;
-  font-size: 17px;
+  font-size: calc(17px * var(--ui-font-scale, 1));
   font-weight: 700;
   line-height: 1;
   cursor: grab;
@@ -1849,7 +1853,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 .pdfPageWidget input {
   background: transparent;
@@ -1884,7 +1888,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   box-shadow: 0 3px 12px rgba(0,0,0,0.25);
   pointer-events: none;
   opacity: 1;
@@ -1917,7 +1921,7 @@ body {
   border: 1px solid var(--border-light);
   border-radius: 999px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   cursor: pointer;
 }
 .pillRetryBtn:hover { background: var(--bg-hover); }
@@ -1979,7 +1983,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .pdfOutlineTitle {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-font-scale, 1));
   line-height: 1.45;
   color: var(--text-primary);
   cursor: pointer;
@@ -2001,7 +2005,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   gap: 8px;
   padding: 4px 10px 8px 10px;
   margin: -10px 0 14px 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 1.45;
 }
 .categoryFrontmatterValue {
@@ -2023,7 +2027,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--accent);
   padding: 1px 8px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 500;
   letter-spacing: 0.02em;
 }
@@ -2061,7 +2065,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--accent);
   padding: 1px 4px 1px 8px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 500;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -2102,7 +2106,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   background: none;
   border: none;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   cursor: pointer;
 }
 .categorySuggestionItem:hover {
@@ -2117,7 +2121,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 /* Attach mode */
 .attachModeBtn {
   width: auto;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   color: var(--accent);
   padding: 0 3px;
   opacity: 0;
@@ -2132,7 +2136,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: #cde;
   text-align: center;
   padding: 6px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2154,7 +2158,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding-top: 8px;
 }
 .backlinksLabel {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   text-transform: uppercase;
   color: var(--text-muted);
   margin-bottom: 6px;
@@ -2175,7 +2179,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding: 5px 8px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
 }
 .backlinkItem.private {
   cursor: default;
@@ -2197,7 +2201,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-muted);
 }
 .backlinkPage {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   margin-top: 1px;
   white-space: nowrap;
@@ -2232,7 +2236,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   height: 100%;
   border-radius: 8px 8px 0 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   cursor: pointer;
   user-select: none;
   border: 1px solid transparent;
@@ -2296,7 +2300,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   font-weight: 600;
 }
 
@@ -2318,7 +2322,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-direction: column;
   gap: 4px;
 }
-.popoverTitle { font-size: 13px; font-weight: 600; color: var(--text-primary); padding: 2px 4px; }
+.popoverTitle { font-size: calc(13px * var(--ui-font-scale, 1)); font-weight: 600; color: var(--text-primary); padding: 2px 4px; }
 
 /* The offline copy's sync pill (collaboration/MirrorPopover.jsx): an icon
    whose state is drawn on it — a spin while a round runs, a count badge
@@ -2334,7 +2338,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorPillDot.pending { background: var(--accent); }
 .mirrorPillDot.warn { background: #d9822b; }
 .mirrorPillDot.error { background: var(--danger); }
-.mirrorPillBadge { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; font-size: 9.5px; font-weight: 700; line-height: 1; color: #fff; background: #d9822b; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-elevated); pointer-events: none; }
+.mirrorPillBadge { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px; font-size: calc(9.5px * var(--ui-font-scale, 1)); font-weight: 700; line-height: 1; color: #fff; background: #d9822b; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-elevated); pointer-events: none; }
 .mirrorPopBtns { display: inline-flex; gap: 2px; flex-shrink: 0; }
 .mirrorState.pending > svg { color: var(--accent); }
 .mirrorState.error > svg { color: var(--danger); }
@@ -2348,7 +2352,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorPopLog li.open > .mirrorPopItemRow .popoverItem { background: var(--bg-hover); }
 .mirrorChanges { list-style: none; margin: 2px 0 8px 16px; padding: 2px 6px 2px 8px; display: flex; flex-direction: column; gap: 3px; border-left: 2px solid var(--border-subtle); }
 .mirrorChangesNone { padding: 2px 4px 8px 20px; }
-.mirrorChange { display: flex; gap: 6px; font-size: 12px; line-height: 1.4; color: var(--text-secondary); min-width: 0; }
+.mirrorChange { display: flex; gap: 6px; font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.4; color: var(--text-secondary); min-width: 0; }
 .mirrorChangeGlyph { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; width: 10px; flex-shrink: 0; font-weight: 700; }
 .mirrorChange.add .mirrorChangeGlyph { color: var(--ok); }
 .mirrorChange.del .mirrorChangeGlyph { color: var(--danger); }
@@ -2361,7 +2365,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorPopover .setRow { padding: 5px 4px; gap: 9px; }
 .topbar .mirrorPopover .uiBtn:where(:not(.on, .primary, .danger)) { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-secondary); }
 .topbar .mirrorPopover .uiBtn:where(:not(.on, .primary, .danger)):hover:not(:disabled) { background: var(--bg-hover); }
-.popoverLabel { display: flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); padding: 6px 4px 2px; }
+.popoverLabel { display: flex; align-items: center; gap: 5px; font-size: calc(10.5px * var(--ui-font-scale, 1)); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); padding: 6px 4px 2px; }
 .mirrorPopHead { display: flex; align-items: center; gap: 8px; padding: 2px 4px 8px; }
 .mirrorPopHead .popoverTitle { padding: 0; }
 .mirrorPopIcon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent-bg-light); color: var(--accent); flex-shrink: 0; }
@@ -2369,7 +2373,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorPopTitle .popoverHint { padding: 0; }
 .mirrorEllipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; }
 /* The state block: one icon, one short line, bars while a round runs. */
-.mirrorState { display: flex; align-items: flex-start; gap: 7px; padding: 4px 4px 8px; font-size: 13px; color: var(--text-primary); min-width: 0; }
+.mirrorState { display: flex; align-items: flex-start; gap: 7px; padding: 4px 4px 8px; font-size: calc(13px * var(--ui-font-scale, 1)); color: var(--text-primary); min-width: 0; }
 .mirrorState > svg { flex-shrink: 0; margin-top: 2px; }
 .mirrorState.ok > svg { color: var(--accent-dark); }
 .mirrorState.warn > svg { color: #d9822b; }
@@ -2380,16 +2384,16 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mirrorBar { height: 5px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; }
 .mirrorBar.thin { height: 3px; flex-basis: 100%; }
 .mirrorBar span { display: block; height: 100%; background: var(--accent); transition: width 0.3s ease; }
-.mirrorFile { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11px; color: var(--text-muted); min-width: 0; }
+.mirrorFile { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); min-width: 0; }
 .mirrorFile > svg { flex-shrink: 0; }
 .mirrorFile .mirrorEllipsis { flex: 1; min-width: 0; }
 .mirrorFileBytes { white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* The settings view: icon + control rows, a confirm strip, the action chips. */
 .mirrorSetActions { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 4px; }
-.mirrorConfirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 4px; font-size: 12px; color: var(--text-secondary); }
+.mirrorConfirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 4px; font-size: calc(12px * var(--ui-font-scale, 1)); color: var(--text-secondary); }
 .mirrorConfirm > svg { color: #d9822b; flex-shrink: 0; }
 .mirrorConfirmBtns { display: inline-flex; gap: 6px; margin-left: auto; }
-.mirrorMore { font-size: 12px; color: var(--text-muted); }
+.mirrorMore { font-size: calc(12px * var(--ui-font-scale, 1)); color: var(--text-muted); }
 /* The merge chip on a block row and the conflict card (MergeResolver.jsx):
    one card for the chip's popover, the sync pill's list and Settings — the
    kind line (with ‹ n / N › on a row chip), the versions (ours · theirs
@@ -2405,7 +2409,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mergeHeadText .popoverTitle, .mergeHeadText .popoverHint { padding: 0; }
 .mergePage { font-weight: 500; color: var(--text-muted); }
 .mergeNav { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
-.mergeNavCount { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 34px; text-align: center; }
+.mergeNavCount { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 34px; text-align: center; }
 .mergeVersions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .mergeVersions.one, .mirrorPopover .mergeVersions { grid-template-columns: 1fr; }
 .mergeVersions .mergeVersion.result { grid-column: 1 / -1; }
@@ -2414,12 +2418,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .mergeVersion.current { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .mergeVersionHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .mergeVersionHead .uiTag { margin-left: auto; }
-.mergeSide { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; color: var(--text-primary); flex-shrink: 0; }
+.mergeSide { display: inline-flex; align-items: center; gap: 4px; font-size: calc(11px * var(--ui-font-scale, 1)); font-weight: 600; padding: 1px 6px; border-radius: 999px; color: var(--text-primary); flex-shrink: 0; }
 .mergeSide.mine { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .mergeSide.theirs { background: color-mix(in srgb, #d9822b 24%, transparent); }
 .mergeSide.result { background: var(--bg-hover); }
 .mergeSideHint { padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.mergeText { font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--text-primary); max-height: 180px; overflow: auto; }
+.mergeText { font-size: calc(13px * var(--ui-font-scale, 1)); line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--text-primary); max-height: 180px; overflow: auto; }
 .mergeText mark { border-radius: 3px; padding: 0 1px; color: inherit; }
 mark.merge-mine { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 mark.merge-theirs { background: color-mix(in srgb, #d9822b 30%, transparent); }
@@ -2442,16 +2446,16 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
 .mirrorPopLog { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
 /* out-specifies the topbar's popoverItem rule, which centres its content */
 .mirrorPopover .mirrorPopLog .popoverItem.mirrorPopItem { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 1px; width: 100%; }
-.mirrorPopItemTitle { font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.mirrorPopItemMeta { font-size: 11px; color: var(--text-dim); display: inline-flex; gap: 8px; align-items: baseline; }
+.mirrorPopItemTitle { font-size: calc(13px * var(--ui-font-scale, 1)); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.mirrorPopItemMeta { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-dim); display: inline-flex; gap: 8px; align-items: baseline; }
 /* git-style block counts: +added −removed ~changed */
-.mirrorDiff { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; display: inline-flex; gap: 5px; white-space: nowrap; }
+.mirrorDiff { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: calc(11px * var(--ui-font-scale, 1)); display: inline-flex; gap: 5px; white-space: nowrap; }
 .mirrorDiff .add { color: var(--ok); }
 .mirrorDiff .del { color: var(--danger); }
 .mirrorDiff .mod { color: #d9822b; }
-.popoverHint { font-size: 11px; color: var(--text-muted); line-height: 1.45; padding: 0 4px; }
+.popoverHint { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); line-height: 1.45; padding: 0 4px; }
 .popoverSection {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2467,7 +2471,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   padding: 8px 10px;
   text-align: left;
   width: 100%;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   color: var(--text-primary);
   cursor: pointer;
   display: flex;
@@ -2506,7 +2510,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
 .shareInviteBtns { display: inline-flex; gap: 6px; }
 /* Slide citation / BibTeX: a sub-label line, then a copy box. */
 .citeHead { display: flex; align-items: baseline; gap: 4px; padding: 6px 8px 4px; }
-.citeLabel { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.citeLabel { font-size: calc(12px * var(--ui-font-scale, 1)); font-weight: 600; color: var(--text-secondary); }
 .copyBox {
   position: relative;
   background: var(--bg-block);
@@ -2533,14 +2537,14 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 700;
   background: var(--accent-bg);
   color: var(--accent-bright);
   border: 1px solid var(--border);
 }
 .wsItemName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wsItemMeta { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.wsItemMeta { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); flex-shrink: 0; }
 .wsItemCheck { color: var(--accent-bright); flex-shrink: 0; }
 
 /* account card header inside the popover */
@@ -2562,16 +2566,16 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--accent-bright);
   border: 1px solid var(--border);
 }
-.userAvatarInitial { font-size: 17px; font-weight: 700; line-height: 1; }
+.userAvatarInitial { font-size: calc(17px * var(--ui-font-scale, 1)); font-weight: 700; line-height: 1; }
 .userCardName {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.userCardRole { font-size: 11px; color: var(--text-muted); }
+.userCardRole { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); }
 
 /* settings row with a toggle switch */
 .settingRow {
@@ -2584,8 +2588,8 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   cursor: pointer;
 }
 .settingRow:hover { background: var(--bg-hover); }
-.settingLabel { font-size: 13px; color: var(--text-primary); }
-.settingDesc { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+.settingLabel { font-size: calc(13px * var(--ui-font-scale, 1)); color: var(--text-primary); }
+.settingDesc { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); line-height: 1.35; }
 
 /* A settingRow that isn't itself a control (a label + <select>), and one whose
    switch the current choice can't honour — shown disabled, not hidden, so the
@@ -2650,11 +2654,11 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
 .searchInput {
   width: 100%;
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
 }
 .searchInput:focus { border-color: var(--accent-dark); }
 .searchResults { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.searchHint { font-size: 12px; color: var(--text-dim); padding: 8px 4px; }
+.searchHint { font-size: calc(12px * var(--ui-font-scale, 1)); color: var(--text-dim); padding: 8px 4px; }
 .topbar .searchResult,
 .searchResult {
   background: none;
@@ -2669,11 +2673,11 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   width: 100%;
 }
 .searchResult:hover { background: var(--bg-hover); }
-.searchResultPage { font-size: 11px; color: var(--accent-dark); font-weight: 600; }
+.searchResultPage { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--accent-dark); font-weight: 600; }
 .searchKindBadge {
   margin-left: 6px;
   padding: 0 5px;
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   font-weight: 500;
   color: var(--text-dim);
   border: 1px solid var(--border);
@@ -2718,7 +2722,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
 .searchPopover .categorySuggestionItem:hover,
 .searchPopover .categorySuggestionItem.selected { background: var(--bg-hover); }
 .searchSuggestHint {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   color: var(--text-dim);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
@@ -2732,7 +2736,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   border: 1px solid transparent;
   border-radius: 4px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   width: 26px;
   height: 26px;
   padding: 0;
@@ -2749,7 +2753,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--text-primary);
 }
 .searchSection {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2767,7 +2771,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   flex-shrink: 0;
 }
 .searchFindCount {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-dim);
   white-space: nowrap;
   margin-right: 4px;
@@ -2780,7 +2784,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
 }
 .searchToggle.searchNavBtn:disabled { opacity: 0.4; cursor: default; background: none; }
 .searchResultText {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2829,7 +2833,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   cursor: grab;
   touch-action: none;
   user-select: none;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -2922,7 +2926,7 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
   border: none;
   border-radius: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   font-weight: 500;
 }
 .phoneTab.active { color: var(--accent); }
@@ -2997,7 +3001,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   padding: 7px 8px;
   cursor: pointer;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   text-align: left;
 }
 .chatPlusMenuItem:hover { background: var(--bg-hover); }
@@ -3011,7 +3015,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .chatPlusMenuLabel { white-space: nowrap; }
 .chatPlusMenuHint {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3023,7 +3027,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   padding: 3px 6px 3px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);
@@ -3051,7 +3055,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   padding: 5px 8px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-primary);
 }
 .docPickerItem:hover { background: var(--bg-hover); }
@@ -3063,7 +3067,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .docPickerBadge {
   flex-shrink: 0;
   margin-left: auto;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   padding: 0 6px;
   border-radius: 999px;
   border: 1px solid var(--border-subtle);
@@ -3114,7 +3118,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 6px;
   background: var(--danger);
   color: #fff;
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   font-weight: 700;
   line-height: 12px;
   text-align: center;
@@ -3122,14 +3126,14 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .metaValWarn { color: var(--danger); }
 .metaStatus { display: flex; align-items: center; gap: 8px; flex: 1; }
-.metaStatus .metaCell { font-size: 11.5px; }
+.metaStatus .metaCell { font-size: calc(11.5px * var(--ui-font-scale, 1)); }
 /* Provenance beside "Slide citation" in the share dialog (same "!" dot, inline) */
 .citeSourceTag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin-left: 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   font-weight: 400;
   color: var(--text-muted);
 }
@@ -3164,7 +3168,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    conversations; the active one leads, highlighted. Layout only — rows are
    plain hover rows, actions are ctlBtn icons, rename is an aiKeyInput. */
 .chatHistoryPop { width: 300px; max-width: 80vw; }
-.chatHistoryPop .searchInput { padding: 6px 9px; font-size: 12px; }
+.chatHistoryPop .searchInput { padding: 6px 9px; font-size: calc(12px * var(--ui-font-scale, 1)); }
 .chatHistList { display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow-y: auto; }
 .chatHistRow {
   display: flex;
@@ -3173,26 +3177,26 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   min-height: 30px;
   padding: 3px 4px 3px 8px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-primary);
   cursor: pointer;
 }
 .chatHistRow:hover, .chatHistRow:focus-visible { background: var(--bg-hover); outline: none; }
 .chatHistRow.active { background: var(--accent-bg); font-weight: 600; cursor: default; }
 .chatHistTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chatHistAge { flex: none; font-size: 11px; color: var(--text-dim); padding-right: 4px; }
+.chatHistAge { flex: none; font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-dim); padding-right: 4px; }
 .chatHistActs { flex: none; display: none; }
 .chatHistRow:hover .chatHistActs, .chatHistRow:focus-within .chatHistActs { display: flex; }
 .chatHistRow:hover .chatHistAge, .chatHistRow:focus-within .chatHistAge { display: none; }
 .chatHistRow.renaming { padding: 2px; cursor: default; }
-.chatHistRow.renaming .aiKeyInput { width: 100%; font-size: 12px; }
+.chatHistRow.renaming .aiKeyInput { width: 100%; font-size: calc(12px * var(--ui-font-scale, 1)); }
 /* One tool-permission checkbox row (layout only — shared look via popover) */
 .chatToolPermRow {
   display: flex;
   align-items: center;
   gap: 7px;
   padding: 3px 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   cursor: pointer;
   border-radius: 6px;
   user-select: none;
@@ -3207,7 +3211,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   padding: 4px 2px 0;
 }
 .chatEmpty {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-dim);
   padding: 8px 4px;
   font-style: italic;
@@ -3224,7 +3228,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   max-width: 88%;
   border-radius: calc(12px * var(--text-scale, 1));
   padding: 6px 10px;
-  font-size: calc(12px * var(--text-scale, 1));
+  font-size: calc(12px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   line-height: 1.5;
   overflow-wrap: break-word;
   min-width: 0;
@@ -3254,7 +3258,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .chatBubble.ai p:last-child { margin-bottom: 0; }
 .chatBubble.ai h1, .chatBubble.ai h2, .chatBubble.ai h3, .chatBubble.ai h4 {
   margin: 8px 0 4px;
-  font-size: calc(13px * var(--text-scale, 1));
+  font-size: calc(13px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   color: var(--text-primary);
 }
 .chatBubble.ai ul, .chatBubble.ai ol { margin: 0 0 6px; padding-left: 18px; }
@@ -3264,7 +3268,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border: 1px solid var(--border-subtle);
   border-radius: 3px;
   padding: 0 3px;
-  font-size: calc(11px * var(--text-scale, 1));
+  font-size: calc(11px * var(--ui-font-scale, 1) * var(--text-scale, 1));
 }
 .chatBubble.ai pre {
   background: var(--bg-surface);
@@ -3293,7 +3297,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: calc(11px * var(--text-scale, 1));
+  font-size: calc(11px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   cursor: pointer;
 }
 .chatCopyButton:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -3321,7 +3325,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 999px;
   background: var(--bg-raised);
   color: var(--text-muted);
-  font-size: calc(11px * var(--text-scale, 1));
+  font-size: calc(11px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   line-height: 1.5;
 }
 .chatThinking:first-child { margin-top: 0; }
@@ -3347,7 +3351,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* prompt editor */
 .promptTextarea {
   width: 100%;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 1.5;
   padding: 8px 10px;
   resize: vertical;
@@ -3356,7 +3360,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* AI provider key editor (Settings → AI providers) */
 .aiKeyInput {
   width: 100%;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   padding: 7px 10px;
   margin-bottom: 6px;
 }
@@ -3375,13 +3379,20 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* Uniform buttons for the settings modals (AI providers, prompt editor):
    ghost by default, .primary for the main action, .danger for destructive,
    .sm for inline row actions. */
-/* --- Control size (Settings → General) ---------------------------------
-   `--ui-scale` (index.html pre-paint, App.jsx afterwards) zooms every button
-   and toggle as one unit — box, text and SVG icon together — so rows simply
-   grow to fit. Buttons can't nest, but the class-based controls could sit
-   inside one another; the second rule keeps the zoom from compounding. */
-:where(button, .uiBtn, .ctlBtn, .uiClose, .switch) { zoom: var(--ui-scale, 1); }
-:where(button, .uiBtn, .ctlBtn, .uiClose, .switch) :where(button, .uiBtn, .ctlBtn, .uiClose, .switch) { zoom: 1; }
+/* --- Interface size (Settings → Appearance) ----------------------------
+   Text uses --ui-font-scale; controls zoom their box, text and icon together.
+   Reset the text multiplier inside controls to scale exactly once. Include
+   semantic controls such as summary (Tours), regardless of their styling.
+   Absolutely positioned controls need an unscaled anchor (pdfNoteAnchor). */
+:where(button, summary, [role="button"], .uiBtn, .ctlBtn, .uiClose, .switch) {
+  --ui-font-scale: 1;
+  zoom: var(--ui-scale, 1);
+  font-size: calc(1em / var(--ui-scale, 1));
+}
+:where(button, summary, [role="button"], .uiBtn, .ctlBtn, .uiClose, .switch) :where(button, summary, [role="button"], .uiBtn, .ctlBtn, .uiClose, .switch) {
+  zoom: 1;
+  font-size: inherit;
+}
 
 /* --- Ctrl+scroll text size (useTextScale in shared/ui/Widgets.jsx) ----------------
    `--text-scale` sits on the notes list / chat transcript and multiplies
@@ -3405,7 +3416,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: var(--text-secondary);
   border-radius: 999px;
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-variant-numeric: tabular-nums;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
@@ -3421,7 +3432,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border: 1px solid var(--border);
   border-radius: 9px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-weight: 500;
   padding: 5px 14px;
   cursor: pointer;
@@ -3433,7 +3444,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .uiBtn:active:not(:disabled) { background: var(--bg-active); box-shadow: none; }
 .uiBtn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
-.uiBtn.sm { min-height: 28px; font-size: 11.5px; padding: 4px 12px; border-radius: 8px; }
+.uiBtn.sm { min-height: 28px; font-size: calc(11.5px * var(--ui-font-scale, 1)); padding: 4px 12px; border-radius: 8px; }
 /* Icon-only square variant (delete/edit row actions). */
 .uiBtn.iconSq { width: 27px; height: 25px; padding: 0; flex-shrink: 0; }
 .uiBtn.sm.iconSq { width: 28px; height: 28px; }
@@ -3502,8 +3513,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   background: var(--border-subtle);
 }
 .aiProvRow:hover { background: var(--bg-hover); }
-.aiProvName { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
-.aiProvDesc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.aiProvName { font-size: calc(12.5px * var(--ui-font-scale, 1)); font-weight: 600; color: var(--text-primary); }
+.aiProvDesc { font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); overflow-wrap: anywhere; }
 .aiProvActions { display: flex; gap: 6px; flex-shrink: 0; margin-left: auto; }
 
 /* Storage meter (QuotaMeter): thin cloud-drive-style usage bar. */
@@ -3525,7 +3536,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .popoverQuota { padding: 0 14px 8px; }
 .userCardQuota {
   margin-left: auto; align-self: center; flex-shrink: 0;
-  font-size: 11px; color: var(--text-muted); white-space: nowrap;
+  font-size: calc(11px * var(--ui-font-scale, 1)); color: var(--text-muted); white-space: nowrap;
 }
 .aiProvPwForm { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 .aiProvPwForm .aiKeyInput { margin-bottom: 0; width: auto; flex: 1; }
@@ -3543,7 +3554,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 999px;
   background: var(--bg-block);
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 500;
   vertical-align: 1px;
 }
@@ -3552,18 +3563,18 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    its rename field. The tag is a button, so it out-specifies the topbar's
    generic pill and keeps the tag's own size; it never squeezes the title. */
 .topbar button.linkNameTag {
-  padding: 1px 7px; font-size: 10px; line-height: inherit; border-radius: 999px;
+  padding: 1px 7px; font-size: calc(10px * var(--ui-font-scale, 1)); line-height: inherit; border-radius: 999px;
   border: 1px solid var(--border-subtle); background: var(--bg-block); color: var(--text-muted);
   flex-shrink: 1; min-width: 0; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: pointer;
 }
 .topbar button.linkNameTag:hover { border-color: var(--accent-dark); color: var(--text-primary); }
-.topbar .linkNameInput { margin-left: 6px; width: 11em; max-width: 38%; padding: 1px 7px; font-size: 12px; }
+.topbar .linkNameInput { margin-left: 6px; width: 11em; max-width: 38%; padding: 1px 7px; font-size: calc(12px * var(--ui-font-scale, 1)); }
 .uiCheckRow {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-secondary);
   margin: 2px 0 6px;
   cursor: pointer;
@@ -3579,7 +3590,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-block);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   flex-shrink: 0;
   min-width: 0;
@@ -3607,7 +3618,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
@@ -3644,12 +3655,12 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   gap: 10px;
 }
 .reportModalTitle {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   font-weight: 600;
   color: var(--text-primary);
 }
 .reportModalHint {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   line-height: 1.45;
 }
@@ -3668,7 +3679,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   padding: 4px 6px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-secondary);
 }
 .reportPageItem:hover { background: var(--bg-hover); }
@@ -3692,7 +3703,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 4px;
   color: var(--text-secondary);
   padding: 5px 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   font-family: inherit;
   outline: none;
 }
@@ -3710,7 +3721,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 20;
   color: var(--text-secondary); overflow: hidden;
 }
-.chatMentionHeading, .chatMentionHint { padding: 8px 10px; font-size: 11px; }
+.chatMentionHeading, .chatMentionHint { padding: 8px 10px; font-size: calc(11px * var(--ui-font-scale, 1)); }
 .chatMentionHeading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; border-bottom: 1px solid var(--border); }
 .chatMentionHeading span, .chatMentionHint { color: var(--text-dim); }
 .chatMentionPicker [role="listbox"] { max-height: min(260px, 35vh); overflow-y: auto; }
@@ -3719,12 +3730,12 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .chatMentionOption[aria-disabled="true"] { opacity: .5; cursor: default; }
 .chatMentionOption > span { flex: 1; min-width: 0; }
 .chatMentionOption svg { flex-shrink: 0; }
-.chatMentionOption strong { display: block; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chatMentionOption small { display: block; font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatMentionOption strong { display: block; font-size: calc(12px * var(--ui-font-scale, 1)); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatMentionOption small { display: block; font-size: calc(10px * var(--ui-font-scale, 1)); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chatMentionHint { border-top: 1px solid var(--border); }
 .chatReferenceStrip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 2px; max-height: 100px; overflow-y: auto; flex-shrink: 0; }
-.chatReferenceLabel { font-size: 10px; color: var(--text-dim); margin-right: 3px; }
-.chatReferenceChip { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; font-size: 11px; }
+.chatReferenceLabel { font-size: calc(10px * var(--ui-font-scale, 1)); color: var(--text-dim); margin-right: 3px; }
+.chatReferenceChip { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; font-size: calc(11px * var(--ui-font-scale, 1)); }
 .chatReferenceChip .crumbBtn, .chatMsgPdfs .crumbBtn { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
 .chatReferenceChip svg, .chatMsgPdfs .crumbBtn svg { flex-shrink: 0; }
 .chatReferenceChip .uiClose { flex-shrink: 0; margin-right: 3px; }
@@ -3745,7 +3756,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   max-width: 360px;
 }
 .loginTitle {
-  font-size: 32px;
+  font-size: calc(32px * var(--ui-font-scale, 1));
   font-weight: 700;
   color: var(--text-primary);
   text-align: center;
@@ -3760,7 +3771,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: var(--text-muted);
   text-align: center;
   margin-bottom: 24px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
 }
 
 .loginInput {
@@ -3768,7 +3779,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   width: 100%;
   padding: 10px 12px;
   margin-bottom: 12px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
 }
 .loginInput:focus {
   outline: none;
@@ -3776,7 +3787,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .loginError {
   color: #e05555;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   margin-bottom: 10px;
 }
 .loginBtn {
@@ -3788,7 +3799,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 6px;
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
@@ -3803,19 +3814,19 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   cursor: pointer;
   font-family: inherit;
 }
 .loginGuestBtn:hover { background: var(--bg-hover); }
 .loginConflictText {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale, 1));
   line-height: 1.5;
   margin-bottom: 18px;
 }
 .loginConflictHint {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 1.5;
   margin-top: 12px;
 }
@@ -3858,13 +3869,13 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   align-items: center;
   gap: 7px;
   padding: 2px 4px 0;
-  font-size: calc(10px * var(--text-scale, 1));
+  font-size: calc(10px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: default;
 }
-.chatMsgUsage.inline { padding: 0; font-size: 12px; color: var(--text-muted); }
+.chatMsgUsage.inline { padding: 0; font-size: calc(12px * var(--ui-font-scale, 1)); color: var(--text-muted); }
 .chatMsgUsage.live { padding: 0 0 0 4px; border-left: 1px solid var(--border-subtle); }
 .chatMsgUsagePart { display: inline-flex; align-items: center; gap: 2px; }
 .chatMsgUsagePart svg { opacity: 0.8; }
@@ -3929,7 +3940,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   gap: 8px;
   padding: 6px 10px;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--danger);
   background: var(--danger-bg);
   border-bottom: 1px solid var(--danger-border);
@@ -3944,9 +3955,9 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
 }
-.chatFindRow .searchInput { flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px; }
+.chatFindRow .searchInput { flex: 1; min-width: 0; padding: 4px 8px; font-size: calc(12px * var(--ui-font-scale, 1)); }
 .chatFindCount {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   min-width: 30px;
   text-align: center;
@@ -3993,13 +4004,13 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 8px;
   background: var(--bg-surface);
 }
-.chatMsgPdfs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; font-size: calc(10px * var(--text-scale, 1)); }
+.chatMsgPdfs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; font-size: calc(10px * var(--ui-font-scale, 1) * var(--text-scale, 1)); }
 .chatBubble.user .crumbBtn { color: inherit; }
 .chatPdfChip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: calc(10px * var(--text-scale, 1));
+  font-size: calc(10px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   padding: 1px 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.18);
@@ -4017,7 +4028,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: calc(11px * var(--text-scale, 1));
+  font-size: calc(11px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   font-family: inherit;
   color: var(--text-muted);
   background: none;
@@ -4068,7 +4079,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   max-height: 220px;
   overflow: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: calc(10.5px * var(--text-scale, 1));
+  font-size: calc(10.5px * var(--ui-font-scale, 1) * var(--text-scale, 1));
   line-height: 1.45;
   color: var(--text-muted);
   background: var(--bg-raised);
@@ -4079,7 +4090,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .chatPdfToggle {
   gap: 3px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   align-self: center;
   border-radius: 999px;
   height: 26px;
@@ -4096,11 +4107,11 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   height: 26px;
   padding: 0 6px;
   justify-content: center;
-  font-size: 16px;
+  font-size: calc(16px * var(--ui-font-scale, 1));
   line-height: 1;
   align-self: center;
 }
-.chatPlusCount { font-size: 10px; font-weight: 600; margin-left: 1px; }
+.chatPlusCount { font-size: calc(10px * var(--ui-font-scale, 1)); font-weight: 600; margin-left: 1px; }
 /* Round send/stop variant of .uiBtn (chat composer). */
 .uiBtn.chatCircleBtn {
   border-radius: 999px;
@@ -4128,7 +4139,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   align-items: center;
   gap: 5px;
   align-self: center;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -4179,7 +4190,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   gap: 8px;
   padding: 5px 6px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
 }
 .transferRow:hover { background: var(--bg-block); }
 .transferStatus { display: inline-flex; width: 14px; justify-content: center; flex-shrink: 0; }
@@ -4211,7 +4222,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
 }
 .searchToggle.transferClearBtn { width: auto; padding: 0 8px; }
@@ -4248,7 +4259,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 999px;
   background: var(--accent-dark);
   color: var(--on-accent);
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   font-weight: 700;
   line-height: 15px;
   text-align: center;
@@ -4270,9 +4281,13 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* Speech-bubble badge marking a highlight that carries a typed note.
    Positioned inline (end of the last highlight rect); the PDF page is always
    white, so fixed light colors — theme variables would go invisible on it. */
-.pdfNoteBadge {
+.pdfNoteAnchor {
   position: absolute;
   z-index: 4;
+  /* Page coordinates belong to this unscaled anchor. Only its control grows. */
+  line-height: 0;
+}
+.pdfNoteBadge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4301,7 +4316,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   max-height: 40vh;
   overflow-y: auto;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   line-height: 1.45;
   color: var(--text-primary);
 }
@@ -4489,7 +4504,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .pdfViewer.transPeek .pdfTransLayer { visibility: hidden; }
 /* Tiny percentage under the zoom column's translate button while a job runs. */
 .pdfTransPct {
-  font-size: 9px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
   color: var(--accent);
   text-align: center;
   line-height: 1;
@@ -4527,7 +4542,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 2px;
 }
 
-.pptCitePreview { min-width: 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.pptCitePreview { min-width: 0; font-size: calc(13px * var(--ui-font-scale, 1)); line-height: 1.5; color: var(--text-secondary); }
 .pptCitePreview p { margin: 0; }
 /* Full BibTeX entry in the share dialog: scrolls instead of growing. */
 .bibtexPre {
@@ -4536,7 +4551,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   overflow: auto;
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre;
@@ -4545,7 +4560,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* --- paper metadata popover --- */
 .metaPopover { min-width: 340px; max-width: 420px; }
 .metaTable { display: flex; flex-direction: column; gap: 4px; padding: 2px 4px; }
-.metaRow { display: flex; gap: 8px; font-size: 12px; line-height: 1.45; }
+.metaRow { display: flex; gap: 8px; font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.45; }
 .metaKey { color: var(--text-dim); flex: 0 0 52px; }
 .metaVal { color: var(--text-secondary); min-width: 0; word-break: break-word; }
 .metaVal a { color: var(--accent); text-decoration: none; }
@@ -4592,7 +4607,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .linkPageItem { background: none; border: none; width: 100%; text-align: left; font: inherit; color: var(--text-secondary); justify-content: space-between; }
 .linkLikelyBadge {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   font-weight: 600;
   color: var(--accent);
   background: var(--accent-bg-light);
@@ -4611,7 +4626,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: #7ec8f0;
   border: 1px solid #2a5a8a;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   cursor: pointer;
   max-width: 100%;
   overflow: hidden;
@@ -4646,7 +4661,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   text-align: left;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   color: var(--text-primary);
 }
 .ctxMenuItem:hover { background: var(--bg-hover); }
@@ -4681,7 +4696,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 
 /* Section label row inside a menu (MenuLabel). */
 .ctxMenuLabel {
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -4724,7 +4739,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .refPopupEntry:last-child { border-bottom: none; }
 .refPopupPath {
   padding: 3px 12px 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -4743,7 +4758,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .refPopupItem:hover { background: var(--bg-hover); }
 .refPopupItem.selected { background: var(--accent-bg); color: var(--text-primary); }
 .refPopupText {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4761,7 +4776,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   overflow: auto;
   overscroll-behavior: contain;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-font-scale, 1));
 }
 .mathPreviewTip .katex-display { margin: 0; text-align: left; }
 .mathPreviewTip .katex-display > .katex { text-align: left; }
@@ -4795,12 +4810,12 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .latexAcGlyph {
   min-width: 36px;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
   overflow: hidden;
 }
 .latexAcName {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -4817,7 +4832,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* Quiet section title inside a slashMenu popup (e.g. the "Paste as" chooser). */
 .slashMenuTitle {
   padding: 4px 9px 3px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
   color: var(--text-dim);
   user-select: none;
 }
@@ -4842,17 +4857,17 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   padding: 3px 2px;
   text-align: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-secondary);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
 }
-.slashMenuLabel { font-size: 13px; }
+.slashMenuLabel { font-size: calc(13px * var(--ui-font-scale, 1)); }
 .slashMenuHint {
   margin-left: auto;
   padding-left: 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -4874,7 +4889,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: var(--accent);
 }
 .confirmIcon.danger { background: var(--danger-bg); color: var(--danger); }
-.confirmHead .reportModalTitle { font-size: 15px; }
+.confirmHead .reportModalTitle { font-size: calc(15px * var(--ui-font-scale, 1)); }
 .confirmHead .settingText { gap: 4px; }
 /* Equal-width actions so Cancel and the confirm button read as a pair. */
 .reportModalBtns .uiBtn { min-width: 84px; }
@@ -4882,18 +4897,18 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    flow. The paper illustrations below are decorative output examples. */
 .transferModal { width: min(740px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 20px; }
 .transferModal .settingsDialogContent { display: flex; flex-direction: column; overflow: hidden; }
-.transferProgress { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 14px; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.transferProgress { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 14px; color: var(--text-muted); font-size: calc(11px * var(--ui-font-scale, 1)); flex-shrink: 0; }
 .transferProgress [aria-current] { color: var(--accent); font-weight: 600; }
 .transferStep { min-height: 0; overflow-y: auto; padding: 3px; }
-.transferStep h2 { font-size: 17px; font-weight: 600; margin: 0 0 8px; color: var(--text-primary); }
+.transferStep h2 { font-size: calc(17px * var(--ui-font-scale, 1)); font-weight: 600; margin: 0 0 8px; color: var(--text-primary); }
 .transferStep h2:focus { outline: none; }
 .transferStep > .reportModalHint { margin: 0 0 14px; }
 .transferFormatRow { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; align-items: start; margin-bottom: 12px; }
-.transferFormatRow h3 { margin: 16px 0 0; font-size: 12px; color: var(--text-secondary); }
+.transferFormatRow h3 { margin: 16px 0 0; font-size: calc(12px * var(--ui-font-scale, 1)); color: var(--text-secondary); }
 .transferFormats .setPictureChoices { grid-template-columns: repeat(var(--picture-columns), minmax(0, 1fr)); gap: 8px; padding: 2px; }
 .transferFormats .setPictureChoice.uiBtn { flex-direction: column; align-items: stretch; min-height: 172px; padding: 10px; gap: 8px; }
-.transferFormats .setPictureName { font-size: 13px; padding-right: 16px; }
-.transferFormats .setPictureHint { font-size: 10.5px; line-height: 1.4; display: block; }
+.transferFormats .setPictureName { font-size: calc(13px * var(--ui-font-scale, 1)); padding-right: 16px; }
+.transferFormats .setPictureHint { font-size: calc(10.5px * var(--ui-font-scale, 1)); line-height: 1.4; display: block; }
 .transferFormats .setPictureCaption { gap: 5px; padding-right: 0; }
 .transferFormats .formatIllustration { display: grid; place-items: center; width: 100%; height: 68px; flex: 0 0 68px; }
 .transferFormatRowWide .setPictureChoice.uiBtn { flex-direction: row; align-items: center; min-height: 106px; gap: 12px; }
@@ -4905,7 +4920,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .transferControls .setRow > .settingText { grid-column: 2; grid-row: 1; padding-right: 0; }
 .transferControls .setRow > .switch { grid-column: 3; grid-row: 1; }
 .transferFooter { flex-shrink: 0; padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--border-subtle); align-items: center; }
-.transferHelp { font-size: 12px; color: var(--text-secondary); }
+.transferHelp { font-size: calc(12px * var(--ui-font-scale, 1)); color: var(--text-secondary); }
 .transferHelp summary { cursor: pointer; padding: 6px 0; }
 .transferModal :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 620px) {
@@ -4926,7 +4941,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .importSteps { margin-top: 10px; padding-left: 17px; }
 .importSteps .setStep { margin-bottom: 10px; }
 .importSteps .setStepBody { display: none; }
-.confirmMessage { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.confirmMessage { font-size: calc(12px * var(--ui-font-scale, 1)); color: var(--text-secondary); line-height: 1.5; }
 /* Move-block dialog: the page list scrolls; rows are the shared ctxMenuItem. */
 .moveBlockList { display: flex; flex-direction: column; max-height: 300px; overflow-y: auto; margin-top: 2px; }
 .moveBlockList .ctxMenuItem { border-radius: 6px; }
@@ -4936,7 +4951,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .linkPromptUrl {
   word-break: break-all;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-font-scale, 1));
   line-height: 1.5;
   color: var(--text-secondary);
   background: var(--bg-block);
@@ -5028,7 +5043,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; border-radius: 50%; box-sizing: border-box;
   background: var(--peer, var(--accent)); color: #fff;
-  font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0;
+  font-size: calc(10px * var(--ui-font-scale, 1)); font-weight: 600; line-height: 1; letter-spacing: 0;
   border: 1.5px solid var(--bg-surface); user-select: none;
 }
 .presenceBar { display: inline-flex; align-items: center; margin-left: 10px; vertical-align: middle; }
@@ -5046,9 +5061,9 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   pointer-events: none; transition: opacity 120ms ease;
 }
 .sortableBlockWrap:is(:hover, :focus-within) > .blockRowWrap > .peerChips { opacity: 0.25; }
-.peerChips .peerAvatar { width: 16px; height: 16px; font-size: 9px; margin-left: -4px; }
+.peerChips .peerAvatar { width: 16px; height: 16px; font-size: calc(9px * var(--ui-font-scale, 1)); margin-left: -4px; }
 .peerChips .peerAvatar:first-child { margin-left: 0; }
-.peerChips .peerMore { font-size: 9px; margin-left: 2px; opacity: 0.7; align-self: center; }
+.peerChips .peerMore { font-size: calc(9px * var(--ui-font-scale, 1)); margin-left: 2px; opacity: 0.7; align-self: center; }
 .blockRow.peerOn { box-shadow: inset 2px 0 0 var(--peer); }
 /* inside an open editor: their selection and caret */
 .cmRemoteSel { background: color-mix(in srgb, var(--peer) 28%, transparent); }
@@ -5058,7 +5073,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .cmRemoteCaret::after {
   content: attr(data-name); position: absolute; top: -1.35em; left: -2px;
-  background: var(--peer); color: #fff; font-size: 9px; line-height: 1.2;
+  background: var(--peer); color: #fff; font-size: calc(9px * var(--ui-font-scale, 1)); line-height: 1.2;
   padding: 1px 4px; border-radius: 3px; white-space: nowrap; pointer-events: none;
   opacity: 0.95;
 }
@@ -5103,7 +5118,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .inkTransformHandle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .inkTooltip { position: fixed; z-index: var(--z-tip); pointer-events: none; width: max-content; max-width: min(280px, calc(100vw - 16px));
   padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated);
-  color: var(--text-primary); font-size: 12px; line-height: 1.4; box-shadow: var(--shadow-surface); }
+  color: var(--text-primary); font-size: calc(12px * var(--ui-font-scale, 1)); line-height: 1.4; box-shadow: var(--shadow-surface); }
 .inkSelectionHit { position: absolute; z-index: 4; touch-action: none; cursor: move; }
 .inkEditMenu { width: 310px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
 .inkEditRow, .inkEditOptions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; }
@@ -5180,7 +5195,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .inkSizeDot { display: block; border-radius: 999px; margin: 0 auto; }
 .inkEraserDot { border: 1.5px solid currentColor; box-sizing: border-box; }
 /* Eraser / lasso mode choices: icon + word, a pill when active. */
-.pdfInkBar .inkSegBtn { width: auto; padding: 0 8px; gap: 5px; font-size: 12px; border-radius: 999px; }
+.pdfInkBar .inkSegBtn { width: auto; padding: 0 8px; gap: 5px; font-size: calc(12px * var(--ui-font-scale, 1)); border-radius: 999px; }
 
 /* The notes: a rounded-square pen marker in the dot slot, the strokes as a
    picture above the caption (on white: the card is a piece of the page,
@@ -5223,8 +5238,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .mcpConsent p { line-height: 1.5; }
 .mcpCallback { overflow-wrap: anywhere; }
 .mcpPermissions { margin: 8px 0 16px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: 8px; }
-.mcpPermissions ul { padding-left: 18px; margin: 10px 0; line-height: 1.6; font-size: 13px; }
+.mcpPermissions ul { padding-left: 18px; margin: 10px 0; line-height: 1.6; font-size: calc(13px * var(--ui-font-scale, 1)); }
 .mcpPermissions p { margin-bottom: 0; }
-.mcpConnectionDetails { margin: 16px 0; font-size: 13px; }
+.mcpConnectionDetails { margin: 16px 0; font-size: calc(13px * var(--ui-font-scale, 1)); }
 .mcpConnectionDetails summary { cursor: pointer; color: var(--text-secondary); }
 .mcpConsentActions { display: grid; gap: 8px; margin-bottom: 16px; }

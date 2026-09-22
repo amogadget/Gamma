@@ -57,7 +57,7 @@ from fractional_indexing import generate_key_between, generate_n_keys_between
 
 from .blocks_store import last_child_position
 from .db import page_now
-from .foldertags import clean_path, clean_segment
+from .foldertags import clean_path, clean_segment, parse_tags
 from .logbuf import log
 from .markdown_import import MAX_MARKDOWN_BYTES, fm_list, fm_text, md_to_blocks, parse_frontmatter
 from .storage import IMAGE_MEDIA_TYPES, content_digest, is_pdf, store_file, upload_media_type
@@ -103,10 +103,11 @@ _SKIP_DIRS = {".obsidian", ".trash"}
 # --- zip walking -------------------------------------------------------------
 
 class _Entry:
-    __slots__ = ("path", "size", "_zf", "_info")
+    __slots__ = ("path", "source_path", "size", "_zf", "_info")
 
     def __init__(self, path, zf, info):
         self.path = path
+        self.source_path = path
         self.size = info.file_size
         self._zf, self._info = zf, info
 
@@ -402,20 +403,22 @@ class _Plan:
 
 
 def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
-                        now: str = "") -> dict:
+                        now: str = "", *, preview: bool = False, selected: set[str] | None = None) -> dict:
     """Import every note in ``zf`` into workspace ``ws`` through the open ``pages.db``
     connection (the caller commits). Returns the report dict."""
+    from .import_review import archive_entries, validate_selection
     prefix = clean_path(folder)
     entries, opened = [], []
     _walk_zip(zf, "", entries, {"bytes": 0}, opened)
     _strip_wrappers(entries)
     report = {"pages_created": 0, "pages_skipped": 0, "blocks_imported": 0,
               "assets_stored": 0, "links_resolved": 0, "notion": False, "obsidian": False,
-              "pages": [], "warnings": []}
+              "pages": [], "warnings": [], "entries": archive_entries(zf), "folder": prefix}
+    current_selection = None
 
     def warn(title, reason):
         if len(report["warnings"]) < 200:
-            report["warnings"].append({"title": title, "reason": reason})
+            report["warnings"].append({"title": title, "reason": reason, "selection_id": current_selection})
 
     # An Obsidian vault carries its settings folder; the folder itself (and
     # the vault's trash) holds no notes.
@@ -449,13 +452,14 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
         csv_alias[e.path] = databases[key]
 
     # Already-imported pages: same bytes, or the same Notion page.
-    by_digest, by_notion = {}, {}
-    for pid, raw_props in conn.execute(
-            "SELECT id, properties FROM unified_blocks WHERE parent_id = 'root'"):
+    by_digest, by_notion, existing_pages = {}, {}, {}
+    for pid, raw_props, title in conn.execute(
+            "SELECT id, properties, content FROM unified_blocks WHERE parent_id = 'root'"):
         try:
             props = json.loads(raw_props or "{}")
         except (TypeError, ValueError):
             continue
+        existing_pages[pid] = (title, props)
         if props.get("markdown_import"):
             by_digest.setdefault(props["markdown_import"], pid)
         if props.get("notion_id"):
@@ -523,6 +527,9 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
         if existing:
             plan.existing = True
             plan.page_id = existing
+            plan.title, plan.props = existing_pages[existing]
+            plan.props = dict(plan.props)
+            plan.folder = plan.props.get("folder") or ""
         elif plan.body.strip():
             plan.tree = _prepare_tree(md_to_blocks(plan.body), plan.anchors, plan.headings)
         plans.append(plan)
@@ -531,6 +538,12 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
     for path, db_entry in csv_alias.items():
         if db_entry.path in targets:
             targets[path] = targets[db_entry.path]
+
+    validate_selection(selected, (p.entry.path for p in plans))
+    excluded = {p.entry.path for p in plans if selected is not None and p.entry.path not in selected and not p.existing}
+    # Unselected notes must not become dangling mentions to newly generated IDs.
+    excluded_ids = {p.page_id for p in plans if p.entry.path in excluded}
+    targets = {path: pid for path, pid in targets.items() if pid not in excluded_ids}
 
     # Basename lookup, the way Obsidian resolves a bare [[Note]] or
     # ![[image.png]] wherever the file sits: lower-cased stem (notes) or
@@ -589,7 +602,10 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
                 warn(path, "not a valid PDF")
             else:
                 try:
-                    filename, _ = store_file(ws, data, ext)
+                    if preview:
+                        filename = f"{content_digest(data)}{ext}"
+                    else:
+                        filename, _ = store_file(ws, data, ext)
                     url = f"/api/uploads/{filename}"
                     report["assets_stored"] += 1
                 except HTTPException as exc:
@@ -614,6 +630,8 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
             href = href.strip("<>").strip()
             path = resolve(base_dir, href)
             if path is None:
+                if href and not _SCHEME_RE.match(href) and not href.startswith(("#", "/")):
+                    warn(current_selection, f"Missing or unselected linked file: {href}; the link is kept as written")
                 return m.group(0)
             if path in targets:
                 report["links_resolved"] += 1
@@ -632,6 +650,8 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
             else:
                 path = None if not sub else "#self"      # [[#Heading]] — this note
             if path is None:
+                if target and not _SCHEME_RE.match(target):
+                    warn(current_selection, f"Missing or unselected note or attachment: {target}; the link is kept as written")
                 return m.group(0)
             if path == "#self" or path in targets:
                 report["links_resolved"] += 1
@@ -656,8 +676,17 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
         return _LINK_RE.sub(md_repl, _WIKILINK_RE.sub(wiki_repl, body))
 
     for plan in plans:
+        if selected is not None and plan.entry.path not in selected:
+            continue
+        current_selection = plan.entry.path
+        warning_start = len(report["warnings"])
         if plan.existing:
             report["pages_skipped"] += 1
+            report["pages"].append({"id": plan.page_id, "title": plan.title, "folder": plan.folder,
+                                    "folders": parse_tags(plan.folder), "selection_ids": [plan.entry.path],
+                                    "source_path": plan.entry.source_path, "source_paths": [plan.entry.source_path],
+                                    "kind": "pdf" if plan.props.get("doc_id") else "page", "created": False,
+                                    "action": "skip", "warnings": [], "missing": False})
             continue
         base_dir = posixpath.dirname(plan.entry.path)
         source = plan.props.pop("_source", None)
@@ -670,15 +699,23 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
                     plan.props["source_url"] = url
             elif _SCHEME_RE.match(source) and source.lower().startswith(("http://", "https://")):
                 plan.props["source_url"] = source
+            else:
+                warn(plan.title, f"Missing PDF attachment: {source}")
         if plan.folder:
             plan.props["folder"] = plan.folder
         for node in _walk(plan.tree):
             node["content"] = rewrite_links(node["content"], base_dir, plan.page_id)
-        report["blocks_imported"] += insert_note_page(conn, plan.page_id, plan.title, plan.props,
-                                                      plan.tree, now)
+        if not preview:
+            report["blocks_imported"] += insert_note_page(conn, plan.page_id, plan.title, plan.props,
+                                                          plan.tree, now)
         report["pages_created"] += 1
-        if len(report["pages"]) < 200:
-            report["pages"].append({"id": plan.page_id, "title": plan.title, "folder": plan.folder})
+        warnings = report["warnings"][warning_start:]
+        report["pages"].append({"id": plan.page_id, "title": plan.title, "folder": plan.folder,
+                                "folders": [plan.folder] if plan.folder else [], "selection_ids": [plan.entry.path],
+                                "source_path": plan.entry.source_path, "source_paths": [plan.entry.source_path],
+                                "kind": "pdf" if plan.props.get("doc_id") else "page", "created": not plan.existing,
+                                "action": "skip" if plan.existing else "create", "warnings": warnings,
+                                "missing": any("Missing" in w["reason"] for w in warnings)})
 
     for inner in opened:
         inner.close()

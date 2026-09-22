@@ -11,9 +11,10 @@
 // <name>` (docs/dev/migrations.md).
 import React from "react";
 import { API, apiJson, fmtBytes } from "../shared/lib/utils";
+import { BackupTasks } from "./BackupTasks";
 import { ActionMenu } from "../shared/ui/Menus";
 import { PaneHead, Section, Empty } from "./SettingsKit";
-import { DatabaseIcon, DownloadIcon, GlobeIcon, HardDriveIcon, ImportIcon, PlusIcon, Trash2Icon, UserIcon, UsersIcon } from "../shared/ui/Icons";
+import { DatabaseIcon, DownloadIcon, HardDriveIcon, ImportIcon, PlusIcon, Trash2Icon } from "../shared/ui/Icons";
 
 export function WorkspaceBackups({ value }) {
   const { workspace, setStatus, confirm, closeSettings, reloadWorkspace } = value;
@@ -133,7 +134,7 @@ export function WorkspaceBackups({ value }) {
   function group(w) {
     const list = lists[w.id];
     const owner = w.role === "owner";
-    const full = list && list.backups.length >= list.max;
+    const full = list && list.backups.filter((b) => !b.scheduled).length >= list.max;
     return (
       <Section
         key={w.id}
@@ -169,7 +170,7 @@ export function WorkspaceBackups({ value }) {
             <span className="aiProvMeta">
               <span className="aiProvName">
                 {when(b)}
-                <span className="uiTag">{b.label || "backup"}</span>
+                <span className="uiTag">{b.scheduled ? "Automatic" : b.label || "backup"}</span>
               </span>
               <span className="aiProvDesc">
                 {fmtBytes(b.size_bytes)}{b.uploads ? ` · ${b.upload_files} upload${b.upload_files === 1 ? "" : "s"}` : " · databases only"}{b.by ? ` · by ${b.by}` : ""}
@@ -196,18 +197,20 @@ export function WorkspaceBackups({ value }) {
             </span>
           </div>
         ))}
-        {full ? <div className="settingsPaneHint">This workspace holds its maximum of {list.max} snapshots — delete one to take another.</div> : null}
+        {full ? <div className="settingsPaneHint">This workspace holds its maximum of {list.max} manual snapshots — delete one to take another. Automatic backups have their own retention.</div> : null}
       </Section>
     );
   }
 
   return (
     <>
-      <PaneHead icon={DatabaseIcon} title="Backups">Server-kept snapshots; download one to keep it elsewhere.</PaneHead>
+      <PaneHead icon={DatabaseIcon} title="Backups">Keep your work safe, automatically. Download a snapshot to keep a copy elsewhere.</PaneHead>
       {!mine && !error ? <Empty icon={DatabaseIcon}>Loading…</Empty> : null}
       {error ? <Empty icon={DatabaseIcon}>Backups unavailable — {error}</Empty> : null}
       {mine ? (
         <>
+          <BackupTasks workspaces={mine} confirm={confirm} onRefresh={loadList} />
+          <Section title="Saved snapshots" />
           <div className="reportModalBtns settingsAlignStart">
             <ActionMenu
               label={`Back up all ${owned.length} workspace${owned.length === 1 ? "" : "s"}`} icon={PlusIcon} disabled={busy != null || !owned.length}

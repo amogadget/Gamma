@@ -6,7 +6,7 @@ Where every setting lives, and how the Settings dialog is built.
 
 | Layer | Storage | Examples |
 |---|---|---|
-| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/app/prefs.js](../../frontend/src/app/prefs.js)) — except `gamma-link-name`, the share view's display name for a visitor without an account, owned by `src/collaboration/linkName.js` because the fetch wrapper reads it outside React | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
+| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/app/prefs.js](../../frontend/src/app/prefs.js)) — except `gamma-link-name`, the share view's display name for a visitor without an account, owned by `src/collaboration/linkName.js` because the fetch wrapper reads it outside React | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the interface size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
 | Session only | React state, nothing stored | the Ctrl+scroll text size of the notes list and the chat transcript (`useTextScale` in [Widgets.jsx](../../frontend/src/shared/ui/Widgets.jsx)) — resets on reload |
 | Per account, synced | `/api/prefs/{key}` (small JSON KV, `user_prefs` in `users.db`) | per account AND workspace: open tabs (`open-tabs`), the recently-viewed queue (`recent-views`), pinned folders (`pinned-folders`; pinned pages are a page property), reading positions (`read-pos`) — they name one workspace's pages; account-wide: active AI key (`ai-provider`), appearance (`appearance`: theme + flip page colors). Server wins on load, localStorage (keyed `user@workspace`) is the instant-paint cache. The recents-card cover thumbnails are workspace data, through their own `/api/page-snaps` store (`page_snaps` in the workspace's `data.db` — over the prefs size cap) |
 | Per account, server-only | AI provider entries (keys/OAuth tokens) under the reserved `ai-settings` prefs key (account-wide), managed via `/api/ai/providers*`; the browser only ever sees a masked hint | API keys, ChatGPT OAuth |
@@ -22,6 +22,48 @@ synced preferences. Its key is `gamma-session:<user>@<workspace>`. Reads wait
 for workspace selection; changing scope cancels pending saves. Old unscoped
 session caches are ignored because their account owner cannot be determined.
 
+## Periodic backup tasks
+
+Settings → Backups has one central task table. Each account can create up to
+100 named tasks, independently of its workspaces. A task targets selected
+workspaces or all workspaces its owner owns (including future workspaces).
+Multiple tasks can cover the same workspace with different schedules and
+retention. Tasks can be edited, duplicated, paused, queued to run now, or
+deleted without deleting their snapshots.
+
+The editor offers hourly, daily, weekly (multiple weekdays), monthly and custom
+five-field cron schedules. Cron uses **UTC**; the next three runs are previewed
+in the browser's local timezone. Numeric wildcards, lists, ranges and steps are
+supported; Sunday is 0 or 7. Restricted day-of-month and weekday fields use OR
+semantics. Monthly dates absent from a month are skipped. Impossible schedules
+with no occurrence in five years are rejected.
+
+Retention is either an age (days; the editor also offers weeks and 30-day
+months) or a snapshot count per workspace. Only snapshots carrying that task's
+ID are eligible, after all selected backups succeed. The newest snapshot is
+always kept. Manual backups and other tasks' snapshots are untouched; the
+20-manual-snapshot cap stays separate.
+
+`GET/POST /api/backup-tasks`, `PUT/DELETE /api/backup-tasks/{id}`,
+`POST /api/backup-tasks/{id}/run`, and `POST /api/backup-tasks/preview` manage
+account-owned tasks. Guests and integration tokens cannot manage tasks.
+Workspace ownership (or current admin authority) is checked at save and again
+at execution. Owners can pause or delete a task after losing target access.
+
+Configuration and results persist in `backups/tasks/<id>.json`. A per-task OS
+lock prevents overlapping execution by server workers. The backend checks
+every 30 seconds, catches up once after downtime, and retries enabled failed
+tasks after an hour. Run-now queues a task (even if paused), preserving an
+upcoming scheduled run. Shutdown waits for active backups. The UI polls task
+state every five seconds and refreshes snapshots after successful runs.
+
+Older per-workspace `schedule.json` settings are imported once as editable
+tasks, then renamed to `schedule.migrated`. Their existing untagged snapshots
+remain available for manual management. Deleting a selected workspace makes
+its task fail visibly until the selection is updated; all-owned tasks discover
+the current set each run. Backups stay on the server; download copies to store
+elsewhere. Whole-server snapshots remain in Settings → Server.
+
 ## The Settings dialog
 
 One dialog, one sidebar in three groups, defined by `PREFERENCE_NAV`,
@@ -35,7 +77,7 @@ short hint what it does, and the hover `title` the rest.
 Preferences:
 
 - **Appearance**: the eight theme cards (`PictureChoices`), the dark-page
-  switch with its live PDF sample, control size and the status bar.
+  switch with its live PDF sample, interface size and the status bar.
   [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx).
 - **Reading & editing**: imported annotations (a Keep / Remove segmented
   choice), handwriting as two `IconChoices` tiles ("Draws with": pen only /

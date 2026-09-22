@@ -52,6 +52,34 @@ settingsKit's `Step`); with a PDF open, that PDF's own annotations win. Nothing
 is remembered: the switch starts from the Settings preference each time, so the
 setting stays the standing policy.
 
+Zotero, Markdown (ZIP or one file), Obsidian/Notion ZIPs and Gamma exports
+continue into the shared `transfers/ImportReviewDialog.jsx`: Upload → Review →
+Import → Summary. `importApi.js` supplies the format adapter, `xhrUpload.js`
+reports real uploaded/total bytes, and `importReview.js` owns selection,
+filtering and tree construction. Upload progress ends when the browser finishes
+sending bytes; checking/importing show an indeterminate progress bar. The report
+stays in the dialog, including warnings, without navigating or reloading the app.
+
+`POST /api/import/review` receives the file and its source (`zotero`,
+`markdown-zip`, `markdown-file`, `gamma`), optional folder and strip preference.
+It returns the two trees' data and a `review_id`. Import uses
+`POST /api/import/review/{id}` with JSON `{selected: [source item IDs]}`; it
+reuses the upload and checks current library state. Source IDs (and grouped
+`selection_ids` for duplicate Zotero records) make selection independent of
+destination IDs. Missing, Warnings and Selected filters only change visibility;
+hidden selections remain selected. Folder checkboxes affect descendants;
+Select all/Deselect all affect the whole plan. Nothing imports on preview or cancel.
+
+`gamma/import_staging.py` stores temporary uploads outside library data, bound
+to the account and workspace. Every request rechecks workspace write access.
+A filesystem claim prevents concurrent commit across workers, and the saved
+result makes a retry after a lost response safe. The payload is removed after
+success; closing review deletes its staging directory. Abandoned uploads expire
+after two hours and are cleaned on the next upload. Compressed uploads have a
+1 GB limit. This additive selection flow is separate from Settings' full backup
+replacement. Logseq and in-PDF annotations keep their existing source-specific
+import controls.
+
 ## Plain Markdown uploads
 
 The add menu's file picker, directory picker, and whole-window file drop all
@@ -139,9 +167,12 @@ folder of notes, because they only differ in naming and link conventions
   the existing page, so re-importing an export adds nothing.
 
 The report's counts (`pages_created`, `pages_skipped`, `assets_stored`,
-`links_resolved`, `notion`) feed the status line, `warnings` go to the
-browser console, and `pages` lists up to 200 created pages (`id`, `title`,
-`folder`) for API callers. To make the round trip work the
+`links_resolved`, `notion`) and warnings appear in the shared dialog. `pages`
+lists selected pages and their destinations, including pages already in the library. The same engine's `preview=True`
+mode parses notes and checks assets without writing uploads or blocks; optional
+selection limits page creation and associated assets. Links to unselected new
+notes remain as written, with warnings. A selected note may still link to an
+already imported note. To make the round trip work the
 Markdown export writes the page's folder label into the front matter
 (`folder:`), relative to the exported folder — a folder export's root pages
 carry none — so importing the zip into a folder rebuilds the same tree there.
@@ -161,6 +192,26 @@ tags→`category`, notes→child blocks (`properties.zotero_note`), then runs th
 shared `import_embedded_annotations` (reader annotations arrive inside the
 exported PDFs; `strip` follows the client's embedded-annotations preference).
 Merging only fills gaps: existing meta/bibtex/files are kept, labels union.
+
+Choosing the ZIP opens the shared import review dialog. Its two trees show
+the archive (including empty directories and unused files) and the destination
+library (PDF/page, new/update, collection paths, notes). The active library
+folder becomes the import prefix. `POST /api/import/zotero/preview` accepts
+the same `file` and `folder`, requires workspace write access, and writes no
+pages or uploads. Both endpoints use `plan_zotero_archive`, so attachment
+resolution and warnings agree. The staged review flow reuses the upload,
+rechecks the current library, and leaves actual results and warnings in the dialog.
+
+The parser accepts standalone and inline PDF attachments, both MIME namespaces,
+and literal or resource paths. Lookup normalizes relative dot segments and
+percent encoding as well as ZIP filename encodings. If a filename changed,
+only a unique PDF in that same `files/<attachment-id>` directory can be used;
+ambiguous or cross-item matches are never guessed. Additional PDFs become
+separate pages in the item's collections, with stable attachment keys.
+Missing/invalid PDFs, unsupported or unlinked files, recovered filenames and
+preserved existing PDFs are reported. Empty directories do not supply PDF
+bytes; a URL in metadata is not a bundled attachment. Reimporting a complete
+export attaches a recovered PDF to an existing metadata-only page.
 
 ## Zotero RDF export
 
@@ -414,6 +465,12 @@ flipped into user space by one `cm`. `pdf_image.XObjectStore` is the shared
 upload → image-XObject registry.
 
 ## Annotated-PDF export
+
+Both the annotation and visible-note writers use `ExportPdfReader`, which
+resolves dangling indirect references to PDF null objects. Some otherwise
+readable PDFs contain missing optional objects; PyPDF2 returns Python `None`
+for these and its writer otherwise fails with a blank `AssertionError`.
+The repair is in memory during export; the stored original is unchanged.
 
 `/api/pages/{id}/export-pdf`: highlights become standard `/Highlight` (or
 `/Square` for area notes) annotations with the note text in the popup

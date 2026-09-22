@@ -14,7 +14,8 @@ Settings → Backups manages: taken by a workspace owner (or for every
 workspace of an account at once), listed, downloaded, restored in place,
 deleted. Each is a FULL copy — no incremental chain, so any one of them
 restores on its own and deleting one never breaks another; the price is
-size, bounded by ``MAX_PER_WORKSPACE`` and the databases-only choice.
+size, bounded by ``MAX_PER_WORKSPACE`` manual snapshots and the databases-only
+choice. Automatic snapshots have separate retention in ``backup_schedule.py``.
 Snapshots are not metered against anyone's quota (they live outside
 ``uploads/``) and are not part of admin server snapshots (``gamma/backups.py``
 copies the databases and uploads, not ``backups/``); deleting a workspace
@@ -29,6 +30,7 @@ import sqlite3
 import tempfile
 import time
 import zipfile
+from contextlib import closing
 from pathlib import Path
 
 from . import config
@@ -50,7 +52,7 @@ class BackupError(ValueError):
 # --- the zip ----------------------------------------------------------------------
 
 def write_zip(ws: str, dest: Path, *, uploads: bool = True, by: str = "", label: str = "",
-              progress: dict | None = None) -> dict:
+              progress: dict | None = None, scheduled: bool = False, task_id: str = "") -> dict:
     """Write the workspace's backup zip to ``dest``. ``progress`` (a dict the
     caller shares with a poller) gets ``total`` / ``done`` byte counts.
     Returns the manifest."""
@@ -75,6 +77,8 @@ def write_zip(ws: str, dest: Path, *, uploads: bool = True, by: str = "", label:
         "exported_by": by,
         "exported_at": page_now(),
         "label": label,
+        "scheduled": scheduled,
+        "task_id": task_id,
         "uploads": bool(uploads),
         "upload_files": len(upload_files),
     }
@@ -113,7 +117,7 @@ def read_manifest(path: Path) -> dict:
 
 # --- restore -------------------------------------------------------------------------
 
-def restore_zip(ws: str, zpath: Path, mode: str = "replace") -> dict:
+def restore_zip(ws: str, zpath: Path, mode: str = "replace", *, selected: set[str] | None = None) -> dict:
     """Apply a backup zip to the workspace.
 
     ``replace``: pages.db and data.db are REPLACED (via the sqlite backup
@@ -126,11 +130,42 @@ def restore_zip(ws: str, zpath: Path, mode: str = "replace") -> dict:
     raises BackupError on a bad zip."""
     if mode not in ("replace", "merge"):
         raise BackupError("mode must be 'replace' or 'merge'")
+    if selected is not None and mode != "merge":
+        raise BackupError("selection is only supported for additive imports")
     with tempfile.TemporaryDirectory(prefix="gamma-restore-") as td:
         tdir = Path(td)
         upload_names = _unpack(zpath, tdir)
         _validate(tdir)
         root = ws_dir(ws)
+        review = None
+        if selected is not None:
+            review = _review_import(root, tdir, upload_names)
+            from .import_review import validate_selection
+            validate_selection(selected, (p["selection_ids"][0] for p in review))
+            chosen = [p for p in review if p["selection_ids"][0] in selected]
+            keep_blocks = {bid for p in chosen for bid in p["_blocks"]}
+            keep_chats = {bid for p in chosen for bid in p["_chats"]}
+            keep_uploads = {name for p in chosen for name in p["_uploads"]}
+            omitted = {bid for p in review for bid in p["_blocks"]} - keep_blocks
+            with closing(sqlite3.connect(str(root / "pages.db"))) as live:
+                omitted -= {r[0] for r in live.execute("SELECT id FROM unified_blocks")}
+            for page in chosen:
+                unresolved = page.get("_references", set()) & omitted
+                if unresolved:
+                    page["warnings"].append({"title": page["title"], "selection_id": page["selection_ids"][0],
+                                             "reason": f"Links to {len(unresolved)} unselected pages or notes are kept, but their targets are not imported."})
+            for dbname, table, column, keep in (("pages.db", "unified_blocks", "id", keep_blocks),
+                                               ("data.db", "chats", "block_id", keep_chats)):
+                snap = tdir / dbname
+                if not snap.exists():
+                    continue
+                with closing(sqlite3.connect(str(snap))) as conn, conn:
+                    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                        continue
+                    conn.execute("CREATE TEMP TABLE import_keep (id TEXT PRIMARY KEY)")
+                    conn.executemany("INSERT INTO import_keep VALUES (?)", ((i,) for i in keep))
+                    conn.execute(f"DELETE FROM {table} WHERE {column} NOT IN (SELECT id FROM import_keep)")
+            upload_names = [n for n in upload_names if n in keep_uploads]
         if not (root / "pages.db").exists():
             create_workspace_files(ws)
         if mode == "merge":
@@ -162,8 +197,83 @@ def restore_zip(ws: str, zpath: Path, mode: str = "replace") -> dict:
             if not target_file.exists():
                 shutil.copyfile(tdir / "uploads" / base, target_file)
                 uploads_added += 1
+    if review is not None:
+        result["pages"] = [{k: v for k, v in p.items() if not k.startswith("_")} for p in chosen]
+        result["warnings"] = [w for p in chosen for w in p["warnings"]]
     return {"mode": mode, "workspace": ws, **result,
             "uploads_in_backup": len(upload_names), "uploads_added": uploads_added}
+
+
+def _review_import(root, tdir, upload_names):
+    """Plan the same additive merge, using only the extracted snapshot."""
+    from .foldertags import parse_tags
+    from .sync_tree import upload_refs
+
+    available = set(upload_names) | {p.name for p in (root / "uploads").glob("*")}
+    with closing(sqlite3.connect(str(root / "pages.db"))) as live:
+        live_pages = {r[0]: (r[1], json.loads(r[2] or "{}"))
+                      for r in live.execute("SELECT id, content, properties FROM unified_blocks")}
+        live_docs = {json.loads(r[1] or "{}").get("doc_id"): r[0]
+                     for r in live.execute("SELECT id, properties FROM unified_blocks WHERE parent_id='root'")}
+    chats = {}
+    live_chats = set()
+    if (root / "data.db").exists():
+        with closing(sqlite3.connect(str(root / "data.db"))) as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='chats'").fetchone():
+                live_chats = {r[0] for r in conn.execute("SELECT block_id FROM chats")}
+    if (tdir / "data.db").exists():
+        with closing(sqlite3.connect(str(tdir / "data.db"))) as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='chats'").fetchone():
+                chats = {row[0]: row[1] for row in conn.execute("SELECT block_id, messages FROM chats")}
+    pages, claimed_chats = [], set()
+    with closing(sqlite3.connect(str(tdir / "pages.db"))) as src, src:
+        normalize_pages_db(src)
+        for row in src.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id='root' ORDER BY position").fetchall():
+            props = json.loads(row[4] or "{}")
+            destination_id = row[0] if row[0] in live_pages else live_docs.get(props.get("doc_id")) if props.get("doc_id") else None
+            title, destination_props = live_pages[destination_id] if destination_id else (row[3], props)
+            blocks = fetch_subtree(src, row[0])
+            ids = {b[0] for b in blocks}
+            references = {ref for b in blocks for ref in re.findall(r"\[\[([A-Za-z0-9_-]+)\]\]", b[3] or "")}
+            page_chats = ids & chats.keys()
+            claimed_chats.update(page_chats)
+            uploads = upload_refs([{"content": b[3], "props": json.loads(b[4] or "{}")} for b in blocks]
+                                  + [{"content": chats[c]} for c in page_chats])
+            missing = uploads - available
+            selection_id = f"page:{row[0]}"
+            warnings = [{"title": row[3], "reason": f"Missing attachment: {name}", "selection_id": selection_id}
+                        for name in sorted(missing)]
+            pages.append({"id": destination_id or row[0], "title": title, "folders": parse_tags(destination_props.get("folder")),
+                          "selection_ids": [selection_id], "kind": "pdf" if destination_props.get("doc_id") else "page",
+                          "action": "skip" if destination_id else "create",
+                          "source_paths": ["pages.db", *[f"uploads/{n}" for n in sorted(uploads)]],
+                          "warnings": warnings, "missing": bool(missing),
+                          "_blocks": ids, "_chats": page_chats, "_uploads": uploads, "_references": references})
+    for chat_id, messages in chats.items():
+        if chat_id in claimed_chats:
+            continue
+        uploads = upload_refs([{"content": messages}])
+        selection_id = f"chat:{chat_id}"
+        warnings = [{"title": "Library chat", "reason": f"Missing attachment: {name}", "selection_id": selection_id}
+                    for name in sorted(uploads - available)]
+        pages.append({"id": chat_id, "title": "Library chat", "folders": ["Chats"], "kind": "chat",
+                      "action": "skip" if chat_id in live_chats else "create", "selection_ids": [selection_id], "source_paths": ["data.db"],
+                      "warnings": warnings, "missing": bool(uploads - available),
+                      "_blocks": set(), "_chats": {chat_id}, "_uploads": uploads})
+    return pages
+
+
+def preview_zip(ws: str, zpath: Path) -> dict:
+    from .import_review import archive_entries
+    with tempfile.TemporaryDirectory(prefix="gamma-preview-") as td:
+        tdir = Path(td)
+        uploads = _unpack(zpath, tdir)
+        _validate(tdir)
+        pages = _review_import(ws_dir(ws), tdir, uploads)
+    with zipfile.ZipFile(zpath) as zf:
+        entries = archive_entries(zf)
+    return {"pages": [{k: v for k, v in p.items() if not k.startswith("_")} for p in pages],
+            "entries": entries, "warnings": [w for p in pages for w in p["warnings"]], "folder": ""}
 
 
 def _unpack(zpath: Path, tdir: Path) -> list[str]:
@@ -306,7 +416,8 @@ def info(ws: str, name: str) -> dict | None:
     m = read_manifest(path)
     return {"name": name, "size_bytes": path.stat().st_size, "created_at": m.get("exported_at", ""),
             "label": m.get("label", ""), "uploads": bool(m.get("uploads")),
-            "upload_files": m.get("upload_files", 0), "by": m.get("exported_by", "")}
+            "upload_files": m.get("upload_files", 0), "by": m.get("exported_by", ""),
+            "scheduled": bool(m.get("scheduled")), "task_id": m.get("task_id", "")}
 
 
 def list_backups(ws: str) -> list[dict]:
@@ -318,11 +429,11 @@ def list_backups(ws: str) -> list[dict]:
     return [b for b in out if b]
 
 
-def create(ws: str, *, label: str = "manual", uploads: bool = True, by: str = "") -> dict:
+def create(ws: str, *, label: str = "manual", uploads: bool = True, by: str = "", scheduled: bool = False, task_id: str = "") -> dict:
     """Take a snapshot. Raises BackupError on a bad label or a full store."""
     if not LABEL_RE.match(label or ""):
         raise BackupError("label must be 1-40 chars of letters, digits, _ . -")
-    if len(list_backups(ws)) >= MAX_PER_WORKSPACE:
+    if not scheduled and sum(not b["scheduled"] for b in list_backups(ws)) >= MAX_PER_WORKSPACE:
         raise BackupError(f"this workspace already has {MAX_PER_WORKSPACE} backups — delete one first")
     d = store_dir(ws)
     d.mkdir(parents=True, exist_ok=True)
@@ -334,7 +445,7 @@ def create(ws: str, *, label: str = "manual", uploads: bool = True, by: str = ""
     dest = d / f"{name}.zip"
     tmp = dest.with_suffix(".zip.part")
     try:
-        write_zip(ws, tmp, uploads=uploads, by=by, label=label)
+        write_zip(ws, tmp, uploads=uploads, by=by, label=label, scheduled=scheduled, task_id=task_id)
         tmp.replace(dest)  # never a half-written snapshot in the listing
     except Exception:
         tmp.unlink(missing_ok=True)

@@ -1,0 +1,36 @@
+.settingsModal:has(.backupTaskTableWrap, .backupTasksEmpty) { width: min(calc(1180px * var(--ui-scale, 1)), calc(100vw - 32px)); }
+.backupTaskTableWrap { margin: 16px 0; border: 1px solid var(--border); border-radius: 10px; overflow: auto; }
+.backupTaskTable { width: 100%; min-width: 740px; border-collapse: collapse; font-size: calc(12px * var(--ui-font-scale, 1)); }
+.backupTaskTable th { padding: 12px 9px; text-align: left; color: var(--text-muted); background: var(--bg-elevated); font-weight: 600; white-space: nowrap; }
+.backupTaskTable td { padding: 14px 9px; vertical-align: middle; border-top: 1px solid var(--border); line-height: 1.5; white-space: normal; }
+.backupTaskTable td:first-child { min-width: 140px; max-width: 210px; }
+.backupTaskTable td:nth-child(3) { min-width: 100px; }
+.backupTaskTable td:nth-child(4), .backupTaskTable td:nth-child(5) { min-width: 90px; }
+.backupTaskTable .settingDesc { display: block; margin-top: 3px; overflow-wrap: anywhere; }
+.backupTaskName { display: block; padding: 0; border: 0; background: none; font: inherit; font-weight: 650; color: var(--text-primary); cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.backupTaskName:hover { color: var(--accent); }
+.backupTaskState { display: inline-flex; padding: 3px 7px; border: 1px solid var(--border); border-radius: 20px; font-size: 10px; font-weight: 650; text-transform: uppercase; white-space: nowrap; color: var(--text-muted); }
+.backupTaskState.finished { color: var(--accent); border-color: var(--accent); }
+.backupTaskState.running, .backupTaskState.queued { color: var(--accent); background: var(--bg-elevated); }
+.backupTaskState.failed { color: var(--danger, #c54b4b); border-color: currentColor; }
+.backupTasksEmpty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px 20px; margin: 16px 0; background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: 10px; color: var(--text-muted); text-align: center; }
+.backupTasksEmpty svg { color: var(--accent); }
+.backupTasksEmpty strong { color: var(--text-primary); }
+.backupTasksEmpty .uiBtn { margin-top: 4px; }
+.reportModal.backupTaskDialog { width: min(680px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); }
+.backupTaskFields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.backupTaskFields .setField { margin-bottom: 12px; }
+.backupTaskFields .aiKeyInput { width: 100%; box-sizing: border-box; }
+.backupTaskFields > .reportModalBtns { position: sticky; bottom: 0; background: var(--bg-elevated); padding: 12px 0; margin-bottom: 0; border-top: 1px solid var(--border); }
+.backupTaskGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.backupTaskTargets { border: 1px solid var(--border); border-radius: 8px; padding: 8px; max-height: 180px; overflow-y: auto; margin: 10px 0; }
+.backupTaskTargets label { display: flex; align-items: center; gap: 9px; padding: 7px; }
+.backupTaskTargets label > span:first-of-type { flex: 1; overflow-wrap: anywhere; }
+.backupTaskWeekdays { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 14px; }
+.backupTaskPreview { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 14px; margin: 14px 0; background: var(--bg-elevated); }
+.backupTaskPreview .settingLabel { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+.backupTaskPreview ol { padding-left: 20px; margin: 0; line-height: 1.8; color: var(--text-muted); }
+.backupCron { font-family: monospace; }
+.backupTaskError { display: flex; gap: 10px; align-items: center; margin: 12px 0; }
+.backupTaskVisuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 560px) { .backupTaskGrid { grid-template-columns: 1fr; gap: 0; } }
