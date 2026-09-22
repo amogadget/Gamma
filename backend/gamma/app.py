@@ -110,8 +110,10 @@ def create_app() -> FastAPI:
     mcp = LazyMCP()
     @asynccontextmanager
     async def lifespan(app):
-        async with mcp.lifespan(app), backup_schedule.lifespan():
-            yield
+        # The MCP lifespan's yield is request state (its runtime, read by the
+        # /mcp route from scope["state"]) — it must pass through here.
+        async with mcp.lifespan(app) as state, backup_schedule.lifespan():
+            yield state
 
     app = FastAPI(title="Gamma PDF Annotator", lifespan=lifespan)
 
