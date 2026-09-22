@@ -468,6 +468,15 @@ function LibraryApp() {
     setWsReady(true);
   }
 
+  // What the login page offers besides a password: read once, unauthenticated.
+  const [serverConfig, setServerConfig] = useState(null);
+  useEffect(() => {
+    if (shareMode) return;
+    let active = true;
+    apiJson(`${API}/server-config`).then((c) => { if (active) setServerConfig(c); }).catch(() => {});
+    return () => { active = false; };
+  }, [shareMode]);
+
   async function checkSession() {
     try {
       const data = await apiJson(`${API}/session`);
@@ -6487,6 +6496,7 @@ function LibraryApp() {
         onUsernameChange={setLoginUser}
         onPasswordChange={setLoginPass}
         onSubmit={doShareLogin}
+        cloudLogin={serverConfig?.cloud}
         subtitle="Sign in to open this shared page"
       />
     ) : (
@@ -6508,6 +6518,7 @@ function LibraryApp() {
         onPasswordChange={setLoginPass}
         onSubmit={doLogin}
         onGuestLogin={doGuestLogin}
+        cloudLogin={serverConfig?.cloud}
       />
     );
   }

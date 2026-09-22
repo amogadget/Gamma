@@ -89,6 +89,9 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   login still works there). Sessions are enforced server-side against
   `SESSION_MAX_AGE` (expired rows are deleted in the middleware) and are revoked
   when the account's password is changed.
+- A cloud identity (Sign in with Gamma Cloud, [cloud_accounts.md](cloud_accounts.md))
+  ends in the same `sessions` row as a password login: the callback mints it,
+  nothing downstream can tell the difference.
 - `/api/login` and `/api/login-guest` are rate-limited per IP/username
   (`gamma/ratelimit.py`, in-process fixed windows → 429), as are share-link
   visitors' writes and unknown share tokens (above; those log a warning
@@ -106,7 +109,11 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 ### Session & account (`auth.py`)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/login`, `/login-guest`, `/logout` | session management |
+| POST | `/login`, `/login-guest`, `/logout` | session management (`/login` refuses an account with an empty password hash — one only its cloud identity signs in) |
+| GET | `/server-config` | public: what the login page offers besides a password — `{cloud: {enabled, issuer}, password_login, registration}` ([cloud_accounts.md](cloud_accounts.md)) |
+| GET | `/auth/cloud/start?next=&link=1` | Sign in with Gamma Cloud: stores the pending PKCE sign-in and redirects to the account server; `link=1` needs a session and attaches the cloud identity to that account |
+| GET | `/auth/cloud/callback?code=&state=` | the account server's return: verifies the ID token, resolves or creates the local account per the policy (`gamma/cloud_auth.py`), mints a session and redirects to `next`; a refusal goes back to `/?cloud_error=` |
+| GET / POST | `/auth/cloud/status`, `/auth/cloud/unlink` | the signed-in account's own cloud identity (handle, plan, e-mail, linked at); unlink is refused for an account without a password |
 | GET | `/session` | who am I, plus `workspaces: [{id, name, kind, role, access, public_role, personal, default, members}]` (memberships + every public workspace) and `default_workspace` (quota lives in `/quota`) |
 | GET | `/accounts` | the account directory for the invite / owner pickers: `{accounts: [{username, is_admin}]}`, non-guest accounts only (signed-in non-guest callers) |
 | GET | `/export` (+ `/export-progress`) | backup zip of a workspace (everything or `uploads=0`; the `gamma-backup-1` zip of `gamma/ws_backup.py`): the request's, `?ws=` (any member), or — admins — `?user=` for an account's default workspace |

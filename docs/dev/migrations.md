@@ -58,6 +58,7 @@ workspace's files), `db.SCHEMA_VERSION`, `manage.py migrate` / `backups`.
 | 11 | `mirror_cadence` | `mirrors` gains `poll_s` (how often a round checks the original, 0 = by hand) and `on_change` (a round a few seconds after a local edit); `mode` may be `off` (detached) |
 | 12 | `sync_log_stats` | every workspace's `sync_log` gains `stats`, the git-style block counts of a row (JSON `{add, del, mod}`); older rows carry none |
 | 13 | `sync_conflict_base` | every workspace's `sync_conflicts` gains `base`, the text a merged block had before either side edited it (the resolver's diff view); older rows carry none |
+| 14 | `identities` | Adds the `identities` table (+ unique index per account) in `users.db`: the Gamma Cloud identity linked to an account ([cloud_accounts.md](cloud_accounts.md)) |
 
 ## Backups (`gamma/backups.py`)
 

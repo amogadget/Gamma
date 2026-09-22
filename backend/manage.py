@@ -7,6 +7,8 @@ Usage:
   python manage.py create-user <username> [password]
   python manage.py set-password <username> <password>
   python manage.py set-admin <username> <on|off>   # admin = privilege flag, manages users in the GUI
+  python manage.py list-identities | link-identity <user> <sub> <handle> [email] | unlink-identity <user>
+                                                   # Sign in with Gamma Cloud (docs/dev/cloud_accounts.md)
   python manage.py rename-user <old> <new>
   python manage.py delete-user <username>          # + the workspaces only they owned
   python manage.py list-users
@@ -30,7 +32,9 @@ import sys
 
 import bcrypt
 
-from gamma import backups as backups_mod, migrations, workspaces
+import json
+
+from gamma import backups as backups_mod, cloud_auth, migrations, workspaces
 from gamma.db import SchemaOutdated, connect_users_db, page_now, ws_dir
 from gamma.seed import create_account, ensure_guest_user, reset_guest_data
 
@@ -149,6 +153,7 @@ def delete_user(username):
             print(f"User '{username}' not found.")
             return
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
+        conn.execute("DELETE FROM identities WHERE username = ?", (username,))
         conn.commit()
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:
@@ -205,6 +210,45 @@ def set_password(username, password):
         conn.execute("DELETE FROM integration_tokens WHERE username = ?", (username,))
         conn.commit()
     print(f"Password set for '{username}'.")
+
+
+def list_identities():
+    """Which accounts are linked to a Gamma Cloud account."""
+    with connect_users_db() as conn:
+        rows = conn.execute("SELECT username, subject, email, claims, last_login_at FROM identities "
+                            "WHERE provider = ? ORDER BY username", (cloud_auth.PROVIDER,)).fetchall()
+    if not rows:
+        print("No account is linked to Gamma Cloud.")
+    for username, subject, email, claims, last in rows:
+        handle = json.loads(claims or "{}").get("handle", "")
+        print(f"{username:<20} cloud handle {handle:<20} {email:<30} sub={subject}  last login {last[:10]}")
+
+
+def link_identity(username, subject, handle, email=""):
+    """Link an account to a Gamma Cloud subject by hand (the sign-in flow
+    does it itself; this is for a locked-out admin)."""
+    with connect_users_db() as conn:
+        row = conn.execute("SELECT is_guest FROM users WHERE username = ?", (username,)).fetchone()
+        if not row:
+            print(f"User '{username}' not found.")
+            return
+        if row[0]:
+            print("The guest account cannot be linked.")
+            return
+        cloud_auth.link(conn, username, {"sub": subject, "handle": handle, "email": email, "email_verified": True})
+        conn.commit()
+    print(f"Linked '{username}' to Gamma Cloud subject {subject} (handle {handle}).")
+
+
+def unlink_identity(username):
+    """Detach an account's Gamma Cloud identity and sign it out everywhere."""
+    with connect_users_db() as conn:
+        if not cloud_auth.unlink(conn, username):
+            print(f"'{username}' is not linked to Gamma Cloud.")
+            return
+        conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
+        conn.commit()
+    print(f"Unlinked '{username}'. Set a password with set-password if it has none.")
 
 
 def setup():
@@ -333,6 +377,18 @@ def main():
         delete_user(args[0])
     elif cmd == "list-users":
         list_users()
+    elif cmd == "list-identities":
+        list_identities()
+    elif cmd == "link-identity":
+        if len(args) < 3:
+            print("Usage: python manage.py link-identity <username> <cloud subject> <cloud handle> [email]")
+            sys.exit(1)
+        link_identity(args[0], args[1], args[2], args[3] if len(args) > 3 else "")
+    elif cmd == "unlink-identity":
+        if len(args) < 1:
+            print("Usage: python manage.py unlink-identity <username>")
+            sys.exit(1)
+        unlink_identity(args[0])
     elif cmd == "list-workspaces":
         list_workspaces()
     elif cmd == "create-workspace":

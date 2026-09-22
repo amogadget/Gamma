@@ -15,8 +15,8 @@ change.
 Status: **v0** — accounts, the portal, the OIDC provider, the admin API and
 CLI. Plans exist as a column set by an admin; Stripe, provisioning and the
 `servers` list (v1) and outside identity providers (v2) are not built. The
-consumer side — "Sign in with Gamma Cloud" in Gamma's own auth middleware —
-is step 2 of the plan and lives in `backend/`, not here.
+consumer side — "Sign in with Gamma Cloud" on every Gamma server — is
+built too and described at the end of this page ("The Gamma side").
 
 ## What it owns
 
@@ -165,14 +165,7 @@ and `plan` always (a Gamma server needs the username and the quota),
 in `signing_keys`; `manage.py rotate-key` retires the active one, which
 stays in the JWKS for a week so tokens it signed still verify.
 
-**What a Gamma server does with it** (the client side, not built yet —
-step 2 of the plan): start → `/authorize` with state + PKCE → callback →
-`/token` → verify the ID token against the cached JWKS → look the `sub` up
-in its `identities` table → session row. Unknown identity policy per
-server: refuse (self-hosted default), claim an account whose e-mail
-matches (paid containers, whose first admin is seeded from the handle), or
-provision (the free share host). The sidecar keeps the refresh token and
-the last verified claims so an offline start still knows the person.
+**What a Gamma server does with it** is the client side below.
 
 ## Admin
 
@@ -200,3 +193,69 @@ points the data directory at a temp folder and the mail backend at the
 in-memory outbox before the package is imported. CI runs them in the
 `cloud` job of `check.yml`; a merge to `main` publishes
 `ghcr.io/<owner>/gamma-cloud:latest` from `docker.yml`.
+
+## The Gamma side: Sign in with Gamma Cloud
+
+`backend/gamma/cloud_auth.py` (the client and the identity seam),
+`backend/gamma/routers/cloud_auth.py` (the endpoints),
+`frontend/src/settings/SettingsCloudSignIn.jsx` (the Server pane's Sign-in
+section and the Account pane's row), the login page's button. Tests:
+`backend/tests/test_cloud_auth.py` (a fake account server signing real
+Ed25519 tokens) and the `cloudSignIn` browser scenario.
+
+**Nothing downstream changes.** The callback mints the same `sessions` row
+the password login does (`routers/auth.py` `new_session`) and sets the
+same cookie; every other module keeps reading `request.state.user`. What
+is new is one table in users.db, `identities` (migration step 14): which
+account server subject is which local account, the last verified claims
+(handle, plan, e-mail), and — desktop client only — the refresh token,
+Fernet-encrypted with the data directory's key, kept for the desktop's
+later use (`cloud_auth.refresh_token_of`).
+
+**Configuration.** Settings → Server → Sign-in, stored in the `settings`
+KV: the account server's address (`cloud_issuer`; empty = off), the client
+(`cloud_client_id`, default the public desktop client `gamma-desktop`;
+`cloud_client_secret` encrypted, write-only) and the policy. A provisioned
+container gets the same through the environment — `GAMMA_CLOUD_ISSUER`,
+`GAMMA_CLOUD_CLIENT_ID`, `GAMMA_CLOUD_CLIENT_SECRET`, `GAMMA_CLOUD_POLICY`,
+`GAMMA_CLOUD_ADMIN_SUBJECT` — which makes the pane read-only.
+`GET /api/server-config` tells the login page whether to show the button.
+
+**The flow.** `GET /api/auth/cloud/start?next=` stores the pending sign-in
+(state, PKCE verifier, nonce, the callback URL — this server's confirmed
+public URL, else the request's own origin, which for a local sidecar is the
+loopback the account server's desktop client allows) in the `mcp_oauth`
+table and redirects to the account server's authorize endpoint; the
+desktop client asks for `offline_access`, a confidential client does not.
+`GET /api/auth/cloud/callback` consumes the state, exchanges the code
+(client secret included for a confidential client), verifies the ID token
+against the discovery document and the JWKS (both cached in memory, the
+JWKS refetched on an unknown key id): issuer, audience, expiry, nonce, and
+`email_verified` — an unverified cloud account is refused here as well as
+on the account server. A refusal is a message on the login page
+(`/?cloud_error=`), never a stack trace.
+
+**Which local account** (`cloud_auth.resolve_account`):
+
+| the identity is… | policy `refuse` (default) | `claim` | `provision` |
+|---|---|---|---|
+| linked already | that account | that account | that account |
+| unknown, username = handle exists, unlinked | refused with "sign in with its password and link it" | linked to it | linked to it |
+| unknown, username = handle taken (guest, or linked to another subject) | refused | refused | refused |
+| unknown, no such username | refused | refused | a new account under the handle, empty password hash, personal workspace |
+
+`GAMMA_CLOUD_ADMIN_SUBJECT` names one subject that becomes the server
+admin whatever the policy (creating or claiming the account under its
+handle) — how a provisioned container gets its first admin with no
+password on the wire. A signed-in account can link its own identity
+(`start?link=1`, the Account pane's button) whatever the policy: one
+cloud account per local account and one local account per cloud account.
+Unlinking (`POST /api/auth/cloud/unlink`) is refused while the account has
+no password, since nothing else could sign it in. `manage.py
+list-identities` / `link-identity` / `unlink-identity` are the shell
+equivalents; renaming and deleting an account carry or drop its identity.
+
+**Not built yet** (steps 5–6 of the plan): the desktop shell's first-run
+sign-in, the offline grace on the sidecar (today the year-long session
+cookie is what keeps a laptop signed in), and using the stored refresh
+token to read `/api/me` for the person's servers.

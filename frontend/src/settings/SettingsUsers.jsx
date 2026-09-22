@@ -13,6 +13,7 @@
 import React from "react";
 import { API, apiJson, fmtBytes } from "../shared/lib/utils";
 import { PaneHead, SubDialog, Field, UnitInput, Empty, QuotaMeter, PasswordInput } from "./SettingsKit";
+import { CloudIdentityRow } from "./SettingsCloudSignIn";
 import { ManageWorkspaceDialog, useAccounts } from "./SettingsWorkspace";
 import { BookIcon, HardDriveIcon, PenIcon, PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon } from "../shared/ui/Icons";
 
@@ -335,6 +336,7 @@ export function UsersSettings({ value, selfOnly = false }) {
       {isAdmin && !selfOnly ? <PaneHead icon={UsersIcon} title="Users" /> : <PaneHead icon={UserIcon} title="Account" />}
       {isAdmin && !info && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
       {(selfOnly ? rows.filter((row) => row.username === me) : rows).map(userRow)}
+      {!isGuest && (selfOnly || !isAdmin) ? <CloudIdentityRow setStatus={setStatus} confirm={confirm} /> : null}
       {edit?.kind === "account" ? accountDialog() : null}
       {edit?.kind === "storage" ? storageDialog() : null}
       {manage ? (
