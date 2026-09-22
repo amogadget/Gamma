@@ -1,8 +1,11 @@
 // Owned by App, not the dock: navigation can unmount the view while its
 // request keeps running. Keep the transcript and Stop control together.
+// Conversations stream independently: one reply per bucket may be in flight,
+// so a question asked on one paper keeps running while another paper is
+// asked its own. `active` lists the buckets with a reply in flight.
 export function createChatSession(save) {
-  let snapshot = { replies: new Map(), activeKey: "" };
-  let controller = null;
+  let snapshot = { replies: new Map(), active: new Set() };
+  const controllers = new Map();
   const listeners = new Set();
   const timers = new Map();
   const writes = new Map();
@@ -24,11 +27,15 @@ export function createChatSession(save) {
   return {
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     getSnapshot: () => snapshot,
-    isSaved: (key) => snapshot.activeKey !== key && saved.has(snapshot.replies.get(key)?.messages),
+    isActive: (key) => snapshot.active.has(key),
+    isSaved: (key) => !snapshot.active.has(key) && saved.has(snapshot.replies.get(key)?.messages),
     start(key, messages, title, ctrl) {
-      if (snapshot.activeKey) return false;
-      controller = ctrl;
-      snapshot = { replies: new Map(snapshot.replies).set(key, { messages, title }), activeKey: key };
+      if (snapshot.active.has(key)) return false;
+      controllers.set(key, ctrl);
+      snapshot = {
+        replies: new Map(snapshot.replies).set(key, { messages, title }),
+        active: new Set(snapshot.active).add(key),
+      };
       emit();
       flush(key).catch(() => {});
       return true;
@@ -41,12 +48,14 @@ export function createChatSession(save) {
       if (final) return flush(key);
       if (!timers.has(key)) timers.set(key, setTimeout(() => { flush(key).catch(() => {}); }, 500));
     },
-    finish() {
-      controller = null;
-      snapshot = { ...snapshot, activeKey: "" };
+    finish(key) {
+      controllers.delete(key);
+      const active = new Set(snapshot.active);
+      active.delete(key);
+      snapshot = { ...snapshot, active };
       emit();
     },
-    stop() { controller?.abort(); },
+    stop(key) { controllers.get(key)?.abort(); },
     flush,
     forget(key) {
       clearTimeout(timers.get(key));

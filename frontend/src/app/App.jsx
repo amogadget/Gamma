@@ -4061,7 +4061,9 @@ function LibraryApp() {
     }, ttl));
   }
   function handleAgentEvent(ev) {
-    if (ev.type === "done") { setAiLive(null); return; }
+    // Replies stream per conversation: another page's finishing reply must
+    // not drop the preview this page's own reply is still writing.
+    if (ev.type === "done") { if (ev.key === focusedBlockId) setAiLive(null); return; }
     if (!focusedBlockId) return;
     const inTree = (id) => !!id && (id === focusedBlockId || flattenBlocks(blocksRef.current).some((b) => b.id === id));
     if (ev.type === "progress") {

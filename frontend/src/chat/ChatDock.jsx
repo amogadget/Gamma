@@ -166,8 +166,9 @@ export default function ChatDock({
   const chatKey = focusedBlockId || (organizeFolder ? `home:${organizeFolder}` : "home");
   const sessionState = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const chatMessages = sessionState.replies.get(chatKey)?.messages || loadedMessages;
-  const chatLoadingKey = sessionState.activeKey;
-  const chatLoading = !!chatLoadingKey;
+  // A reply is streaming into THIS conversation. Other buckets stream on
+  // their own — asking one paper never waits for another's answer.
+  const busyHere = sessionState.active.has(chatKey);
   const folderChat = organizeFolder != null;
   // Which of the three chat kinds this is — each has its own tool permission
   // map in Settings → Assistant (prefs.js CHAT_KINDS): the folder chat, a
@@ -345,7 +346,6 @@ export default function ChatDock({
     return () => { cancelled = true; };
   }, [historyOpen, history, chatKey, readOnly]);
   const activeTitle = chatTitle || deriveTitle(chatMessages) || "Untitled";
-  const busyHere = chatLoading && chatLoadingKey === chatKey; // a reply is streaming into this conversation
   // Reserve the reply's bubble before the first stream event. This placeholder
   // is display-only; tool activity and answer text replace it in the same row.
   const visibleMessages = busyHere && (!chatMessages.length || chatMessages.at(-1).role === "user")
@@ -525,7 +525,7 @@ export default function ChatDock({
       chatProgScrollRef.current = true;
       el.scrollTop = target;
     }
-  }, [chatMessages, chatLoading]);
+  }, [chatMessages, busyHere]);
 
   // Core chat send. baseMessages overrides the history (used when re-sending
   // an edited message: everything after the edited message is discarded,
@@ -533,7 +533,7 @@ export default function ChatDock({
   async function sendChat(rawText, { baseMessages, referenceMessage } = {}) {
     if (readOnly) return;
     const text = (rawText || "").trim();
-    if (!text || chatLoading) return;
+    if (!text || busyHere) return;
     guideEvents.emit("chat.sent");
     const selectedDocs = referenceMessage ? (referenceMessage.contextPages || []).map((p) => p.id) : chatDocs;
     const includeNotes = referenceMessage ? !!referenceMessage.includeNotes : chatIncludeNotes;
@@ -667,6 +667,11 @@ export default function ChatDock({
       showReply(aiMsg({ text: acc || (actions.length ? "" : "(no response)") }), true);
     } catch (err) {
       const stopped = err?.name === "AbortError";
+      // fetch's own TypeError ("Failed to fetch", or the body reader's
+      // "network error") means the connection to the server was lost, not
+      // that the provider failed — the server says that in-band.
+      const reason = err?.name === "TypeError"
+        ? `lost the connection to the server (${err.message})` : err.message;
       // A reply that never started is an error bubble (`error: true`): shown
       // and saved so the failure is visible after a reload, but rendered
       // apart from answers and never replayed to the model as one. A reply
@@ -674,12 +679,12 @@ export default function ChatDock({
       showReply(aiMsg({
         text: stopped
           ? (acc ? `${acc}\n\n*(stopped)*` : "*(stopped)*")
-          : (acc ? `${acc}\n\n**Error:** ${err.message}` : `Error: ${err.message}`),
+          : (acc ? `${acc}\n\n**Error:** ${reason}` : `Error: ${reason}`),
         ...(!stopped && !acc ? { error: true } : {}),
       }), true);
     } finally {
-      session.finish();
-      onAgentEvent?.({ type: "done" });
+      session.finish(sendKey);
+      onAgentEvent?.({ type: "done", key: sendKey });
       // Agent tools changed the library — reload the home feed. Read-only
       // tool calls (list/read/search) render as chips but change nothing.
       if (actions.some((a) => MUTATING_KINDS.has(a.kind))) onLibraryChange?.();
@@ -696,13 +701,13 @@ export default function ChatDock({
 
   function sendChatMessage() {
     const text = chatInput;
-    if (!text.trim() || chatLoading) return;
+    if (!text.trim() || busyHere) return;
     setChatInput("");
     sendChat(text);
   }
 
   function stopChat() {
-    session.stop();
+    session.stop(chatKey);
   }
 
   async function startDictation() {
@@ -1142,7 +1147,7 @@ export default function ChatDock({
                       <div className="chatEditBtns">
                         <button type="button" className="uiBtn sm" onClick={() => setEditingMsg(null)}>Cancel</button>
                         <button type="button" className="uiBtn sm chatEditSend"
-                          disabled={!editingMsg.text.trim() || chatLoading}
+                          disabled={!editingMsg.text.trim() || busyHere}
                           onClick={() => {
                             const base = chatMessages.slice(0, i);
                             const text = editingMsg.text;
@@ -1232,7 +1237,7 @@ export default function ChatDock({
                         ? <CheckIcon size={13} />
                         : <CopyIcon size={13} />}
                     </button>
-                    {!readOnly && isUser && !chatLoading ? (
+                    {!readOnly && isUser && !busyHere ? (
                       <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
                         onClick={() => setEditingMsg({ idx: i, text: m.text })}>
                         <PencilIcon size={13} />
@@ -1412,7 +1417,7 @@ export default function ChatDock({
             : agentAsk || "Ask…"
           ) + " (@ paper)"}
         />
-        {chatLoading ? (
+        {busyHere ? (
           <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
             <StopIcon size={11} />
           </button>

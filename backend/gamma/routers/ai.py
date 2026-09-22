@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import queue
 import re
 import secrets
 import sqlite3
@@ -787,6 +788,73 @@ def ai_health(payload: AIHealthRequest, request: Request):
     return {**result, "ok": True}
 
 
+# --- Streaming keepalive ------------------------------------------------------
+
+# Seconds of silence before a stream gets a keepalive line. Reverse proxies
+# close a response that sends nothing for a while (nginx and Synology's
+# proxy default to 60 s, Cloudflare to 100 s); the browser then sees a bare
+# "network error" mid-reply and nothing reaches the server log. A tool loop
+# over a long context is quiet for exactly that long while the model thinks.
+KEEPALIVE_INTERVAL = 15.0
+
+
+def keepalive_lines(lines, what="ai", interval=KEEPALIVE_INTERVAL):
+    """Relay the NDJSON line generator ``lines`` from a worker thread and put a
+    ``{"ping": 1}`` line in every gap longer than ``interval`` seconds, so an
+    idle proxy or browser keeps the response open while the provider is still
+    thinking. Clients skip ping lines. When the consumer goes away before
+    the source ends (the Stop button, or the connection dropped anyway), the
+    worker stops the source at its next yield — the same point the plain
+    generator would have been abandoned at — and the log says so."""
+    q = queue.Queue(maxsize=64)
+    done = object()
+    abandoned = threading.Event()
+
+    def put(item):
+        while not abandoned.is_set():
+            try:
+                q.put(item, timeout=1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def pump():
+        try:
+            for line in lines:
+                if not put(line):
+                    lines.close()
+                    return
+        except BaseException as e:  # relayed to the consumer
+            put(e)
+        else:
+            put(done)
+
+    threading.Thread(target=pump, name=f"{what}-stream", daemon=True).start()
+    started = time.monotonic()
+    finished = False
+    try:
+        while True:
+            try:
+                item = q.get(timeout=interval)
+            except queue.Empty:
+                yield '{"ping": 1}\n'
+                continue
+            if item is done:
+                finished = True
+                return
+            if isinstance(item, BaseException):
+                finished = True
+                raise item
+            yield item
+    finally:
+        abandoned.set()
+        if not finished:
+            log.warning(f"[{what}] client closed the stream after "
+                        f"{time.monotonic() - started:.0f}s (stop button, or the "
+                        f"connection dropped — a proxy idle timeout?)")
+
+
 # --- PDF translation ----------------------------------------------------------
 # Backs the viewer's translated view: the frontend segments a page into
 # paragraph blocks (frontend/src/pdf/pdfTranslate.js) and sends their TEXT here;
@@ -1022,7 +1090,8 @@ def ai_translate(payload: AITranslateRequest, request: Request):
             log.warning(f"[ai_translate] {e}")
             yield json.dumps({"error": f"translation failed: {e}"}) + "\n"
 
-    return StreamingResponse(ndjson(), media_type="application/x-ndjson")
+    return StreamingResponse(keepalive_lines(ndjson(), "ai_translate"),
+                             media_type="application/x-ndjson")
 
 
 # --- Voice dictation ----------------------------------------------------------
@@ -1387,7 +1456,8 @@ def ai_chat(payload: AIChatRequest, request: Request):
                         log.warning(f"[ai_chat] agent stream error: {e}")
                         yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
 
-                return StreamingResponse(agent_ndjson(), media_type="application/x-ndjson")
+                return StreamingResponse(keepalive_lines(agent_ndjson(), "ai_chat"),
+                                         media_type="application/x-ndjson")
 
             def ndjson():
                 usage = []
@@ -1406,7 +1476,8 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 finally:
                     resp.close()
 
-            return StreamingResponse(ndjson(), media_type="application/x-ndjson")
+            return StreamingResponse(keepalive_lines(ndjson(), "ai_chat"),
+                                     media_type="application/x-ndjson")
         if tools:
             # The tool loop is SSE-based on every protocol; join it for
             # non-stream callers and return the actions alongside the text.
