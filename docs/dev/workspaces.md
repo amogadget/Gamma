@@ -191,6 +191,14 @@ manifest, database snapshots and uploads unless databases-only was selected.
 Exports transfer library content. Passwords, sessions and private AI
 credentials stay with the account.
 
+The Import → Gamma export flow previews library pages and chats and lets users
+select what to merge. Selection includes a page's full block subtree, associated
+chats and referenced uploads. Unselected pages, chats and their files are excluded.
+The review uses an extracted temporary copy; existing destination pages remain
+unchanged. This shares the additive backup merge implementation in `ws_backup.py`
+and keeps the report visible in the common import dialog. Full replacement through
+Settings retains its existing owner-only behavior.
+
 ## Clones (mirrors)
 
 A personal workspace can be a **mirror** of a workspace on another Gamma

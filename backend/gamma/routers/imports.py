@@ -2,12 +2,15 @@
 embedded in the PDF itself (e.g. saved by SumatraPDF/Acrobat/Zotero), and whole
 Zotero libraries (a zip of the "Zotero RDF" export)."""
 
+import io
 import json
 import os
 import re
 import secrets
+import shutil
 import tempfile
 import zipfile
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
@@ -32,8 +35,82 @@ from ..logseq_import import (
     parse_logseq_md,
 )
 from ..zotero_import import plan_zotero_archive
+from ..import_review import parse_selection, selected_warnings, validate_selection
 
 router = APIRouter(prefix="/api", tags=["import"])
+
+
+class ReviewedImport(BaseModel):
+    selected: list[str]
+
+
+def _review_adapter(source):
+    adapters = {
+        "zotero": (preview_zotero, import_zotero),
+        "markdown-zip": (preview_markdown_zip, import_markdown_zip_endpoint),
+        "markdown-file": (preview_markdown_file, import_reviewed_markdown_file),
+        "gamma": (preview_gamma, import_selected_gamma),
+    }
+    if source not in adapters:
+        raise HTTPException(status_code=400, detail="unsupported import source")
+    return adapters[source]
+
+
+def _run_review_adapter(path, metadata, request, selection=None):
+    preview, commit = _review_adapter(metadata["source"])
+    with (path / "upload").open("rb") as data:
+        kwargs = {"request": request, "file": UploadFile(file=data, filename=metadata["filename"])}
+        if metadata["source"] != "gamma":
+            kwargs["folder"] = metadata["folder"]
+        if selection is None:
+            return preview(**kwargs)
+        kwargs["selected"] = json.dumps(selection)
+        if metadata["source"] == "zotero":
+            kwargs["strip"] = metadata["strip"]
+        return commit(**kwargs)
+
+
+@router.post("/import/review")
+def upload_import_review(request: Request, file: UploadFile = File(...), source: str = Form(...),
+                         folder: str = Form(""), strip: bool = Form(False)):
+    from .. import import_staging
+    ws = require_ws(request, write=True)
+    _review_adapter(source)
+    token = import_staging.create(file, user=request.state.user, ws=ws, source=source, folder=folder, strip=strip)
+    try:
+        path, metadata = import_staging.get(token, request.state.user, ws)
+        report = _run_review_adapter(path, metadata, request)
+        return {**report, "review_id": token}
+    except Exception:
+        import_staging.discard(token, request.state.user, ws)
+        raise
+
+
+@router.post("/import/review/{token}")
+def commit_import_review(token: str, payload: ReviewedImport, request: Request):
+    from .. import import_staging
+    ws = require_ws(request, write=True)
+    with import_staging.claim(token, request.state.user, ws) as (path, metadata):
+        result_file = path / "result.json"
+        if result_file.exists():
+            saved = json.loads(result_file.read_text(encoding="utf-8"))
+            if set(saved["selected"]) != set(payload.selected):
+                raise HTTPException(status_code=409, detail="this review was already imported with a different selection")
+            return saved["report"]
+        report = _run_review_adapter(path, metadata, request, payload.selected)
+        pending = path / "result.pending"
+        pending.write_text(json.dumps({"selected": payload.selected, "report": report}), encoding="utf-8")
+        pending.replace(result_file)
+        (path / "upload").unlink(missing_ok=True)
+        return report
+
+
+@router.delete("/import/review/{token}")
+def discard_import_review(token: str, request: Request):
+    from .. import import_staging
+    ws = require_ws(request, write=True)
+    import_staging.discard(token, request.state.user, ws)
+    return {"ok": True}
 
 
 @router.post("/import/logseq")
@@ -166,7 +243,7 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
 
 @router.post("/import/markdown-zip")
 def import_markdown_zip_endpoint(request: Request, file: UploadFile = File(...),
-                                 folder: str = Form("")):
+                                 folder: str = Form(""), selected: str | None = Form(None)):
     """A zip of Markdown notes → one page per .md (see markdown_zip_import):
     an Obsidian vault, Notion's Markdown & CSV export, a Gamma Markdown or
     vault export, or any zipped folder of notes. ``folder`` prefixes every
@@ -177,9 +254,80 @@ def import_markdown_zip_endpoint(request: Request, file: UploadFile = File(...),
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="not a zip file")
     with zf, connect_pages_db(ws) as conn:
-        report = import_markdown_zip(ws, zf, conn, folder, page_now())
+        report = import_markdown_zip(ws, zf, conn, folder, page_now(), selected=parse_selection(selected))
         conn.commit()
     return {"ok": True, **report}
+
+
+@router.post("/import/markdown-zip/preview")
+def preview_markdown_zip(request: Request, file: UploadFile = File(...), folder: str = Form("")):
+    ws = require_ws(request, write=True)
+    try:
+        zf = zipfile.ZipFile(file.file)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="not a zip file")
+    with zf, connect_pages_db(ws) as conn:
+        return {"ok": True, **import_markdown_zip(ws, zf, conn, folder, page_now(), preview=True)}
+
+
+def _review_markdown_file(request, file, folder, selected=None, preview=False):
+    """The review flow treats a single note as a one-entry archive."""
+    ws = require_ws(request, write=True)
+    raw = file.file.read(MAX_MARKDOWN_BYTES + 1)
+    if len(raw) > MAX_MARKDOWN_BYTES:
+        raise HTTPException(status_code=413, detail="Markdown file exceeds 5 MB")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(display_filename(file.filename, "note.md"), raw)
+    buf.seek(0)
+    with zipfile.ZipFile(buf) as zf, connect_pages_db(ws) as conn:
+        report = import_markdown_zip(ws, zf, conn, folder, page_now(), preview=preview,
+                                     selected=parse_selection(selected))
+        if not preview:
+            conn.commit()
+    return {"ok": True, **report}
+
+
+@router.post("/import/markdown-file/preview")
+def preview_markdown_file(request: Request, file: UploadFile = File(...), folder: str = Form("")):
+    return _review_markdown_file(request, file, folder, preview=True)
+
+
+@router.post("/import/markdown-file")
+def import_reviewed_markdown_file(request: Request, file: UploadFile = File(...),
+                                 folder: str = Form(""), selected: str | None = Form(None)):
+    return _review_markdown_file(request, file, folder, selected)
+
+
+def _review_gamma(request, file, selected=None, preview=False):
+    from .. import ws_backup
+    from .auth import _is_guest_workspace
+    ws = require_ws(request, write=True)
+    if _is_guest_workspace(ws):
+        raise HTTPException(status_code=403, detail="the guest workspace cannot import backups")
+    with tempfile.TemporaryDirectory(prefix="gamma-import-review-") as td:
+        path = Path(td) / "import.zip"
+        with path.open("wb") as dest:
+            shutil.copyfileobj(file.file, dest)
+        try:
+            if preview:
+                return {"ok": True, **ws_backup.preview_zip(ws, path)}
+            selection = parse_selection(selected)
+            if selection is None:
+                raise HTTPException(status_code=400, detail="review and select items before importing")
+            return {"ok": True, **ws_backup.restore_zip(ws, path, "merge", selected=selection)}
+        except ws_backup.BackupError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/import/gamma/preview")
+def preview_gamma(request: Request, file: UploadFile = File(...)):
+    return _review_gamma(request, file, preview=True)
+
+
+@router.post("/import/gamma")
+def import_selected_gamma(request: Request, file: UploadFile = File(...), selected: str = Form(...)):
+    return _review_gamma(request, file, selected)
 
 
 class MarkdownBlocksRequest(BaseModel):
@@ -661,11 +809,17 @@ def preview_zotero(request: Request, file: UploadFile = File(...), folder: str =
             page = {"key": item["key"], "title": target["title"],
                     "folders": folders, "kind": kind, "action": "merge" if target["exists"] else "create",
                     "existing_id": target["id"] if target["exists"] else None, "source_path": item["pdf_entry"],
-                    "notes": len(item["notes"]), "tags": item["tags"], "warnings": warnings}
+                    "notes": len(item["notes"]), "tags": item["tags"], "warnings": warnings,
+                    "selection_ids": [item["selection_id"]],
+                    "missing": not bool(item["pdf_entry"]) or any("PDF missing from ZIP" in w["reason"] for w in warnings),
+                    "source_paths": [item["pdf_entry"]] if item["pdf_entry"] else []}
             if prior:
                 page["warnings"] = prior["warnings"] + warnings
                 page["notes"] += prior["notes"]
                 page["source_path"] = prior["source_path"] or item["pdf_entry"]
+                page["selection_ids"] = prior["selection_ids"] + page["selection_ids"]
+                page["source_paths"] = list(dict.fromkeys(prior["source_paths"] + page["source_paths"]))
+                page["missing"] = prior["missing"] or page["missing"]
             pages[target["id"]] = page
             props["folder"] = ", ".join(folders)
             if item["digest"] and not props.get("doc_id"):
@@ -683,18 +837,20 @@ def preview_zotero(request: Request, file: UploadFile = File(...), folder: str =
 
 @router.post("/import/zotero")
 def import_zotero(request: Request, file: UploadFile = File(...),
-                  strip: bool = Form(False), folder: str = Form("")):
+                  strip: bool = Form(False), folder: str = Form(""), selected: str | None = Form(None)):
     ws = require_ws(request, write=True)
+    selection = parse_selection(selected)
     with _open_zotero_zip(file) as zf:
         plan = _zotero_plan(zf)
-        items = plan["items"]
+        validate_selection(selection, (i["selection_id"] for i in plan["items"]))
+        items = [i for i in plan["items"] if selection is None or i["selection_id"] in selection]
         prefix = clean_path(folder)
         uploads = ws_uploads_dir(ws)
         uploads.mkdir(parents=True, exist_ok=True)
         now = page_now()
         report = {"items": len(items), "pages_created": 0, "pages_merged": 0,
                   "pdfs_stored": 0, "annotations_imported": 0, "notes_imported": 0,
-                  "pages": [], "skipped": [], "warnings": plan["warnings"]}
+                  "pages": [], "skipped": [], "warnings": selected_warnings(plan["warnings"], selection)}
         annot_jobs = []
         with connect_pages_db(ws) as conn:
             for item in items:

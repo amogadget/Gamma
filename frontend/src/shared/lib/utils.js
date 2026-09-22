@@ -343,28 +343,6 @@ async function apiJson(url, options = {}) {
   return r.json();
 }
 
-// Upload a zipped "Zotero RDF" export (shared by the Import dialog and the
-// Settings → Library row). Logs per-item problems to the console; returns
-// {data, summary} — the review dialog keeps the full report visible.
-async function importZoteroZip(file, strip, signal, folder = "") {
-  const form = new FormData();
-  form.append("file", file);
-  form.append("strip", strip ? "true" : "false");
-  form.append("folder", folder);
-  const data = await apiJson(`${API}/import/zotero`, { method: "POST", body: form, signal });
-  const problems = (data.skipped?.length || 0) + (data.warnings?.length || 0);
-  [...(data.skipped || []), ...(data.warnings || [])].forEach((s) =>
-    console.warn(`Zotero import: ${s.title} — ${s.reason}`));
-  const summary = [
-    `${data.pages_created} new page${data.pages_created === 1 ? "" : "s"}`,
-    data.pages_merged ? `${data.pages_merged} updated` : "",
-    data.annotations_imported ? `${data.annotations_imported} annotations` : "",
-    data.notes_imported ? `${data.notes_imported} notes` : "",
-    problems ? `${problems} issue${problems === 1 ? "" : "s"} (see the import report)` : "",
-  ].filter(Boolean).join(" · ");
-  return { data, summary };
-}
-
 async function resolvePdfUrl(rawUrl, allowOa = true) {
   // {source_url, note} — note explains e.g. that an open-access preprint was
   // substituted because the published PDF is paywalled.
@@ -414,4 +392,4 @@ async function readNdjson(res, onBatch) {
   }
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, assetUrl, setCurrentWorkspace, getCurrentWorkspace, setLinkName, getLinkName, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, assetUrl, setCurrentWorkspace, getCurrentWorkspace, setLinkName, getLinkName, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };

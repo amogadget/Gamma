@@ -360,4 +360,8 @@ def plan_zotero_archive(zf) -> dict:
         if status == "not_imported" and not path.startswith("__MACOSX/") and not path.endswith(".DS_Store"):
             warnings.append({"title": posixpath.basename(path), "path": path,
                              "reason": "File is not imported: unsupported attachment or not linked to an item in the selected export."})
+    for index, item in enumerate(planned):
+        item["selection_id"] = f"zotero:{index}"
+        for warning in item["warnings"]:
+            warning["selection_id"] = item["selection_id"]
     return {"items": planned, "entries": entries, "warnings": warnings, "manifest": rdf_name}

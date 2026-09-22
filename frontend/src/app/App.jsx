@@ -3,9 +3,9 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
-import ZoteroImportDialog from "../transfers/ZoteroImportDialog";
+import ImportReviewDialog from "../transfers/ImportReviewDialog";
 import { parsePdfCitation } from "../pdf/pdfCitation.js";
-import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
+import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -2490,7 +2490,7 @@ function LibraryApp() {
   // categories on the left, the selected pane on the right.
   const [settingsOpen, setSettingsOpen] = useState(null); // null | pane id — see settingsNavigation.js
   const [importOpen, setImportOpen] = useState(false);
-  const [zoteroImport, setZoteroImport] = useState(null);
+  const [importReview, setImportReview] = useState(null);
   // Export dialog: one "Export…" menu entry, the shape of the export chosen
   // here. Remembered across sessions — most people export the same way twice.
   const [exportOpen, setExportOpen] = useState(false);
@@ -4336,57 +4336,10 @@ function LibraryApp() {
     }
   }
 
-  // Whole-library import from a zipped Zotero RDF export (the import dialog's
-  // third source; also reachable from Settings → Library). Collections become
-  // folders, tags labels, notes child blocks; the reader annotations ride
-  // inside the exported PDFs, so strip works exactly like for "this PDF".
-  async function importZotero(file, strip = embAnnots === "strip", folder = "") {
-    if (shareMode) return;
-    const ctl = new AbortController();
-    const taskId = addTransfer({ name: `Zotero import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…", cancel: () => ctl.abort() });
-    setStatus("Importing Zotero library — this can take a while for big exports…");
-    try {
-      const { data, summary } = await importZoteroZip(file, strip, ctl.signal, folder);
-      updateTransfer(taskId, { status: "done", info: `${data.pages_created + data.pages_merged} pages` });
-      setStatus(`Zotero import: ${summary}.`);
-      refreshQuota?.();
-      await fetchHomeBlocks();
-      return { data, summary };
-    } catch (err) {
-      updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      if (!ctl.signal.aborted) setStatus(`Zotero import failed: ${err.message}`);
-      throw err;
-    }
-  }
-
-  // A zip of Markdown notes (Notion's Markdown & CSV export, a Gamma Markdown
-  // export, any zipped folder of .md): one page per note, into the open folder.
-  async function importMarkdownZip(file) {
-    if (shareMode) return;
-    const ctl = new AbortController();
-    const taskId = addTransfer({ name: `Markdown import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…", cancel: () => ctl.abort() });
-    setStatus("Importing Markdown notes…");
-    const form = new FormData();
-    form.append("file", file);
-    form.append("folder", homeMode && folderFilter ? folderFilter : "");
-    try {
-      const data = await apiJson(`${API}/import/markdown-zip`, { method: "POST", body: form, signal: ctl.signal });
-      (data.warnings || []).forEach((w) => console.warn(`Markdown import: ${w.title} — ${w.reason}`));
-      const summary = [
-        `${data.pages_created} new page${data.pages_created === 1 ? "" : "s"}`,
-        data.pages_skipped ? `${data.pages_skipped} already imported` : "",
-        data.assets_stored ? `${data.assets_stored} file${data.assets_stored === 1 ? "" : "s"}` : "",
-        data.links_resolved ? `${data.links_resolved} link${data.links_resolved === 1 ? "" : "s"} between notes` : "",
-        data.warnings?.length ? `${data.warnings.length} issue${data.warnings.length === 1 ? "" : "s"} (details in the browser console)` : "",
-      ].filter(Boolean).join(" · ");
-      updateTransfer(taskId, { status: "done", info: `${data.pages_created} pages` });
-      setStatus(`${data.notion ? "Notion" : "Markdown"} import: ${summary}.`);
-      refreshQuota?.();
-      await fetchHomeBlocks();
-    } catch (err) {
-      updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      if (!ctl.signal.aborted) setStatus(`Markdown import failed: ${err.message}`);
-    }
+  async function completeLibraryImport(data, summary) {
+    setStatus(`Import: ${summary}.`);
+    refreshQuota?.();
+    await fetchHomeBlocks();
   }
 
   // Open a PDF by URL: resolve it, find or create its page, open that page.
@@ -5271,37 +5224,15 @@ function LibraryApp() {
       importEmbeddedAnnots(focusedBlockId, docId, false, o.strip);
       return;
     }
-    if (o.source === "zotero") {
+    if (["zotero", "markdown", "gamma"].includes(o.source)) {
       const inp = document.createElement("input");
       inp.type = "file";
-      inp.accept = ".zip,application/zip";
-      inp.onchange = () => { if (inp.files?.[0]) setZoteroImport({ file: inp.files[0], strip: o.strip, folder: homeMode && folderFilter ? folderFilter : "" }); };
-      inp.click();
-      return;
-    }
-    if (o.source === "markdown") {
-      // One .md goes through the plain upload path (same as dropping it); a
-      // .zip (Notion export, Gamma Markdown export, zipped notes) through
-      // the zip importer. Both land in the open folder, like uploads.
-      const inp = document.createElement("input");
-      inp.type = "file";
-      inp.accept = ".md,.markdown,.zip,text/markdown,application/zip";
+      inp.accept = o.source === "markdown" ? ".md,.markdown,.zip,text/markdown,application/zip" : ".zip,application/zip";
       inp.onchange = () => {
-        const f = inp.files?.[0];
-        if (!f) return;
-        if (/\.zip$/i.test(f.name)) importMarkdownZip(f);
-        else uploadFiles([f]);
+        const file = inp.files?.[0];
+        if (file) setImportReview({ source: o.source, file, strip: o.strip,
+          folder: homeMode && folderFilter ? folderFilter : "" });
       };
-      inp.click();
-      return;
-    }
-    if (o.source === "gamma") {
-      // Another Gamma's Export → Gamma zip (or a full backup): merge it in
-      // through the same upload/progress path as Settings → Restore backup.
-      const inp = document.createElement("input");
-      inp.type = "file";
-      inp.accept = ".zip,application/zip";
-      inp.onchange = () => { if (inp.files?.[0]) runBackupImport(inp.files[0], "merge"); };
       inp.click();
       return;
     }
@@ -8883,7 +8814,7 @@ function LibraryApp() {
           onImport={runImport}
         />
       ) : null}
-      {zoteroImport ? <ZoteroImportDialog {...zoteroImport} onClose={() => setZoteroImport(null)} onImport={importZotero} /> : null}
+      {importReview ? <ImportReviewDialog {...importReview} onClose={() => setImportReview(null)} onComplete={completeLibraryImport} /> : null}
       {exportOpen ? (
         <ExportDialog
           opts={exportOpts}
