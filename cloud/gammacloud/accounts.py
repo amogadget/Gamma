@@ -1,4 +1,4 @@
-"""Accounts: the rules for handles, emails and passwords, creation with an
+"""Accounts: the rules for usernames, emails and passwords, creation with an
 invite, the e-mail links (verify, reset, change-email), plans, deletion.
 
 Everything takes an open connection and commits nothing: the router owns
@@ -14,15 +14,15 @@ import bcrypt
 from . import config
 from .db import after, audit, new_id, new_token, now, token_hash
 
-HANDLE_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?$")
+USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD = 8
 MAX_PASSWORD = 200
 
-# A handle becomes the username on every Gamma server and the label of a
+# A username is the username on every Gamma server and the label of a
 # paid container's hostname, so the names Gamma and the web reserve stay
 # unavailable.
-RESERVED_HANDLES = {
+RESERVED_USERNAMES = {
     "admin", "administrator", "root", "guest", "gamma", "cloud", "account", "accounts", "api", "app",
     "www", "mail", "smtp", "imap", "ftp", "ns", "ns1", "ns2", "dns", "static", "cdn", "assets", "media",
     "help", "support", "billing", "status", "docs", "blog", "dev", "test", "staging", "demo",
@@ -46,14 +46,14 @@ def norm_email(raw: str) -> str:
     return email
 
 
-def norm_handle(raw: str) -> str:
-    handle = (raw or "").strip().lower()
-    if not HANDLE_RE.match(handle):
-        raise Problem(400, "A handle is 3 to 32 lowercase letters, digits and hyphens, "
+def norm_username(raw: str) -> str:
+    username = (raw or "").strip().lower()
+    if not USERNAME_RE.match(username):
+        raise Problem(400, "A username is 3 to 32 lowercase letters, digits and hyphens, "
                            "starting and ending with a letter or digit.")
-    if handle in RESERVED_HANDLES:
-        raise Problem(400, "That handle is reserved.")
-    return handle
+    if username in RESERVED_USERNAMES:
+        raise Problem(400, "That username is reserved.")
+    return username
 
 
 def check_password(raw: str) -> str:
@@ -84,22 +84,22 @@ def by_email(conn, email: str):
     return conn.execute("SELECT * FROM accounts WHERE email = ? AND deleted_at IS NULL", (email,)).fetchone()
 
 
-def by_handle(conn, handle: str):
-    return conn.execute("SELECT * FROM accounts WHERE handle = ? AND deleted_at IS NULL", (handle,)).fetchone()
+def by_username(conn, username: str):
+    return conn.execute("SELECT * FROM accounts WHERE username = ? AND deleted_at IS NULL", (username,)).fetchone()
 
 
 def by_login(conn, login: str):
-    """The account a sign-in form names: an e-mail address or a handle."""
+    """The account a sign-in form names: an e-mail address or a username."""
     login = (login or "").strip().lower()
     if "@" in login:
         return by_email(conn, login)
-    return by_handle(conn, login)
+    return by_username(conn, login)
 
 
 def public(account) -> dict:
     """What the account owner (and ``/api/me``) sees."""
     return {
-        "id": account["id"], "handle": account["handle"], "email": account["email"],
+        "id": account["id"], "username": account["username"], "email": account["email"],
         "email_verified": bool(account["email_verified_at"]), "display_name": account["display_name"],
         "plan": account["plan"], "is_admin": bool(account["is_admin"]), "created_at": account["created_at"],
     }
@@ -123,26 +123,26 @@ def take_invite(conn, code: str) -> str:
     return row["plan"]
 
 
-def create(conn, *, email: str, handle: str, password: str | None, plan: str = "free",
+def create(conn, *, email: str, username: str, password: str | None, plan: str = "free",
            display_name: str = "", verified: bool = False, actor: str = "") -> dict:
     """Insert an account. Uniqueness is checked here so the API can answer
     with a message; the UNIQUE constraints are the backstop. A deleted
-    account keeps its e-mail and handle for the grace period, so those are
+    account keeps its e-mail and username for the grace period, so those are
     unavailable too (the message says so)."""
     if conn.execute("SELECT 1 FROM accounts WHERE email = ?", (email,)).fetchone():
         raise Problem(409, "There is already an account with that e-mail address.")
-    if conn.execute("SELECT 1 FROM accounts WHERE handle = ?", (handle,)).fetchone():
-        raise Problem(409, "That handle is taken.")
+    if conn.execute("SELECT 1 FROM accounts WHERE username = ?", (username,)).fetchone():
+        raise Problem(409, "That username is taken.")
     if plan not in config.PLANS:
         raise Problem(400, "unknown plan")
     account_id = new_id()
     ts = now()
     conn.execute(
-        "INSERT INTO accounts (id, handle, email, email_verified_at, password_hash, display_name, plan, created_at) "
+        "INSERT INTO accounts (id, username, email, email_verified_at, password_hash, display_name, plan, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (account_id, handle, email, ts if verified else None, hash_password(password) if password else None,
+        (account_id, username, email, ts if verified else None, hash_password(password) if password else None,
          display_name[:100], plan, ts))
-    audit(conn, "account.create", account_id, actor or account_id, f"handle={handle} plan={plan}")
+    audit(conn, "account.create", account_id, actor or account_id, f"username={username} plan={plan}")
     return by_id(conn, account_id)
 
 
@@ -178,27 +178,27 @@ def link(path: str, token: str) -> str:
 
 def verify_mail(account, token: str) -> tuple[str, str]:
     return ("Confirm your Gamma Cloud e-mail address",
-            f"Hi {account['handle']},\n\nConfirm this address to finish setting up your Gamma Cloud "
+            f"Hi {account['username']},\n\nConfirm this address to finish setting up your Gamma Cloud "
             f"account:\n\n{link('/verify', token)}\n\nThe link works for one day. If you did not create "
             f"an account, ignore this mail.\n")
 
 
 def reset_mail(account, token: str) -> tuple[str, str]:
     return ("Reset your Gamma Cloud password",
-            f"Hi {account['handle']},\n\nSet a new password here:\n\n{link('/reset/confirm', token)}\n\n"
+            f"Hi {account['username']},\n\nSet a new password here:\n\n{link('/reset/confirm', token)}\n\n"
             f"The link works for one hour. If you did not ask for this, ignore this mail; your password "
             f"is unchanged.\n")
 
 
 def change_email_mail(account, new_email: str, token: str) -> tuple[str, str]:
     return ("Confirm your new Gamma Cloud e-mail address",
-            f"Hi {account['handle']},\n\nConfirm {new_email} as the address of your Gamma Cloud account:"
+            f"Hi {account['username']},\n\nConfirm {new_email} as the address of your Gamma Cloud account:"
             f"\n\n{link('/email/confirm', token)}\n\nThe link works for one day.\n")
 
 
 def email_changed_notice(account, new_email: str) -> tuple[str, str]:
     return ("Your Gamma Cloud e-mail address changed",
-            f"Hi {account['handle']},\n\nThe e-mail address of your Gamma Cloud account is now "
+            f"Hi {account['username']},\n\nThe e-mail address of your Gamma Cloud account is now "
             f"{new_email}. If that was not you, reply to this mail.\n")
 
 
@@ -225,6 +225,18 @@ def set_email(conn, account_id: str, email: str, actor: str = "") -> None:
     audit(conn, "account.email", account_id, actor or account_id, email)
 
 
+def set_username(conn, account_id: str, username: str, actor: str = "") -> None:
+    """Rename. The account id (the OIDC ``sub``) is what Gamma servers key
+    on, so a rename changes nothing there until the next sign-in refreshes
+    the claims; a deleted account's name stays taken through its grace
+    period like at registration."""
+    username = norm_username(username)
+    if conn.execute("SELECT 1 FROM accounts WHERE username = ? AND id != ?", (username, account_id)).fetchone():
+        raise Problem(409, "That username is taken.")
+    conn.execute("UPDATE accounts SET username = ? WHERE id = ?", (username, account_id))
+    audit(conn, "account.username", account_id, actor or account_id, username)
+
+
 def set_plan(conn, account_id: str, plan: str, actor: str) -> None:
     if plan not in config.PLANS:
         raise Problem(400, "unknown plan")
@@ -249,7 +261,7 @@ def revoke_everything(conn, account_id: str) -> None:
 
 
 def delete(conn, account_id: str, actor: str = "") -> None:
-    """Soft delete: the row keeps its handle and e-mail through the grace
+    """Soft delete: the row keeps its username and e-mail through the grace
     period (``manage.py purge-deleted`` removes it), nothing can sign in as
     it any more, and its servers' teardown is the provisioner's job (v1)."""
     revoke_everything(conn, account_id)

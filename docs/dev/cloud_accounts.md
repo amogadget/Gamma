@@ -22,8 +22,8 @@ built too and described at the end of this page ("The Gamma side").
 
 | | |
 |---|---|
-| accounts | e-mail, handle, password (bcrypt), display name, plan, admin flag, soft deletion |
-| portal | sign in / register / verify / reset / account page, server-rendered HTML over the JSON API |
+| accounts | e-mail, username, password (bcrypt), display name, plan, admin flag, soft deletion; the random account id is the identity, e-mail and username both change |
+| portal | sign in / register / verify / reset, then Overview, Devices, Settings and (admins) Admin — server-rendered HTML over the JSON API |
 | identity for Gamma servers | an OIDC provider: authorize (PKCE), token, userinfo, JWKS, revoke, discovery |
 | admin | accounts, invites, OIDC clients, the audit log — API and `manage.py` |
 
@@ -60,7 +60,7 @@ the signing keys and every token hash.
 
 | table | what |
 |---|---|
-| `accounts` | `id` (random, the OIDC `sub`; never changes), `handle` (unique; the username on every Gamma server, a paid container's hostname label — `accounts.RESERVED_HANDLES` keeps the names Gamma and the web use), `email` (unique), `email_verified_at`, `password_hash`, `display_name`, `plan`, `is_admin`, `deleted_at` |
+| `accounts` | `id` (random, the OIDC `sub`; never changes), `username` (unique; the username on every Gamma server, a paid container's hostname label — `accounts.RESERVED_USERNAMES` keeps the names Gamma and the web use), `email` (unique), `email_verified_at`, `password_hash`, `display_name`, `plan`, `is_admin`, `deleted_at` |
 | `identities` | outside providers (v2); the shape is fixed from v0 |
 | `portal_sessions` | the portal cookie's hash; sliding 30 days, newest 20 per account |
 | `email_tokens` | verify / reset / change-email links: hash, kind, expiry, `used_at`; one live link per (account, kind) |
@@ -77,32 +77,71 @@ Every secret at rest is a SHA-256 of a long random token
 (`db.token_hash`); nothing in the file can be replayed. Timestamps are
 fixed-width UTC strings with a `Z`, so they compare as strings.
 
+## Deploying
+
+[cloud/deploy/README.md](../../cloud/deploy/README.md): the `gamma-cloud`
+image behind a Cloudflare Tunnel on any Docker host (the NAS first, a VPS
+later — the state is the `data/` folder), `compose.yml` with the server,
+the tunnel and a daily backup, `.env.example` for the public URL, SMTP,
+Turnstile and the tunnel token, the first admin and invites, the
+Cloudflare rate rules, updating and rollback. The website links here: the
+header's **Sign in** and the `/login`, `/account`, `/signup` short links
+([sites/README.md](../../sites/README.md)).
+
 ## Registration and the portal
 
 `routers/accounts.py` is the JSON API under `/api`; `routers/portal.py`
-serves the pages from `pages.py`, which are small HTML shells whose inline
-script posts JSON to the API. A browser form cannot post JSON cross-site
-without a CORS preflight, which together with the `SameSite=Lax` cookie is
-the CSRF protection; there is no separate token.
+serves the pages from `pages.py`: small server-rendered shells whose
+inline script posts JSON to the API — no framework, no build. A browser
+form cannot post JSON cross-site without a CORS preflight, which together
+with the `SameSite=Lax` cookie is the CSRF protection; there is no
+separate token.
 
-- **Register** (`POST /api/register`): e-mail, handle, password, an invite
+Two shells in the gammapdf.com palette (`sites/site/styles.css`), light
+and dark, in the quiet bordered look of a workspace tool: the **auth**
+shell (a centred card: sign in, register, verify, reset, the authorize
+page) and the **app** shell (a sidebar and a content column):
+
+- **Overview** (`/`): plan, e-mail state, signed-in apps, member since;
+  the account's Gamma servers (a placeholder until hosted servers exist,
+  pointing at the desktop app); recent sign-ins; username, e-mail, display
+  name and the account id (what Gamma servers key on — it never changes).
+- **Devices** (`/devices`): every grant with client, agent (a Gamma server
+  names itself `Gamma/<version> (<its address>)` on the token request),
+  dates and address; sign one out or all.
+- **Settings** (`/settings`): display name; **username** (password
+  required, the same rules as at registration, a taken or reserved name
+  refused — Gamma servers keep their own account rows and pick the new
+  name up as a claim on the next sign-in); e-mail change (confirmed at the
+  new address); password; deletion.
+- **Admin** (`/admin`, `is_admin` only, 404 otherwise): tabs for accounts
+  (search by username, e-mail or id, paged; plan select, verify, resend,
+  admin on/off, rename, delete), invites (create with uses, plan and note;
+  delete), the OIDC clients of hosted servers (create — the secret is shown
+  once as the two env lines a container needs — and delete), and the audit
+  log. All of it is the `/api/admin/*` API below; `manage.py` does the
+  same from the shell.
+
+- **Register** (`POST /api/register`): e-mail, username, password, an invite
   code in `invite` mode, a Turnstile token when configured. Rejected
   attempts count toward the per-IP limit. The account starts unverified,
   the verify mail goes out, and the browser is signed in so the account page
-  can resend the mail. Taken e-mail or handle answers 409 with a message —
+  can resend the mail. Taken e-mail or username answers 409 with a message —
   a deleted account keeps both through the grace period.
 - **Verified e-mail is the gate.** An unverified account can use the
   portal but the authorize page refuses to sign it in to any Gamma server
   and shows the verify notice instead. That is the one abuse control a
   hosted Gamma relies on.
-- **Sign in** (`POST /api/login`): e-mail or handle plus password; limits
+- **Sign in** (`POST /api/login`): e-mail or username plus password; limits
   per IP and per name, reset on success.
 - **Reset** (`/api/reset/request` → mail → `/api/reset/confirm`): the
   request answers the same whether the address exists. Confirming sets the
   password, marks the e-mail verified (the mail reached them), signs every
   session and device out, and signs this browser in.
 - **Change e-mail**: the link goes to the new address; the old one is told
-  afterwards.
+  afterwards. **Change username** (`POST /api/me/username`, password
+  required, a few times a day): the account id stays, so nothing linked to
+  it moves.
 - **Change password** and **sign out everywhere** revoke every portal
   session and every grant (`accounts.revoke_everything`), keeping only the
   browser that asked.
@@ -110,6 +149,8 @@ the CSRF protection; there is no separate token.
   password cleared, everything revoked; `manage.py purge-deleted --days 30`
   removes the rows later. Tearing down a paid container is the provisioner's
   job (v1).
+- `PATCH /api/admin/accounts/{id}` takes `plan`, `is_admin`, `verified`
+  and `username`; the rest of the admin API is listed under "Admin".
 - `GET /api/me`: the account, the signed-in devices (portal session only)
   and `servers` (empty until v1). It also accepts a bearer access token,
   which is how a Gamma sidecar will discover the person's servers.
@@ -141,7 +182,7 @@ redirect URIs, authenticated with `client_secret_post` or
 **The authorize page.** `GET /authorize` validates the client and redirect
 URI first (a bad one is shown, never followed), the rest is redirected
 back as an OAuth error, and a valid request is stored as pending. A
-signed-in, verified person sees "Continue as *handle*" with *use another
+signed-in, verified person sees "Continue as *username*" with *use another
 account* and *cancel*; a signed-out person signs in on the page
 (`POST /authorize/login`, which also sets the portal cookie so the next
 server is one click); an unverified person sees the verify notice. There
@@ -158,7 +199,7 @@ changing the password or deleting the account revokes the grant.
 
 **The ID token** is signed EdDSA with the active key (`kid` in the header)
 and carries `iss`, `sub` (the account id), `aud` (the client id), `exp`
-(10 min), `iat`, `auth_time`, `nonce`, and the identity claims: `handle`
+(10 min), `iat`, `auth_time`, `nonce`, and the identity claims: `username`
 and `plan` always (a Gamma server needs the username and the quota),
 `email` + `email_verified` for the `email` scope, `name` for `profile`.
 `/userinfo` answers the same claims for an access token. Keys are Ed25519
@@ -208,7 +249,7 @@ the password login does (`routers/auth.py` `new_session`) and sets the
 same cookie; every other module keeps reading `request.state.user`. What
 is new is one table in users.db, `identities` (migration step 14): which
 account server subject is which local account, the last verified claims
-(handle, plan, e-mail), and — desktop client only — the refresh token,
+(username, plan, e-mail), and — desktop client only — the refresh token,
 Fernet-encrypted with the data directory's key, kept for the desktop's
 later use (`cloud_auth.refresh_token_of`).
 
@@ -240,13 +281,13 @@ on the account server. A refusal is a message on the login page
 | the identity is… | policy `refuse` (default) | `claim` | `provision` |
 |---|---|---|---|
 | linked already | that account | that account | that account |
-| unknown, username = handle exists, unlinked | refused with "sign in with its password and link it" | linked to it | linked to it |
-| unknown, username = handle taken (guest, or linked to another subject) | refused | refused | refused |
-| unknown, no such username | refused | refused | a new account under the handle, empty password hash, personal workspace |
+| unknown, username = username exists, unlinked (exact, else one case-insensitive match — usernames are lowercase, usernames need not be) | refused with "sign in with its password and link it" | linked to it | linked to it |
+| unknown, username = username taken (guest, or linked to another subject) | refused | refused | refused |
+| unknown, no such username | refused | refused | a new account under the username, empty password hash, personal workspace |
 
 `GAMMA_CLOUD_ADMIN_SUBJECT` names one subject that becomes the server
 admin whatever the policy (creating or claiming the account under its
-handle) — how a provisioned container gets its first admin with no
+username) — how a provisioned container gets its first admin with no
 password on the wire. A signed-in account can link its own identity
 (`start?link=1`, the Account pane's button) whatever the policy: one
 cloud account per local account and one local account per cloud account.

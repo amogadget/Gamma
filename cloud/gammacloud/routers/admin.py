@@ -35,9 +35,9 @@ def list_accounts(request: Request, q: str = "", limit: int = 50, offset: int = 
     with closing(db.connect()) as conn:
         require_admin(conn, request)
         like = f"%{q.strip().lower()}%"
-        rows = conn.execute("SELECT * FROM accounts WHERE handle LIKE ? OR email LIKE ? OR id = ? "
+        rows = conn.execute("SELECT * FROM accounts WHERE username LIKE ? OR email LIKE ? OR id = ? "
                             "ORDER BY created_at DESC LIMIT ? OFFSET ?", (like, like, q.strip(), limit, offset)).fetchall()
-        total = conn.execute("SELECT COUNT(*) FROM accounts WHERE handle LIKE ? OR email LIKE ? OR id = ?",
+        total = conn.execute("SELECT COUNT(*) FROM accounts WHERE username LIKE ? OR email LIKE ? OR id = ?",
                              (like, like, q.strip())).fetchone()[0]
         return {"accounts": [_row(r) for r in rows], "total": total}
 
@@ -59,6 +59,7 @@ class AccountPatch(BaseModel):
     plan: str | None = None
     is_admin: bool | None = None
     verified: bool | None = None
+    username: str | None = None
 
 
 @router.patch("/accounts/{account_id}")
@@ -77,6 +78,8 @@ def patch_account(account_id: str, body: AccountPatch, request: Request):
                 accounts.set_admin(conn, account_id, body.is_admin, admin["id"])
             if body.verified:
                 accounts.mark_verified(conn, account_id)
+            if body.username is not None:
+                accounts.set_username(conn, account_id, body.username, admin["id"])
         except Problem as e:
             conn.rollback()
             raise HTTPException(e.status, e.detail)

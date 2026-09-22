@@ -23,6 +23,7 @@ variable with a ``GAMMA_CLOUD_`` prefix; nothing is read from the request.
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,7 +37,10 @@ if REGISTRATION not in ("open", "invite", "closed"):
     raise RuntimeError("GAMMA_CLOUD_REGISTRATION must be open, invite or closed")
 
 MAIL_BACKEND = os.environ.get("GAMMA_CLOUD_MAIL", "console").strip().lower() or "console"
-MAIL_FROM = os.environ.get("GAMMA_CLOUD_MAIL_FROM", "") or "Gamma Cloud <no-reply@gammapdf.com>"
+# The sender defaults to no-reply at the public URL's host, so no domain is
+# named anywhere unless it is set.
+MAIL_FROM = (os.environ.get("GAMMA_CLOUD_MAIL_FROM", "")
+             or f"Gamma Cloud <no-reply@{urlsplit(PUBLIC_URL).hostname or 'localhost'}>")
 SMTP_HOST = os.environ.get("GAMMA_CLOUD_SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("GAMMA_CLOUD_SMTP_PORT", "587") or 587)
 SMTP_USER = os.environ.get("GAMMA_CLOUD_SMTP_USER", "")

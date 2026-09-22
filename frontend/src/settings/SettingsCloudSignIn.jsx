@@ -12,8 +12,8 @@ import { CloudIcon, KeyIcon, UserIcon } from "../shared/ui/Icons";
 
 const POLICIES = [
   ["refuse", "Refuse", null, "Only accounts already linked to a cloud account can sign in"],
-  ["claim", "Claim", null, "A cloud account whose handle equals an unlinked username here signs in as it"],
-  ["provision", "Provision", null, "Any verified cloud account gets an account here, named after its handle"],
+  ["claim", "Claim", null, "A cloud account whose username equals an unlinked username here signs in as it"],
+  ["provision", "Provision", null, "Any verified cloud account gets an account here, named after its username"],
 ];
 
 export function CloudSignInSettings({ setStatus }) {
@@ -57,22 +57,26 @@ export function CloudSignInSettings({ setStatus }) {
       <span className="setRowControls">
         {saved ? <span className={`uiTag ${saved.enabled ? "ok" : ""}`}>{saved.enabled ? "on" : "off"}</span> : null}
         <input className="aiKeyInput" type="url" aria-label="Account server" value={draft.issuer} spellCheck={false}
-          disabled={disabled} placeholder="https://account.gammapdf.com" onChange={(e) => set("issuer")(e.target.value)} />
+          autoComplete="off" name="gamma-cloud-issuer" disabled={disabled} placeholder="https://account.gammapdf.com" onChange={(e) => set("issuer")(e.target.value)} />
       </span>
     </Row>
-    <Row icon={KeyIcon} label="Client"
-      hint="Empty = the desktop app's public client; a hosted server gets its own id and secret"
-      title="A local Gamma is the account server's built-in public client (PKCE only). A server the account server provisioned was given a confidential client id and secret.">
+    <Row icon={KeyIcon} label="Server client"
+      hint="How this server identifies itself to the account server. Leave empty on your own machine; a hosted server enters the client id and secret it was given"
+      title="Not a person: the OpenID Connect client this Gamma is. Empty = the account server's built-in public desktop client (loopback callback, PKCE only). A server the account server provisioned was handed a confidential client id and secret at creation.">
       <span className="setRowControls">
         <input className="aiKeyInput" type="text" aria-label="Client id" value={draft.client_id} spellCheck={false}
-          disabled={disabled} placeholder="gamma-desktop" onChange={(e) => set("client_id")(e.target.value)} />
-        <PasswordInput aria-label="Client secret" value={draft.secret} disabled={disabled}
-          placeholder={saved?.has_secret ? "secret set — type to replace" : "no secret"} onChange={(e) => set("secret")(e.target.value)} />
+          autoComplete="off" name="gamma-cloud-client-id" disabled={disabled} placeholder="empty = desktop client"
+          onChange={(e) => set("client_id")(e.target.value)} />
+        {draft.client_id.trim() || saved?.has_secret ? (
+          <PasswordInput aria-label="Client secret" value={draft.secret} disabled={disabled} autoComplete="new-password"
+            name="gamma-cloud-client-secret" placeholder={saved?.has_secret ? "secret set — type to replace" : "client secret"}
+            onChange={(e) => set("secret")(e.target.value)} />
+        ) : null}
       </span>
     </Row>
     <Row icon={UserIcon} label="Unknown cloud accounts"
       hint="What a cloud account that is not linked to an account here may do"
-      title="Refuse: only linked accounts. Claim: a cloud handle equal to an unlinked username here takes it over — for a server whose accounts were created under cloud handles. Provision: every verified cloud account gets an account — the free share host.">
+      title="Refuse: only linked accounts. Claim: a cloud username equal to an unlinked username here takes it over — for a server whose accounts were created under cloud usernames. Provision: every verified cloud account gets an account — the free share host.">
       <span className="setRowControls">
         <Segmented value={draft.policy} onChange={disabled ? () => {} : set("policy")} options={POLICIES} />
         {dirty ? <button className="uiBtn sm primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save sign-in"}</button> : null}
@@ -102,12 +106,12 @@ export function CloudIdentityRow({ setStatus, confirm }) {
   }
   function unlink() {
     if (!confirm) { doUnlink(); return; }
-    confirm({ title: "Unlink Gamma Cloud", message: `This account will no longer sign in as "${id.handle}". You can link it again any time.`,
+    confirm({ title: "Unlink Gamma Cloud", message: `This account will no longer sign in as "${id.username}". You can link it again any time.`,
       confirmLabel: "Unlink", onConfirm: doUnlink });
   }
   return <>
     <Row icon={CloudIcon} label="Gamma Cloud"
-      hint={id ? `${id.handle}${id.email ? ` · ${id.email}` : ""}${id.plan ? ` · ${id.plan} plan` : ""}` : "Sign in here with your Gamma Cloud account"}
+      hint={id ? `${id.username}${id.email ? ` · ${id.email}` : ""}${id.plan ? ` · ${id.plan} plan` : ""}` : "Sign in here with your Gamma Cloud account"}
       title={id ? `Linked ${id.linked_at ? id.linked_at.slice(0, 10) : ""}. Signing in with this cloud account opens this account.`
         : "Link your Gamma Cloud account: you are sent to the account server and back, then either login opens this account."}>
       <span className="setRowControls">

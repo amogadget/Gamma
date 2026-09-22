@@ -29,7 +29,7 @@ class FakeAccountServer:
     def __init__(self):
         self.key = ed25519.Ed25519PrivateKey.generate()
         self.kid = "k1"
-        self.person = {"sub": "sub-alice", "handle": "alice", "email": "alice@example.org", "email_verified": True,
+        self.person = {"sub": "sub-alice", "preferred_username": "alice", "email": "alice@example.org", "email_verified": True,
                        "name": "Alice", "plan": "free"}
         self.token_calls = []
         self.aud = None  # override the audience of the next ID token
@@ -134,7 +134,7 @@ def test_provision_policy_creates_account(cloud, monkeypatch):
     s = c.get("/api/session").json()
     assert s["user"] == "alice" and s["is_admin"] is False and s["default_workspace"]
     status = c.get("/api/auth/cloud/status").json()["identity"]
-    assert status["handle"] == "alice" and status["plan"] == "free" and status["offline"] is True
+    assert status["username"] == "alice" and status["plan"] == "free" and status["offline"] is True
     # only the cloud can sign this account in
     r = c.post("/api/login", json={"username": "alice", "password": ""})
     assert r.status_code == 401
@@ -149,7 +149,7 @@ def test_provision_policy_creates_account(cloud, monkeypatch):
 
 def test_claim_policy_links_existing_username(cloud, monkeypatch):
     make_user("bob", "pw-bob-123")
-    cloud.person.update({"sub": "sub-bob", "handle": "bob", "email": "bob@example.org"})
+    cloud.person.update({"sub": "sub-bob", "preferred_username": "bob", "email": "bob@example.org"})
     c = browser()
     assert "not linked" in error_of(callback(c, start(c)))
     monkeypatch.setenv("GAMMA_CLOUD_POLICY", "claim")
@@ -159,22 +159,36 @@ def test_claim_policy_links_existing_username(cloud, monkeypatch):
     # bob has a password, so unlinking is allowed and signs the identity off
     assert c.post("/api/auth/cloud/unlink").json()["ok"] is True
     assert c.get("/api/auth/cloud/status").json()["identity"] is None
-    # a different cloud account with the same handle cannot claim a linked or taken name
+    # a different cloud account with the same username cannot claim a linked or taken name
     r = callback(c, start(c))
     assert r.headers["location"] == "/"  # bob re-claims (unlinked, claim policy)
     cloud.person["sub"] = "sub-other-bob"
     assert "belongs to someone else" in error_of(callback(browser(), start(browser())))
 
 
+def test_claim_is_case_insensitive_when_unambiguous(cloud, monkeypatch):
+    monkeypatch.setenv("GAMMA_CLOUD_POLICY", "claim")
+    make_user("Hank", "pw-hank-123")
+    cloud.person.update({"sub": "sub-hank", "preferred_username": "hank", "email": "hank@example.org"})
+    c = browser()
+    assert callback(c, start(c)).headers["location"] == "/"
+    assert c.get("/api/session").json()["user"] == "Hank"
+    # two usernames that only differ in case: nobody is claimed
+    make_user("Ivy", "pw-ivy-123")
+    make_user("ivY", "pw-ivy-123")
+    cloud.person.update({"sub": "sub-ivy", "preferred_username": "ivy", "email": "ivy@example.org"})
+    assert "not linked" in error_of(callback(browser(), start(browser())))
+
+
 def test_link_signed_in_account(cloud):
     make_user("carol", "pw-carol-123")
     c = login("carol", "pw-carol-123")
-    cloud.person.update({"sub": "sub-carol", "handle": "carol-cloud", "email": "carol@example.org"})
+    cloud.person.update({"sub": "sub-carol", "preferred_username": "carol-cloud", "email": "carol@example.org"})
     auth = start(c, link="1")
     r = callback(c, auth)
     assert r.headers["location"] == "/"
     status = c.get("/api/auth/cloud/status").json()["identity"]
-    assert status["handle"] == "carol-cloud"
+    assert status["username"] == "carol-cloud"
     # the same cloud account cannot be linked to a second local account
     make_user("dave", "pw-dave-123")
     d = login("dave", "pw-dave-123")
@@ -188,7 +202,7 @@ def test_link_signed_in_account(cloud):
 
 def test_admin_subject_provisions_admin(cloud, monkeypatch):
     monkeypatch.setenv("GAMMA_CLOUD_ADMIN_SUBJECT", "sub-owner")
-    cloud.person.update({"sub": "sub-owner", "handle": "owner", "email": "owner@example.org"})
+    cloud.person.update({"sub": "sub-owner", "preferred_username": "owner", "email": "owner@example.org"})
     c = browser()
     assert callback(c, start(c)).headers["location"] == "/"
     s = c.get("/api/session").json()
@@ -197,7 +211,7 @@ def test_admin_subject_provisions_admin(cloud, monkeypatch):
 
 def test_token_checks(cloud, monkeypatch):
     monkeypatch.setenv("GAMMA_CLOUD_POLICY", "provision")
-    cloud.person.update({"sub": "sub-gwen", "handle": "gwen", "email": "gwen@example.org"})
+    cloud.person.update({"sub": "sub-gwen", "preferred_username": "gwen", "email": "gwen@example.org"})
     c = browser()
     cloud.person["email_verified"] = False
     assert "Confirm your e-mail" in error_of(callback(c, start(c)))
@@ -244,13 +258,13 @@ def test_admin_settings_roundtrip(monkeypatch):
 
 def test_rename_and_delete_follow_identities(cloud, monkeypatch):
     monkeypatch.setenv("GAMMA_CLOUD_POLICY", "provision")
-    cloud.person.update({"sub": "sub-erin", "handle": "erin", "email": "erin@example.org"})
+    cloud.person.update({"sub": "sub-erin", "preferred_username": "erin", "email": "erin@example.org"})
     c = browser()
     callback(c, start(c))
     make_user("root", "pw-root-123", is_admin=1)
     admin = login("root", "pw-root-123")
     assert admin.post("/api/admin/users/erin/rename", json={"new_username": "erin2"}).status_code == 200
-    assert cloud_auth.status_of("erin2")["handle"] == "erin"
+    assert cloud_auth.status_of("erin2")["username"] == "erin"
     assert admin.delete("/api/admin/users/erin2").status_code == 200
     with connect_users_db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM identities WHERE username = 'erin2'").fetchone()[0] == 0
@@ -262,6 +276,6 @@ def test_cli_link_and_unlink(cloud, capsys):
     manage.link_identity("frank", "sub-frank", "frank", "frank@example.org")
     manage.list_identities()
     assert "frank" in capsys.readouterr().out
-    assert cloud_auth.status_of("frank")["handle"] == "frank"
+    assert cloud_auth.status_of("frank")["username"] == "frank"
     manage.unlink_identity("frank")
     assert cloud_auth.status_of("frank") is None

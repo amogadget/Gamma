@@ -18,9 +18,11 @@ def test_accounts_admin_flow(client):
     with TestClient(client.app, base_url="http://testserver") as other_browser:
         bob = register(other_browser, "bob")
     r = client.get("/api/admin/accounts", params={"q": "bob"})
-    assert [a["handle"] for a in r.json()["accounts"]] == ["bob"]
-    r = client.patch(f"/api/admin/accounts/{bob['id']}", json={"plan": "pro", "verified": True})
+    assert [a["username"] for a in r.json()["accounts"]] == ["bob"]
+    r = client.patch(f"/api/admin/accounts/{bob['id']}", json={"plan": "pro", "verified": True, "username": "robert"})
     assert r.status_code == 200 and r.json()["account"]["plan"] == "pro" and r.json()["account"]["email_verified"]
+    assert r.json()["account"]["username"] == "robert"
+    assert client.patch(f"/api/admin/accounts/{bob['id']}", json={"username": "alice"}).status_code == 409
     assert client.patch(f"/api/admin/accounts/{bob['id']}", json={"plan": "gold"}).status_code == 400
     r = client.get(f"/api/admin/accounts/{bob['id']}")
     assert r.status_code == 200 and any(a["event"] == "account.plan" for a in r.json()["audit"])

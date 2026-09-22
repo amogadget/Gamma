@@ -109,7 +109,7 @@ def discovery() -> dict:
         "scopes_supported": list(SCOPES),
         "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
         "code_challenge_methods_supported": ["S256"],
-        "claims_supported": ["sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "handle", "email",
+        "claims_supported": ["sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "preferred_username", "email",
                              "email_verified", "name", "plan"],
     }
 
@@ -357,16 +357,16 @@ def id_token(conn, account, client_id: str, scope: str, *, nonce: str = "", auth
 
 
 def claims_for(account, scope: str) -> dict:
-    """The identity claims a scope unlocks. ``plan`` and ``handle`` always
-    travel: a Gamma server needs the handle for the username and the plan
-    for its quota."""
+    """The identity claims a scope unlocks. ``preferred_username`` (the
+    account's username) and ``plan`` always travel: a Gamma server needs the
+    username for its own account row and the plan for its quota."""
     scopes = scope.split()
-    out = {"handle": account["handle"], "plan": account["plan"]}
+    out = {"preferred_username": account["username"], "plan": account["plan"]}
     if "email" in scopes:
         out["email"] = account["email"]
         out["email_verified"] = bool(account["email_verified_at"])
     if "profile" in scopes:
-        out["name"] = account["display_name"] or account["handle"]
+        out["name"] = account["display_name"] or account["username"]
     return out
 
 

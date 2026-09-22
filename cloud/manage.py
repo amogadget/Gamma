@@ -4,12 +4,12 @@
   python manage.py migrate [--status]            upgrade cloud.db (the server does at startup)
   python manage.py backup                        snapshot cloud.db under data/backups/
   python manage.py list-accounts [q]
-  python manage.py create-account <email> <handle> [--password P] [--plan free] [--admin] [--verified]
-  python manage.py set-password <handle> <password>
-  python manage.py set-admin <handle> [--off]
-  python manage.py set-plan <handle> <free|plus|pro>
-  python manage.py verify <handle>               mark the e-mail confirmed
-  python manage.py delete-account <handle>
+  python manage.py create-account <email> <username> [--password P] [--plan free] [--admin] [--verified]
+  python manage.py set-password <username> <password>
+  python manage.py set-admin <username> [--off]
+  python manage.py set-plan <username> <free|plus|pro>
+  python manage.py verify <username>               mark the e-mail confirmed
+  python manage.py delete-account <username>
   python manage.py purge-deleted [--days 30]
   python manage.py invite [--uses 1] [--plan free] [--note ...]
   python manage.py invites
@@ -29,10 +29,10 @@ from gammacloud.accounts import Problem
 from gammacloud.routers.admin import make_invite
 
 
-def _account(conn, handle: str):
-    account = accounts.by_handle(conn, handle)
+def _account(conn, username: str):
+    account = accounts.by_username(conn, username)
     if not account:
-        sys.exit(f"no account with handle {handle!r}")
+        sys.exit(f"no account with username {username!r}")
     return account
 
 
@@ -60,19 +60,19 @@ def cmd_backup(args):
 def cmd_list(args):
     with closing(db.connect()) as conn:
         like = f"%{(args.q or '').lower()}%"
-        rows = conn.execute("SELECT * FROM accounts WHERE handle LIKE ? OR email LIKE ? ORDER BY created_at",
+        rows = conn.execute("SELECT * FROM accounts WHERE username LIKE ? OR email LIKE ? ORDER BY created_at",
                             (like, like)).fetchall()
     for r in rows:
         flags = " ".join(f for f, on in (("admin", r["is_admin"]), ("unverified", not r["email_verified_at"]),
                                          ("deleted", r["deleted_at"])) if on)
-        print(f"{r['handle']:<20} {r['email']:<32} {r['plan']:<5} {r['created_at'][:10]} {flags}")
+        print(f"{r['username']:<20} {r['email']:<32} {r['plan']:<5} {r['created_at'][:10]} {flags}")
 
 
 def cmd_create(args):
     password = args.password or getpass.getpass("password: ")
     with closing(db.connect()) as conn:
         try:
-            account = accounts.create(conn, email=accounts.norm_email(args.email), handle=accounts.norm_handle(args.handle),
+            account = accounts.create(conn, email=accounts.norm_email(args.email), username=accounts.norm_username(args.username),
                                       password=accounts.check_password(password), plan=args.plan,
                                       verified=args.verified, actor="cli")
             if args.admin:
@@ -80,12 +80,12 @@ def cmd_create(args):
         except Problem as e:
             sys.exit(e.detail)
         conn.commit()
-    print(f"created {account['handle']} ({account['id']})")
+    print(f"created {account['username']} ({account['id']})")
 
 
 def cmd_set_password(args):
     with closing(db.connect()) as conn:
-        account = _account(conn, args.handle)
+        account = _account(conn, args.username)
         try:
             accounts.set_password(conn, account["id"], accounts.check_password(args.password), actor="cli")
         except Problem as e:
@@ -96,37 +96,37 @@ def cmd_set_password(args):
 
 def cmd_set_admin(args):
     with closing(db.connect()) as conn:
-        account = _account(conn, args.handle)
+        account = _account(conn, args.username)
         accounts.set_admin(conn, account["id"], not args.off, "cli")
         conn.commit()
-    print(f"{args.handle}: admin {'off' if args.off else 'on'}")
+    print(f"{args.username}: admin {'off' if args.off else 'on'}")
 
 
 def cmd_set_plan(args):
     with closing(db.connect()) as conn:
-        account = _account(conn, args.handle)
+        account = _account(conn, args.username)
         try:
             accounts.set_plan(conn, account["id"], args.plan, "cli")
         except Problem as e:
             sys.exit(e.detail)
         conn.commit()
-    print(f"{args.handle}: {args.plan}")
+    print(f"{args.username}: {args.plan}")
 
 
 def cmd_verify(args):
     with closing(db.connect()) as conn:
-        account = _account(conn, args.handle)
+        account = _account(conn, args.username)
         accounts.mark_verified(conn, account["id"])
         conn.commit()
-    print(f"{args.handle}: verified")
+    print(f"{args.username}: verified")
 
 
 def cmd_delete(args):
     with closing(db.connect()) as conn:
-        account = _account(conn, args.handle)
+        account = _account(conn, args.username)
         accounts.delete(conn, account["id"], actor="cli")
         conn.commit()
-    print(f"{args.handle}: deleted (purged after the grace period by purge-deleted)")
+    print(f"{args.username}: deleted (purged after the grace period by purge-deleted)")
 
 
 def cmd_purge(args):
@@ -188,14 +188,14 @@ def main(argv=None):
     m = sub.add_parser("migrate"); m.add_argument("--status", action="store_true"); m.set_defaults(fn=cmd_migrate)
     sub.add_parser("backup").set_defaults(fn=cmd_backup)
     l = sub.add_parser("list-accounts"); l.add_argument("q", nargs="?"); l.set_defaults(fn=cmd_list)
-    c = sub.add_parser("create-account"); c.add_argument("email"); c.add_argument("handle")
+    c = sub.add_parser("create-account"); c.add_argument("email"); c.add_argument("username")
     c.add_argument("--password"); c.add_argument("--plan", default="free", choices=config.PLANS)
     c.add_argument("--admin", action="store_true"); c.add_argument("--verified", action="store_true"); c.set_defaults(fn=cmd_create)
-    s = sub.add_parser("set-password"); s.add_argument("handle"); s.add_argument("password"); s.set_defaults(fn=cmd_set_password)
-    a = sub.add_parser("set-admin"); a.add_argument("handle"); a.add_argument("--off", action="store_true"); a.set_defaults(fn=cmd_set_admin)
-    pl = sub.add_parser("set-plan"); pl.add_argument("handle"); pl.add_argument("plan", choices=config.PLANS); pl.set_defaults(fn=cmd_set_plan)
-    v = sub.add_parser("verify"); v.add_argument("handle"); v.set_defaults(fn=cmd_verify)
-    d = sub.add_parser("delete-account"); d.add_argument("handle"); d.set_defaults(fn=cmd_delete)
+    s = sub.add_parser("set-password"); s.add_argument("username"); s.add_argument("password"); s.set_defaults(fn=cmd_set_password)
+    a = sub.add_parser("set-admin"); a.add_argument("username"); a.add_argument("--off", action="store_true"); a.set_defaults(fn=cmd_set_admin)
+    pl = sub.add_parser("set-plan"); pl.add_argument("username"); pl.add_argument("plan", choices=config.PLANS); pl.set_defaults(fn=cmd_set_plan)
+    v = sub.add_parser("verify"); v.add_argument("username"); v.set_defaults(fn=cmd_verify)
+    d = sub.add_parser("delete-account"); d.add_argument("username"); d.set_defaults(fn=cmd_delete)
     pu = sub.add_parser("purge-deleted"); pu.add_argument("--days", type=int, default=30); pu.set_defaults(fn=cmd_purge)
     i = sub.add_parser("invite"); i.add_argument("--uses", type=int, default=1); i.add_argument("--plan", default="free", choices=config.PLANS)
     i.add_argument("--note"); i.set_defaults(fn=cmd_invite)

@@ -1,0 +1,17 @@
+# Cloudflare Tunnel instead of Caddy (a host with no public address, e.g. a
+# NAS): docker compose -f compose.yml -f compose.tunnel.yml up -d
+# The tunnel's public hostname must point at http://account:9002; TUNNEL_TOKEN
+# comes from Zero Trust → Networks → Tunnels.
+services:
+  caddy:
+    deploy:
+      replicas: 0
+    ports: !reset []
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      - account

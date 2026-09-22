@@ -73,13 +73,13 @@ def test_full_desktop_flow(client):
     tokens = r.json()
     assert tokens["token_type"] == "Bearer" and "refresh_token" in tokens
     claims = decode(tokens["id_token"])
-    assert claims["handle"] == "alice" and claims["email"] == "alice@example.org" and claims["email_verified"] is True
+    assert claims["preferred_username"] == "alice" and claims["email"] == "alice@example.org" and claims["email_verified"] is True
     assert claims["plan"] == "free" and claims["nonce"] == "n-1" and claims["name"] == "alice"
     # userinfo and /api/me with the access token
     headers = {"Authorization": "Bearer " + tokens["access_token"]}
     assert client.get("/userinfo", headers=headers).json()["sub"] == claims["sub"]
     me = client.get("/api/me", headers=headers).json()
-    assert me["account"]["handle"] == "alice" and me["auth"] == "token" and "devices" not in me
+    assert me["account"]["username"] == "alice" and me["auth"] == "token" and "devices" not in me
     # the grant shows as a device in the portal
     devices = client.get("/api/devices").json()["devices"]
     assert len(devices) == 1 and devices[0]["kind"] == "desktop"
@@ -105,7 +105,7 @@ def test_refresh_rotates(client):
     assert r.status_code == 200, r.text
     fresh = r.json()
     assert fresh["refresh_token"] != tokens["refresh_token"] and "id_token" in fresh
-    assert decode(fresh["id_token"])["handle"] == "alice"
+    assert decode(fresh["id_token"])["preferred_username"] == "alice"
     # the old refresh token and the old access token are dead
     r = client.post("/token", data={"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
                                     "client_id": config.DESKTOP_CLIENT_ID})
@@ -237,7 +237,7 @@ def test_key_rotation_keeps_old_tokens_valid(client):
         oidc.rotate_key(conn)
         conn.commit()
     assert len(client.get("/jwks").json()["keys"]) == 2
-    assert decode(tokens["id_token"])["handle"] == "alice"
+    assert decode(tokens["id_token"])["preferred_username"] == "alice"
     fresh = client.post("/token", data={"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
                                         "client_id": config.DESKTOP_CLIENT_ID}).json()
     assert jwt.get_unverified_header(fresh["id_token"])["kid"] != jwt.get_unverified_header(tokens["id_token"])["kid"]

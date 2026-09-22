@@ -53,14 +53,14 @@ def new_token(nbytes: int = 32) -> str:
 
 def new_id() -> str:
     """Account and grant ids: 20 url-safe chars, random — an account id is
-    the stable OIDC ``sub`` and never changes when the handle does."""
+    the stable OIDC ``sub`` and never changes when the username does."""
     return secrets.token_urlsafe(15)
 
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
-        handle TEXT NOT NULL UNIQUE,
+        username TEXT NOT NULL UNIQUE,
         email TEXT NOT NULL UNIQUE,
         email_verified_at TEXT,
         password_hash TEXT,

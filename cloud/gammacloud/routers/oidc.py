@@ -86,7 +86,7 @@ def authorize_login(body: AuthorizeLogin, request: Request):
             raise HTTPException(400, "This sign-in request expired. Start again from the app.")
         account = accounts.by_login(conn, who)
         if not accounts.password_ok(account, body.password):
-            raise HTTPException(401, "Wrong e-mail, handle or password.")
+            raise HTTPException(401, "Wrong e-mail, username or password.")
         token = sessions.create(conn, account["id"], request)
         if not account["email_verified_at"]:
             conn.commit()

@@ -157,14 +157,18 @@ table. An existing `GAMMA_PUBLIC_URL` environment override is shown
 read-only.
 
 **Sign-in** (Server, `SettingsCloudSignIn.jsx` `CloudSignInSettings`): the
-account server's address (empty = off, an on/off chip), the client id and
-write-only secret (empty = the desktop app's public client), and a
+account server's address (empty = off, an on/off chip), the **server
+client** — how this Gamma identifies itself to the account server: empty
+on a local machine (the built-in public desktop client), the client id and
+write-only secret a hosted server was given (the secret field shows once an
+id is typed; the inputs refuse browser autofill, which used to put a
+person's name and password in them) — and a
 `Segmented` policy for unknown cloud accounts — Refuse / Claim / Provision;
 one Save button appears on edit. Stored in the server `settings` table
 (`cloud_*`), shown read-only when `GAMMA_CLOUD_ISSUER` manages it. The
 login page reads `GET /api/server-config` and shows "Sign in with Gamma
 Cloud" while it is on. The **Account** pane gets a "Gamma Cloud" row
-(`CloudIdentityRow`) with the linked handle and plan and an Unlink button,
+(`CloudIdentityRow`) with the linked username and plan and an Unlink button,
 or a "Link Gamma Cloud account" button that round-trips through the
 account server ([cloud_accounts.md](cloud_accounts.md)).
 

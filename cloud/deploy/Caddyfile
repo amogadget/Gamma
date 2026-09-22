@@ -1,0 +1,12 @@
+# TLS for the account server on a host with a public address. Caddy fetches
+# and renews the Let's Encrypt certificate for CADDY_HOST (from .env) once
+# the DNS record points here. Everything is proxied to the account service.
+{$CADDY_HOST} {
+	encode gzip
+	reverse_proxy account:9002
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

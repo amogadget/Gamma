@@ -41,8 +41,8 @@ def invite(uses=1, plan="free"):
     return row["code"]
 
 
-def register(client, handle="alice", email=None, password="correct horse battery", code=None):
-    r = client.post("/api/register", json={"email": email or f"{handle}@example.org", "handle": handle,
+def register(client, username="alice", email=None, password="correct horse battery", code=None):
+    r = client.post("/api/register", json={"email": email or f"{username}@example.org", "username": username,
                                            "password": password, "invite": code or invite()})
     assert r.status_code == 201, r.text
     return r.json()["account"]
@@ -57,16 +57,16 @@ def last_link(path):
     raise AssertionError(f"no mail with {path} link; outbox={mail.outbox}")
 
 
-def verify(client, handle="alice"):
+def verify(client, username="alice"):
     r = client.post("/api/verify", json={"token": last_link("/verify")})
     assert r.status_code == 200, r.text
     assert r.json()["account"]["email_verified"] is True
 
 
-def make_admin(handle):
+def make_admin(username):
     from contextlib import closing
     from gammacloud import accounts
     with closing(db.connect()) as conn:
-        account = accounts.by_handle(conn, handle)
+        account = accounts.by_username(conn, username)
         accounts.set_admin(conn, account["id"], True, "test")
         conn.commit()

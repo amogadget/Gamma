@@ -9,10 +9,10 @@ in users.db — which cloud subject is which local account — and the rules
 for an identity this server has not seen (``policy``):
 
 - ``refuse`` (the self-hosted default): only linked accounts sign in;
-- ``claim``: an account whose username equals the cloud handle and that
+- ``claim``: an account whose username equals the cloud username and that
   has no cloud identity yet is linked on first sign-in — what a hosted
-  container does, whose first admin was seeded under the customer's handle;
-- ``provision``: a new account is created under the handle (empty password,
+  container does, whose first admin was seeded under the customer's username;
+- ``provision``: a new account is created under the username (empty password,
   so only the cloud can sign it in) with its personal workspace — the free
   share host.
 
@@ -216,8 +216,8 @@ def verify_id_token(token: str, *, issuer: str, client_id: str, nonce: str) -> d
         raise CloudAuthError("the sign-in token does not belong to this sign-in")
     if not claims.get("email_verified"):
         raise CloudAuthError("Confirm your e-mail address on your Gamma Cloud account first.")
-    if not claims.get("handle"):
-        raise CloudAuthError("the sign-in token names no handle")
+    if not claims.get("preferred_username"):
+        raise CloudAuthError("the sign-in token names no username")
     return claims
 
 
@@ -270,8 +270,10 @@ def exchange(request, *, code: str, state: str) -> tuple[dict, dict, str]:
     secret = client_secret()
     if secret:
         form["client_secret"] = secret
+    from . import version
     tokens = _http(doc["token_endpoint"], data=urllib.parse.urlencode(form).encode(),
-                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+                   headers={"Content-Type": "application/x-www-form-urlencoded",
+                            "User-Agent": f"Gamma/{version.label()} ({base})"})
     if not tokens.get("id_token"):
         raise CloudAuthError("the account server returned no identity token")
     claims = verify_id_token(tokens["id_token"], issuer=cfg["issuer"], client_id=cfg["client_id"],
@@ -291,7 +293,9 @@ def identity_by_subject(conn, subject: str):
 
 
 def _public_claims(claims: dict) -> dict:
-    return {k: claims[k] for k in ("handle", "plan", "email", "email_verified", "name") if k in claims}
+    out = {k: claims[k] for k in ("plan", "email", "email_verified", "name") if k in claims}
+    out["username"] = claims.get("preferred_username", "")
+    return out
 
 
 def link(conn, username: str, claims: dict, refresh_token: str = "") -> None:
@@ -342,7 +346,7 @@ def resolve_account(claims: dict) -> str:
 
     cfg = settings()
     subject = claims["sub"]
-    handle = claims["handle"]
+    username = claims["preferred_username"]
     link_user = claims.get("_link_user") or ""
     admin_subject = config.cloud_env()["admin_subject"]
     with _conn() as conn:
@@ -357,40 +361,47 @@ def resolve_account(claims: dict) -> str:
                 raise CloudAuthError("The guest account cannot be linked.")
             link(conn, link_user, claims, claims.get("_refresh_token", ""))
             conn.commit()
-            log.info(f"cloud sign-in: linked {link_user} to cloud handle {handle}")
+            log.info(f"cloud sign-in: linked {link_user} to cloud username {username}")
             return link_user
         if known:
             link(conn, known["username"], claims, claims.get("_refresh_token", ""))
             conn.commit()
             return known["username"]
-        row = conn.execute("SELECT username, is_guest FROM users WHERE username = ?", (handle,)).fetchone()
+        row = conn.execute("SELECT username, is_guest FROM users WHERE username = ?", (username,)).fetchone()
+        if row is None:
+            # Cloud usernames are lowercase; a local username may not be. One
+            # case-insensitive match claims, an ambiguous set does not.
+            rows = conn.execute("SELECT username, is_guest FROM users WHERE LOWER(username) = ?", (username,)).fetchall()
+            if len(rows) == 1:
+                row = rows[0]
         exists = bool(row) and not row["is_guest"]
-        taken = bool(row) and (row["is_guest"] or identity_of(conn, handle) is not None)
+        local = row["username"] if row else username
+        taken = bool(row) and (row["is_guest"] or identity_of(conn, local) is not None)
         is_admin_seed = bool(admin_subject) and subject == admin_subject
         if taken:
-            raise CloudAuthError(f"The username \"{handle}\" on this server belongs to someone else. "
+            raise CloudAuthError(f"The username \"{local}\" on this server belongs to someone else. "
                                  "Sign in with that account and link it, or ask the admin.")
         if exists:
             if not (cfg["policy"] == "claim" or is_admin_seed):
-                raise CloudAuthError(f"\"{handle}\" exists on this server but is not linked to your Gamma Cloud "
+                raise CloudAuthError(f"\"{local}\" exists on this server but is not linked to your Gamma Cloud "
                                      "account. Sign in with its password and link it from Settings → Account.")
-            link(conn, handle, claims, claims.get("_refresh_token", ""))
+            link(conn, local, claims, claims.get("_refresh_token", ""))
             if is_admin_seed:
-                conn.execute("UPDATE users SET is_admin = 1 WHERE username = ?", (handle,))
+                conn.execute("UPDATE users SET is_admin = 1 WHERE username = ?", (local,))
             conn.commit()
-            log.info(f"cloud sign-in: {handle} claimed by its cloud identity")
-            return handle
+            log.info(f"cloud sign-in: {local} claimed by cloud username {username}")
+            return local
         if not (cfg["policy"] == "provision" or is_admin_seed):
             raise CloudAuthError("Your Gamma Cloud account is not linked to an account on this server. "
                                  "Ask the admin to create one, or sign in with a password and link it.")
     # New account: the seed helper makes the row + personal workspace.
-    seed.create_cloud_account(handle, is_admin=is_admin_seed)
+    seed.create_cloud_account(username, is_admin=is_admin_seed)
     with connect_users_db() as conn:
-        link(conn, handle, claims, claims.get("_refresh_token", ""))
+        link(conn, username, claims, claims.get("_refresh_token", ""))
         conn.commit()
-    workspaces.ensure_personal(handle)
-    log.info(f"cloud sign-in: provisioned account {handle}" + (" (admin)" if is_admin_seed else ""))
-    return handle
+    workspaces.ensure_personal(username)
+    log.info(f"cloud sign-in: provisioned account {username}" + (" (admin)" if is_admin_seed else ""))
+    return username
 
 
 def safe_next(raw: str) -> str:

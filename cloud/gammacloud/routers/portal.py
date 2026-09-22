@@ -11,15 +11,49 @@ router = APIRouter()
 _HTML = {"Cache-Control": "no-store"}
 
 
-@router.get("/", response_class=HTMLResponse)
-def home(request: Request):
+def _signed_in(request: Request):
+    """(account dict, devices) for the app pages, or None → redirect."""
     with closing(db.connect()) as conn:
         account = sessions.resolve(conn, request)
         if not account:
-            return RedirectResponse("/login", status_code=302)
+            return None
         devices = oidc.devices(conn, account["id"])
         conn.commit()
-    return HTMLResponse(pages.account_page(accounts.public(account), devices), headers=_HTML)
+    return accounts.public(account), devices
+
+
+@router.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    found = _signed_in(request)
+    if not found:
+        return RedirectResponse("/login", status_code=302)
+    return HTMLResponse(pages.overview_page(*found), headers=_HTML)
+
+
+@router.get("/devices", response_class=HTMLResponse)
+def devices(request: Request):
+    found = _signed_in(request)
+    if not found:
+        return RedirectResponse("/login", status_code=302)
+    return HTMLResponse(pages.devices_page(*found), headers=_HTML)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings(request: Request):
+    found = _signed_in(request)
+    if not found:
+        return RedirectResponse("/login", status_code=302)
+    return HTMLResponse(pages.settings_page(found[0]), headers=_HTML)
+
+
+@router.get("/admin", response_class=HTMLResponse)
+def admin(request: Request):
+    found = _signed_in(request)
+    if not found:
+        return RedirectResponse("/login", status_code=302)
+    if not found[0]["is_admin"]:
+        return HTMLResponse(pages.error_page("Not found", "There is no such page."), status_code=404)
+    return HTMLResponse(pages.admin_page(found[0]), headers=_HTML)
 
 
 @router.get("/login", response_class=HTMLResponse)

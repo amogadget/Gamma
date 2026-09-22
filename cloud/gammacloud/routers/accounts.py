@@ -70,7 +70,7 @@ def public_config():
 
 class RegisterBody(BaseModel):
     email: str
-    handle: str
+    username: str
     password: str
     invite: str = ""
     display_name: str = ""
@@ -87,14 +87,14 @@ def register(body: RegisterBody, request: Request):
         raise HTTPException(400, "The anti-bot check failed. Reload and try again.")
     try:
         email = accounts.norm_email(body.email)
-        handle = accounts.norm_handle(body.handle)
+        username = accounts.norm_username(body.username)
         password = accounts.check_password(body.password)
     except Problem as e:
         _problem(e)
     with closing(db.connect()) as conn:
         try:
             plan = accounts.take_invite(conn, body.invite)
-            account = accounts.create(conn, email=email, handle=handle, password=password, plan=plan,
+            account = accounts.create(conn, email=email, username=username, password=password, plan=plan,
                                       display_name=body.display_name)
         except Problem as e:
             conn.rollback()
@@ -121,7 +121,7 @@ def login(body: LoginBody, request: Request):
     with closing(db.connect()) as conn:
         account = accounts.by_login(conn, who)
         if not accounts.password_ok(account, body.password):
-            raise HTTPException(401, "Wrong e-mail, handle or password.")
+            raise HTTPException(401, "Wrong e-mail, username or password.")
         token = sessions.create(conn, account["id"], request)
         db.audit(conn, "account.login", account["id"], account["id"], ip)
         conn.commit()
@@ -171,6 +171,27 @@ def update_me(body: ProfileBody, request: Request):
         return {"account": accounts.public(accounts.by_id(conn, account["id"]))}
 
 
+class UsernameBody(BaseModel):
+    username: str
+    password: str
+
+
+@router.post("/me/username")
+def change_username(body: UsernameBody, request: Request):
+    with closing(db.connect()) as conn:
+        account = portal_account(conn, request)
+        if not accounts.password_ok(account, body.password):
+            raise HTTPException(403, "The password is wrong.")
+        ratelimit.check(f"username-change:{account['id']}", 5, 86400)
+        try:
+            accounts.set_username(conn, account["id"], body.username)
+        except Problem as e:
+            conn.rollback()
+            _problem(e)
+        conn.commit()
+        return {"account": accounts.public(accounts.by_id(conn, account["id"]))}
+
+
 class PasswordBody(BaseModel):
     current: str
     new: str
@@ -206,7 +227,7 @@ def delete_me(body: DeleteBody, request: Request):
             raise HTTPException(403, "The password is wrong.")
         accounts.delete(conn, account["id"])
         conn.commit()
-    log.info("account %s deleted itself", account["handle"])
+    log.info("account %s deleted itself", account["username"])
     resp = JSONResponse({"ok": True})
     sessions.clear_cookie(resp)
     return resp

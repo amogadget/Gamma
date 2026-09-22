@@ -20,7 +20,7 @@ All state is SQLite + files on disk under a data directory (env
   - `sessions` — session tokens;
   - `identities` — the Gamma Cloud identity linked to an account
     (`provider`, the account server's `subject`, `username`, `email`, the
-    last verified `claims` — handle, plan — and, desktop client only, the
+    last verified `claims` — username, plan — and, desktop client only, the
     Fernet-encrypted `refresh_token`); one per account and provider
     ([cloud_accounts.md](cloud_accounts.md));
   - `workspaces` (`id`, `name`, `created_by`, `kind` personal/shared,

@@ -1,15 +1,17 @@
 from conftest import invite, last_link, make_admin, register, verify
 
+from fastapi.testclient import TestClient
+
 from gammacloud import config, mail, ratelimit
 
 
 def test_register_verify_login_flow(client):
     account = register(client)
-    assert account["handle"] == "alice" and account["email_verified"] is False and account["plan"] == "free"
+    assert account["username"] == "alice" and account["email_verified"] is False and account["plan"] == "free"
     assert mail.outbox[-1]["to"] == "alice@example.org"
     # registering signs the browser in
     me = client.get("/api/me").json()
-    assert me["account"]["handle"] == "alice" and me["auth"] == "session"
+    assert me["account"]["username"] == "alice" and me["auth"] == "session"
     verify(client)
     client.post("/api/logout")
     assert client.get("/api/me").status_code == 401
@@ -20,40 +22,40 @@ def test_register_verify_login_flow(client):
 
 
 def test_invite_required_and_consumed(client):
-    r = client.post("/api/register", json={"email": "a@example.org", "handle": "aaa", "password": "correct horse battery"})
+    r = client.post("/api/register", json={"email": "a@example.org", "username": "aaa", "password": "correct horse battery"})
     assert r.status_code == 403
     code = invite(uses=1, plan="plus")
     a = register(client, "aaa", code=code)
     assert a["plan"] == "plus"
-    r = client.post("/api/register", json={"email": "b@example.org", "handle": "bbb", "password": "correct horse battery",
+    r = client.post("/api/register", json={"email": "b@example.org", "username": "bbb", "password": "correct horse battery",
                                            "invite": code})
     assert r.status_code == 403
 
 
 def test_open_and_closed_registration(client):
     config.REGISTRATION = "open"
-    r = client.post("/api/register", json={"email": "a@example.org", "handle": "aaa", "password": "correct horse battery"})
+    r = client.post("/api/register", json={"email": "a@example.org", "username": "aaa", "password": "correct horse battery"})
     assert r.status_code == 201
     config.REGISTRATION = "closed"
-    r = client.post("/api/register", json={"email": "b@example.org", "handle": "bbb", "password": "correct horse battery"})
+    r = client.post("/api/register", json={"email": "b@example.org", "username": "bbb", "password": "correct horse battery"})
     assert r.status_code == 403
 
 
 def test_validation_and_uniqueness(client):
     code = invite(uses=10)
-    bad = [({"handle": "ab"}, "handle"), ({"handle": "Admin"}, "reserved"), ({"handle": "-x-"}, "handle"),
+    bad = [({"username": "ab"}, "username"), ({"username": "Admin"}, "reserved"), ({"username": "-x-"}, "username"),
            ({"email": "not-an-email"}, "e-mail"), ({"password": "short"}, "password")]
     for override, word in bad:
-        body = {"email": "x@example.org", "handle": "xyz", "password": "correct horse battery", "invite": code, **override}
+        body = {"email": "x@example.org", "username": "xyz", "password": "correct horse battery", "invite": code, **override}
         r = client.post("/api/register", json=body)
         assert r.status_code == 400, override
         assert word.lower() in r.json()["detail"].lower()
     ratelimit.clear()  # rejected attempts count against the per-IP limit
     register(client, "alice", code=code)
-    r = client.post("/api/register", json={"email": "alice@example.org", "handle": "other", "password": "correct horse battery",
+    r = client.post("/api/register", json={"email": "alice@example.org", "username": "other", "password": "correct horse battery",
                                            "invite": code})
     assert r.status_code == 409
-    r = client.post("/api/register", json={"email": "other@example.org", "handle": "alice", "password": "correct horse battery",
+    r = client.post("/api/register", json={"email": "other@example.org", "username": "alice", "password": "correct horse battery",
                                            "invite": code})
     assert r.status_code == 409
 
@@ -119,14 +121,29 @@ def test_change_email(client):
     assert client.get("/api/me").json()["account"]["email"] == "alice@new.example"
 
 
+def test_change_username(client):
+    register(client)
+    r = client.post("/api/me/username", json={"username": "Alice-2", "password": "wrong"})
+    assert r.status_code == 403
+    r = client.post("/api/me/username", json={"username": "Alice-2", "password": "correct horse battery"})
+    assert r.status_code == 200 and r.json()["account"]["username"] == "alice-2"
+    assert client.post("/api/me/username", json={"username": "admin", "password": "correct horse battery"}).status_code == 400
+    client.post("/api/logout")
+    assert client.post("/api/login", json={"login": "alice-2", "password": "correct horse battery"}).status_code == 200
+    with TestClient(client.app, base_url="http://testserver") as other:
+        register(other, "bob")
+        r = other.post("/api/me/username", json={"username": "alice-2", "password": "correct horse battery"})
+        assert r.status_code == 409
+
+
 def test_delete_self(client):
     register(client)
     assert client.post("/api/me/delete", json={"password": "wrong"}).status_code == 403
     assert client.post("/api/me/delete", json={"password": "correct horse battery"}).status_code == 200
     assert client.get("/api/me").status_code == 401
     assert client.post("/api/login", json={"login": "alice", "password": "correct horse battery"}).status_code == 401
-    # handle and e-mail stay reserved through the grace period
-    r = client.post("/api/register", json={"email": "alice@example.org", "handle": "alice2", "password": "correct horse battery",
+    # username and e-mail stay reserved through the grace period
+    r = client.post("/api/register", json={"email": "alice@example.org", "username": "alice2", "password": "correct horse battery",
                                            "invite": invite()})
     assert r.status_code == 409
 
@@ -145,10 +162,18 @@ def test_pages_render(client):
         r = client.get(path)
         assert r.status_code == 200 and "Gamma Cloud" in r.text, path
     assert client.get("/", follow_redirects=False).status_code == 302
+    for path in ("/settings", "/devices", "/admin"):
+        assert client.get(path, follow_redirects=False).status_code == 302, path
     register(client)
     r = client.get("/")
     assert r.status_code == 200 and "alice" in r.text and "not confirmed" in r.text
     assert client.get("/login", follow_redirects=False).status_code == 302
+    assert "Change username" in client.get("/settings").text
+    assert "Sign out everywhere" in client.get("/devices").text
+    assert client.get("/admin").status_code == 404
+    make_admin("alice")
+    r = client.get("/admin")
+    assert r.status_code == 200 and "Audit log" in r.text
 
 
 def test_admin_flag_in_me(client):
