@@ -102,18 +102,25 @@ and dark, in the quiet bordered look of a workspace tool: the **auth**
 shell (a centred card: sign in, register, verify, reset, the authorize
 page) and the **app** shell (a sidebar and a content column):
 
-- **Overview** (`/`): plan, e-mail state, signed-in apps, member since;
-  the account's Gamma servers (a placeholder until hosted servers exist,
-  pointing at the desktop app); recent sign-ins; username, e-mail, display
-  name and the account id (what Gamma servers key on — it never changes).
-- **Devices** (`/devices`): every grant with client, agent (a Gamma server
-  names itself `Gamma/<version> (<its address>)` on the token request),
-  dates and address; sign one out or all.
-- **Settings** (`/settings`): display name; **username** (password
-  required, the same rules as at registration, a taken or reserved name
-  refused — Gamma servers keep their own account rows and pick the new
-  name up as a claim on the next sign-in); e-mail change (confirmed at the
-  new address); password; deletion.
+- **Overview** (`/`): a greeting with username, plan and admin tags; a
+  *Get started* checklist (account created, e-mail confirmed, signed in
+  from a Gamma app) with a progress bar, hidden once all three are done;
+  then the latest sign-ins beside a plan card (a placeholder until hosted
+  servers exist, pointing at self-hosting) and an account summary
+  (username, e-mail state, member since, the account id with a copy
+  button — what Gamma servers key on; it never changes).
+- **Devices** (`/devices`): every grant with an icon by client kind, a
+  readable platform from the agent (a Gamma server names itself
+  `Gamma/<version> (<its address>)` on the token request), relative last
+  use ("Active now", "2 days ago"), sign-in date and address; sign one out,
+  or all behind a confirm.
+- **Settings** (`/settings`): labelled rows. Display name; **username**
+  (the password field and the button appear only once the name is edited;
+  the same rules as at registration, a taken or reserved name refused —
+  Gamma servers keep their own account rows and pick the new name up as a
+  claim on the next sign-in); e-mail change (confirmed at the new address,
+  password revealed the same way); password; deletion in a danger zone,
+  its form revealed by a first click.
 - **Admin** (`/admin`, `is_admin` only, 404 otherwise): tabs for accounts
   (search by username, e-mail or id, paged; plan select, verify, resend,
   admin on/off, rename, delete), invites (create with uses, plan and note;
@@ -159,7 +166,9 @@ page) and the **app** shell (a sidebar and a content column):
 
 Rate limits are the in-process fixed windows of `ratelimit.py` (per IP,
 per name, per account); Cloudflare's rate rules in front are the first
-line. Mail (`mail.py`) is plain text with three backends.
+line. Mail (`mail.py`) has three backends; every message is plain text plus
+an HTML alternative from `mail.compose` (portal palette, a button for the
+link with the raw URL under it, inline styles only).
 
 ## The OIDC provider
 

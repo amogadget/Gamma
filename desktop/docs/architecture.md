@@ -119,8 +119,16 @@ URL, *last opened* badge) with open / rename / credentials / data folder /
 server log / remove actions, then Settings: the *reopen last server at
 launch* switch, the *Local server storage* row, the *Updates* row (status
 line + check / download / restart button), and the dev-mode server
-overrides. The storage row shows the folder new local servers are created
-in. *Change…* opens a folder picker and *Use default* appears once a custom
+overrides. When a server will not open, the launcher shows a **failure
+panel** instead of a raw message: one sentence naming the cause, the
+underlying line (the server's log line, or Chromium's `ERR_…`) underneath,
+the button that would fix it (*Check for updates* when the data is newer
+than the app, *Open data folder* when the files are the problem, *Try
+again*, and *Show log file* for a local server), and the run's output folded
+away under *Server output*. `lib/startup.js` does the matching — a sidecar
+that died during startup from the lines it printed, a URL that would not
+load from Chromium's error — and falls back to the plain message. The
+storage row shows the folder new local servers are created in. *Change…* opens a folder picker and *Use default* appears once a custom
 folder is set. Either one leads to a dialog with *Only new servers* and, when
 local servers exist under the current root, *Move data*, which relocates
 them too.
@@ -221,6 +229,10 @@ dialog (tests only); `GAMMA_SHELL_NO_UPDATE=1` disables the updater.
   tree-kill on Windows. Backend resolution order: explicit settings
   (pythonPath/backendDir) → bundled frozen server (packaged app) →
   repo auto-detect (`backend/venv` + `frontend/dist`, dev mode).
+- `lib/startup.js` — why a sidecar would not start: the per-run tail of its
+  log (the file is appended to across runs) and a rule table turning the
+  server's last words into one sentence, the matched line, and the `action`
+  the launcher offers as a button.
 - `lib/updater.js` — the electron-updater wrapper described above.
 - `electron-builder.cjs` — the packaging config (targets, extra resources,
   secret-gated signing, the update feed's `publish` block).

@@ -30,6 +30,7 @@ const { pathToFileURL } = require('url');
 const registry = require('./lib/registry');
 const sidecar = require('./lib/sidecar');
 const updater = require('./lib/updater');
+const startup = require('./lib/startup');
 
 const SMOKE = process.argv.includes('--smoke');
 const BAR_H = 38;
@@ -247,12 +248,20 @@ function setBarExpanded(on) {
   layout();
 }
 
-function loadLauncher(error) {
+// The launcher's `?error=` payload: a JSON object when the failure came with a
+// diagnosis (lib/startup.js — a local server that would not come up), so the
+// page can explain it and offer the fix; a plain message otherwise.
+function launcherError(error, serverId) {
+  const d = (error && error.startup) || startup.diagnoseOpen((error && error.message) || error);
+  return JSON.stringify({ ...d, server: serverId || '' });
+}
+
+function loadLauncher(error, serverId) {
   if (!win) return;
   current = null;
   gamma = null;
   busy = null;
-  const q = error ? '?error=' + encodeURIComponent(String(error)) : '';
+  const q = error ? '?error=' + encodeURIComponent(launcherError(error, serverId)) : '';
   content.webContents.loadURL(pathToFileURL(path.join(__dirname, 'ui', 'launcher.html')).href + q);
   win.setTitle('Gamma');
   pushState();
@@ -643,7 +652,7 @@ function buildMenu() {
           label: `${ws.name}${ws.type === 'remote' ? '  (remote)' : ''}`,
           type: 'checkbox',
           checked: Boolean(current && current.id === ws.id),
-          click: () => openServer(ws.id).catch((e) => loadLauncher(e.message || e)),
+          click: () => openServer(ws.id).catch((e) => loadLauncher(e, ws.id)),
         })),
         { type: 'separator' },
         process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' },
@@ -732,7 +741,7 @@ function registerIpc() {
       buildMenu();
       return r;
     } catch (e) {
-      loadLauncher(e.message || e);
+      loadLauncher(e, id);
       throw e;
     }
   }));
@@ -845,7 +854,7 @@ app.whenReady().then(async () => {
   // Reopen where the user left off; the launcher is one click away in the bar.
   const last = registry.getSettings().openLastOnLaunch ? registry.getLastOpened() : null;
   if (last) {
-    openServer(last.id).then(buildMenu).catch((e) => loadLauncher(e.message || e)).finally(startMirrorHosts);
+    openServer(last.id).then(buildMenu).catch((e) => loadLauncher(e, last.id)).finally(startMirrorHosts);
   } else {
     loadLauncher();
     startMirrorHosts();
@@ -872,6 +881,7 @@ if (process.env.GAMMA_SHELL_TEST) {
   global.__gammaShell = {
     registry,
     sidecar,
+    startup,
     openServer,
     openGammaWorkspace,
     openCopy,

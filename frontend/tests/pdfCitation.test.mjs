@@ -1,15 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { citationRuns, matchCitation, parsePdfCitation } from "../src/pdf/pdfCitation.js";
-
-test("citation links preserve encoded quotes and reject invalid or external locations", () => {
-  const quote = "A result (n=42) & its evidence";
-  assert.deepEqual(parsePdfCitation(`/?page=paper&pdf_page=7&quote=${encodeURIComponent(quote)}`),
-    { pageId: "paper", page: 7, quote });
-  for (const href of ["https://evil.test/?page=p&pdf_page=1&quote=long%20enough", "/?page=p&pdf_page=-1&quote=long%20enough", "/?page=p&pdf_page=1&quote=tiny", "/?page=p&pdf_page=1.5&quote=long%20enough"])
-    assert.equal(parsePdfCitation(href), null);
-});
+import { citationRuns, matchCitation } from "../src/pdf/pdfCitation.js";
 
 test("maps partial proportional-font runs, ligatures and hyphenation back to source offsets", () => {
   const runs = [{ text: "The efﬁcient sys-", hasEOL: true }, { text: "tem works well." }];

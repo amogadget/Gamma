@@ -257,17 +257,18 @@ def test_admin_settings_roundtrip(monkeypatch):
 
 
 def test_rename_and_delete_follow_identities(cloud, monkeypatch):
+    # a name no other test file creates: the suite shares one data directory per worker
     monkeypatch.setenv("GAMMA_CLOUD_POLICY", "provision")
-    cloud.person.update({"sub": "sub-erin", "preferred_username": "erin", "email": "erin@example.org"})
+    cloud.person.update({"sub": "sub-ynez", "preferred_username": "ynez", "email": "ynez@example.org"})
     c = browser()
     callback(c, start(c))
     make_user("root", "pw-root-123", is_admin=1)
     admin = login("root", "pw-root-123")
-    assert admin.post("/api/admin/users/erin/rename", json={"new_username": "erin2"}).status_code == 200
-    assert cloud_auth.status_of("erin2")["username"] == "erin"
-    assert admin.delete("/api/admin/users/erin2").status_code == 200
+    assert admin.post("/api/admin/users/ynez/rename", json={"new_username": "ynez2"}).status_code == 200
+    assert cloud_auth.status_of("ynez2")["username"] == "ynez"
+    assert admin.delete("/api/admin/users/ynez2").status_code == 200
     with connect_users_db() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM identities WHERE username = 'erin2'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM identities WHERE username = 'ynez2'").fetchone()[0] == 0
 
 
 def test_cli_link_and_unlink(cloud, capsys):

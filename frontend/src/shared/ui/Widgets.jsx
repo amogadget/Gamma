@@ -6,9 +6,9 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { CheckIcon, CopyIcon, ExternalLinkIcon, FileTextIcon, PinIcon } from "./Icons";
+import { CheckIcon, CopyIcon, ExternalLinkIcon, FileTextIcon, PinIcon, QuoteIcon } from "./Icons";
 import { assetUrl, copyText } from "../lib/utils";
-import { parsePdfCitation } from "../../pdf/pdfCitation.js";
+import { parseGammaLink } from "../model/gammaLinks.js";
 import { remarkPaperLinks } from "../lib/remarkPaperLinks.js";
 import { mermaidFence, normalizeChatMarkdown, remarkMermaid } from "../lib/mermaidMarkdown.js";
 import { MermaidDiagram, mermaidCodeProps } from "./MermaidDiagram";
@@ -177,66 +177,100 @@ const CHAT_COPY_COMPONENTS = {
   blockquote: ({ children }) => <ChatCopyBlock as="blockquote">{children}</ChatCopyBlock>,
 };
 
-// A link into this Gamma: "/?page=<id>" or "?block=<id>", relative or on
-// this origin. Returns the block id, else null.
-function gammaPageLink(href) {
-  if (!href) return null;
-  let path = href;
-  if (/^https?:\/\//i.test(href)) {
-    try {
-      const u = new URL(href);
-      if (u.origin !== window.location.origin) return null;
-      path = u.pathname + u.search;
-    } catch { return null; }
-  }
-  const m = path.match(/^\/?\?(?:page|block)=([^&#]+)/);
-  if (!m) return null;
-  try { return decodeURIComponent(m[1]); } catch { return null; }
+// Navigation for Gamma's own links, provided once by App: the chat, the
+// rendered notes and anything else that renders a link card opens a page in
+// place instead of reloading the app. { openPage(id, citation) }.
+const GammaNavContext = createContext(null);
+
+// A link into a Gamma library rendered as a card — the same pill in the chat
+// and in a note. `link` comes from parseGammaLink, `label` is a resolved page
+// title when the caller has one (the note renderer resolves it through the
+// [[ref]] cache); `children` is the author's own link text.
+//
+// The card only claims the link once the id resolves locally: `link.foreign`
+// (a link written against another host, e.g. copied before the server moved,
+// or pointing at somebody else's Gamma) is handed to the card by a caller
+// that could resolve it, and falls back to a plain external link otherwise.
+function GammaLinkCard({ link, label, children }) {
+  const nav = useContext(GammaNavContext);
+  const cited = link.kind === "citation";
+  // A bare link (autolinked, or link text that is the URL itself) is not a
+  // label — the resolved title or the page number reads better.
+  const raw = textOfNode(children).trim();
+  const text = /^(https?:\/\/|\/?\?)/i.test(raw) ? "" : raw;
+  const title = cited
+    ? (link.quote ? `Show this passage in the PDF: “${link.quote}”` : `Open this paper at page ${link.page}`)
+    : "Open this page";
+  return (
+    <a href={link.href || "#"} className={`gammaLinkCard gammaLink-${link.kind}`}
+      title={label && label !== text ? `${label} — ${title}` : title}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !nav) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (link.kind === "block") nav.openBlock?.(link.blockId);
+        else nav.openPage?.(link.pageId, cited ? { pageId: link.pageId, page: link.page, quote: link.quote } : null);
+      }}>
+      {/* The quote mark promises a passage; a page or page-number link keeps
+          the document icon. */}
+      {link.quote ? <QuoteIcon size={14} aria-hidden="true" /> : <FileTextIcon size={14} aria-hidden="true" />}
+      {/* The author's own link text, markup and all; a bare link falls back
+          to the resolved title, then to the page number. */}
+      <span className="gammaLinkLabel">
+        {text ? children : label || (cited ? `p. ${link.page}` : "page")}
+        {!text && label && cited ? `, p. ${link.page}` : null}
+      </span>
+      {/* The source paper beside the author's own label ("p. 3 · Paper"). */}
+      {text && label && label !== text ? <span className="gammaLinkSrc">{label}</span> : null}
+    </a>
+  );
+}
+
+// Plain text of a rendered element tree (link labels arrive as React
+// children). Mirrors BlockTree's textOf; kept here so Widgets stays
+// importable on its own.
+function textOfNode(children) {
+  if (children == null) return "";
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(textOfNode).join("");
+  if (children.props?.children != null) return textOfNode(children.props.children);
+  return "";
 }
 
 // Keep the renderer type stable: replacing it on each streamed delta unmounts
 // links and loses clicks when an update lands between mouse-down and mouse-up.
 // Context supplies the latest navigation callback without replacing the link.
-const ChatOpenPageContext = createContext(null);
 function ChatMarkdownLink({ href, children, title }) {
-  const onOpenPage = useContext(ChatOpenPageContext);
-  const pageId = onOpenPage ? gammaPageLink(href) : null;
-  if (pageId) {
-    const citation = parsePdfCitation(href, window.location.origin);
-    return (
-      <a href={href} className="chatLinkCard chatPageLink"
-        title={citation ? "Show this passage in the PDF" : "Open this page"}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-          e.preventDefault();
-          onOpenPage(pageId, citation);
-        }}><FileTextIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span></a>
-    );
-  }
-  return <a href={href} className="chatLinkCard" target="_blank" rel="noreferrer" title={title || href}>
-    <ExternalLinkIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span>
+  const nav = useContext(GammaNavContext);
+  const link = nav ? parseGammaLink(href, window.location.origin) : null;
+  // The chat writes its own citations, so a link it produced is this
+  // library's by construction; a foreign host in chat text is an ordinary
+  // external link.
+  if (link && !link.foreign) return <GammaLinkCard link={{ ...link, href }}>{children}</GammaLinkCard>;
+  return <a href={href} className="gammaLinkCard" target="_blank" rel="noreferrer" title={title || href}>
+    <ExternalLinkIcon size={14} aria-hidden="true" /><span className="gammaLinkLabel">{children}</span>
   </a>;
 }
 const CHAT_MARKDOWN_COMPONENTS = { a: ChatMarkdownLink, pre: ChatPre };
 const CHAT_MARKDOWN_COPY_COMPONENTS = { ...CHAT_MARKDOWN_COMPONENTS, ...CHAT_COPY_COMPONENTS };
 
-// onOpenPage: opens a Gamma page link in place (the library agent links the
-// pages it found as /?page=<id>); Ctrl/Cmd-click still opens a new tab.
-const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage, copyBlocks = false }) {
+// Gamma's own links (the library agent links the pages it found as
+// /?page=<id>, citations add the PDF page and quote) open in place through
+// GammaNavContext; Ctrl/Cmd-click still opens a new tab.
+const ChatMarkdown = React.memo(function ChatMarkdown({ text, copyBlocks = false }) {
   const normalized = useMemo(() => normalizeChatMarkdown(text), [text]);
   return (
-    <ChatOpenPageContext.Provider value={onOpenPage}>
-      <div onCopy={handleMarkdownCopy}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, remarkPaperLinks, remarkMermaid]}
-          rehypePlugins={[rehypeKatex]}
-          urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
-          components={copyBlocks ? CHAT_MARKDOWN_COPY_COMPONENTS : CHAT_MARKDOWN_COMPONENTS}
-        >
-          {normalized}
-        </ReactMarkdown>
-      </div>
-    </ChatOpenPageContext.Provider>
+    <div onCopy={handleMarkdownCopy}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath, remarkPaperLinks, remarkMermaid]}
+        rehypePlugins={[rehypeKatex]}
+        urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
+        components={copyBlocks ? CHAT_MARKDOWN_COPY_COMPONENTS : CHAT_MARKDOWN_COMPONENTS}
+      >
+        {normalized}
+      </ReactMarkdown>
+    </div>
   );
 });
 
@@ -433,6 +467,8 @@ function useTextScale({ enabled } = {}) {
 
 export {
   AutoGrowTextarea,
+  GammaLinkCard,
+  GammaNavContext,
   BlockDropIndicator,
   ChatMarkdown,
   DockWindow,

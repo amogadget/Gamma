@@ -11,7 +11,7 @@ import re
 
 import bcrypt
 
-from . import config
+from . import config, mail
 from .db import after, audit, new_id, new_token, now, token_hash
 
 USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?$")
@@ -176,30 +176,42 @@ def link(path: str, token: str) -> str:
     return f"{config.PUBLIC_URL}{path}?token={token}"
 
 
-def verify_mail(account, token: str) -> tuple[str, str]:
-    return ("Confirm your Gamma Cloud e-mail address",
-            f"Hi {account['username']},\n\nConfirm this address to finish setting up your Gamma Cloud "
-            f"account:\n\n{link('/verify', token)}\n\nThe link works for one day. If you did not create "
-            f"an account, ignore this mail.\n")
+def _hi(account) -> str:
+    return f"Hi {account['display_name'] or account['username']},"
 
 
-def reset_mail(account, token: str) -> tuple[str, str]:
-    return ("Reset your Gamma Cloud password",
-            f"Hi {account['username']},\n\nSet a new password here:\n\n{link('/reset/confirm', token)}\n\n"
-            f"The link works for one hour. If you did not ask for this, ignore this mail; your password "
-            f"is unchanged.\n")
+def verify_mail(account, token: str) -> tuple[str, str, str]:
+    return ("Confirm your Gamma Cloud e-mail address", *mail.compose(
+        _hi(account),
+        ["Welcome to Gamma Cloud. Confirm this address to finish setting up your account "
+         f"@{account['username']}."],
+        ("Confirm e-mail address", link("/verify", token)),
+        "The link works for one day. If you did not create an account, ignore this mail."))
 
 
-def change_email_mail(account, new_email: str, token: str) -> tuple[str, str]:
-    return ("Confirm your new Gamma Cloud e-mail address",
-            f"Hi {account['username']},\n\nConfirm {new_email} as the address of your Gamma Cloud account:"
-            f"\n\n{link('/email/confirm', token)}\n\nThe link works for one day.\n")
+def reset_mail(account, token: str) -> tuple[str, str, str]:
+    return ("Reset your Gamma Cloud password", *mail.compose(
+        _hi(account),
+        ["Someone asked to reset the password of your Gamma Cloud account. Set a new one here."],
+        ("Set a new password", link("/reset/confirm", token)),
+        "The link works for one hour. If you did not ask for this, ignore this mail; your password "
+        "is unchanged."))
 
 
-def email_changed_notice(account, new_email: str) -> tuple[str, str]:
-    return ("Your Gamma Cloud e-mail address changed",
-            f"Hi {account['username']},\n\nThe e-mail address of your Gamma Cloud account is now "
-            f"{new_email}. If that was not you, reply to this mail.\n")
+def change_email_mail(account, new_email: str, token: str) -> tuple[str, str, str]:
+    return ("Confirm your new Gamma Cloud e-mail address", *mail.compose(
+        _hi(account),
+        [f"Confirm {new_email} as the address of your Gamma Cloud account."],
+        ("Confirm new address", link("/email/confirm", token)),
+        "The link works for one day. Until you confirm, your account keeps its current address."))
+
+
+def email_changed_notice(account, new_email: str) -> tuple[str, str, str]:
+    return ("Your Gamma Cloud e-mail address changed", *mail.compose(
+        _hi(account),
+        [f"The e-mail address of your Gamma Cloud account is now {new_email}."],
+        None,
+        "If that was not you, reply to this mail."))
 
 
 # --- changes ------------------------------------------------------------------

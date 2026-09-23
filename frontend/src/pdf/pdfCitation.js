@@ -1,19 +1,8 @@
 import { escapeRegex, normalizeChars } from "../shared/lib/textnorm.js";
 import { compoundHyphen, fuzzyCitationRange } from "./fuzzyCitation.js";
 
-// Citations carry text, never coordinates from a different PDF engine.
-export function parsePdfCitation(href, origin = "http://localhost") {
-  try {
-    const url = new URL(href, origin);
-    if (url.origin !== origin || url.pathname !== "/") return null;
-    const pageId = url.searchParams.get("page");
-    const page = Number(url.searchParams.get("pdf_page"));
-    const quote = url.searchParams.get("quote") || "";
-    if (!pageId || !Number.isSafeInteger(page) || page < 1 || page > 5000
-        || quote.trim().length < 8 || quote.length > 2000) return null;
-    return { pageId, page, quote };
-  } catch { return null; }
-}
+// URL parsing for citation links lives in shared/model/gammaLinks.js (every
+// surface that renders a Gamma link shares it); this module is the matching.
 
 // PDF.js exposes one textDiv per text item, including empty EOL items. Keep
 // that correspondence: reconstructing runs from the DOM loses empty line

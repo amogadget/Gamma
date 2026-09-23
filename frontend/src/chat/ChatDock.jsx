@@ -1219,7 +1219,7 @@ export default function ChatDock({
                     </div> : null}
                     {isUser
                       ? <div className="chatUserText">{m.text}</div>
-                      : m.text ? <ChatMarkdown text={m.text} onOpenPage={onOpenPage} copyBlocks /> : null}
+                      : m.text ? <ChatMarkdown text={m.text} copyBlocks /> : null}
                     {isResponding ? (
                       <div className="chatThinking" role="status" aria-label={m.text ? "AI is responding" : "AI is thinking"}>
                         <span aria-hidden="true">{m.text ? "Responding" : "Thinking"}</span>

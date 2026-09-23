@@ -23,13 +23,13 @@ signing keys and every token hash. Moving to another host is copying
 
 ## The current deployment (2026-09-22)
 
-`root@69.63.206.178`, folder `/root/Container/gamma-account/`, started
-with `compose.yml` + `compose.build.yml` from a copy of `cloud/` in
-`src/` (the GHCR image does not exist until the first merge to `main`;
-after that, drop `compose.build.yml` and `docker compose pull`). The
-admin account `tim` and a first invite exist. Mail is still `console`
-(the links show in `docker compose logs account`) until the Resend domain
-is verified — the SMTP credential is already in `.env`.
+`root@69.63.206.178`, folder `/root/Container/gamma-account/`, running
+`compose.yml` with the GHCR image (the `src/` copy there is left from the
+first, built-from-source start). The admin account `tim` and a first
+invite exist. Mail is still `console` (the links show in
+`docker compose logs account`) until the Resend domain is verified — the
+SMTP credential is already in `.env`. Updates go through the
+`update-account-server` skill (`.claude/skills/`).
 
 ## First deployment on a VPS
 
@@ -143,8 +143,11 @@ above.
 ## Updating
 
 ```bash
-cd ~/Container/gamma-account && docker compose pull && docker compose up -d
+cd ~/Container/gamma-account && docker compose pull account backup && docker compose up -d
 ```
+
+(`/update-account-server` does this after checking the publish finished,
+and verifies the running commit afterwards.)
 
 (Or re-copy `src/` and `--build` while running from source.) The server
 upgrades its own `cloud.db` at start with a copy taken first
