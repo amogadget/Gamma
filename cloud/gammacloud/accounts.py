@@ -74,6 +74,12 @@ def password_ok(account, raw: str) -> bool:
     return bcrypt.checkpw(raw.encode(), account["password_hash"].encode())
 
 
+def confirm_ok(account, raw: str) -> bool:
+    """The password a sensitive change asks for. An account made through
+    Google or GitHub has none until it sets one; its session is the proof."""
+    return password_ok(account, raw or "") if account["password_hash"] else True
+
+
 # --- lookup -------------------------------------------------------------------
 
 def by_id(conn, account_id: str):
@@ -102,6 +108,7 @@ def public(account) -> dict:
         "id": account["id"], "username": account["username"], "email": account["email"],
         "email_verified": bool(account["email_verified_at"]), "display_name": account["display_name"],
         "plan": account["plan"], "is_admin": bool(account["is_admin"]), "created_at": account["created_at"],
+        "has_password": bool(account["password_hash"]),
     }
 
 
@@ -275,10 +282,12 @@ def revoke_everything(conn, account_id: str) -> None:
 def delete(conn, account_id: str, actor: str = "") -> None:
     """Soft delete: the row keeps its username and e-mail through the grace
     period (``manage.py purge-deleted`` removes it), nothing can sign in as
-    it any more, and its servers' teardown is the provisioner's job (v1)."""
+    it any more (its Google/GitHub links go at once), and its servers'
+    teardown is the provisioner's job (v1)."""
     revoke_everything(conn, account_id)
     conn.execute("UPDATE email_tokens SET used_at = ? WHERE account_id = ? AND used_at IS NULL", (now(), account_id))
     conn.execute("UPDATE accounts SET deleted_at = ?, password_hash = NULL WHERE id = ?", (now(), account_id))
+    conn.execute("DELETE FROM identities WHERE account_id = ?", (account_id,))
     audit(conn, "account.delete", account_id, actor or account_id)
 
 

@@ -184,14 +184,14 @@ def update_me(body: ProfileBody, request: Request):
 
 class UsernameBody(BaseModel):
     username: str
-    password: str
+    password: str = ""
 
 
 @router.post("/me/username")
 def change_username(body: UsernameBody, request: Request):
     with closing(db.connect()) as conn:
         account = portal_account(conn, request)
-        if not accounts.password_ok(account, body.password):
+        if not accounts.confirm_ok(account, body.password):
             raise HTTPException(403, "The password is wrong.")
         ratelimit.check(f"username-change:{account['id']}", 5, 86400)
         try:
@@ -204,7 +204,7 @@ def change_username(body: UsernameBody, request: Request):
 
 
 class PasswordBody(BaseModel):
-    current: str
+    current: str = ""   # none when the account has no password yet
     new: str
 
 
@@ -212,7 +212,7 @@ class PasswordBody(BaseModel):
 def change_password(body: PasswordBody, request: Request):
     with closing(db.connect()) as conn:
         account = portal_account(conn, request)
-        if not accounts.password_ok(account, body.current):
+        if not accounts.confirm_ok(account, body.current):
             raise HTTPException(403, "The current password is wrong.")
         try:
             accounts.check_password(body.new)
@@ -227,14 +227,14 @@ def change_password(body: PasswordBody, request: Request):
 
 
 class DeleteBody(BaseModel):
-    password: str
+    password: str = ""
 
 
 @router.post("/me/delete")
 def delete_me(body: DeleteBody, request: Request):
     with closing(db.connect()) as conn:
         account = portal_account(conn, request)
-        if not accounts.password_ok(account, body.password):
+        if not accounts.confirm_ok(account, body.password):
             raise HTTPException(403, "The password is wrong.")
         accounts.delete(conn, account["id"])
         conn.commit()
@@ -334,7 +334,7 @@ def reset_confirm(body: ResetConfirmBody, request: Request):
 
 class EmailChangeBody(BaseModel):
     new_email: str
-    password: str
+    password: str = ""
 
 
 @router.post("/email/change")
@@ -345,7 +345,7 @@ def email_change(body: EmailChangeBody, request: Request):
         _problem(e)
     with closing(db.connect()) as conn:
         account = portal_account(conn, request)
-        if not accounts.password_ok(account, body.password):
+        if not accounts.confirm_ok(account, body.password):
             raise HTTPException(403, "The password is wrong.")
         ratelimit.check(f"email-change:{account['id']}", 3, 3600)
         if conn.execute("SELECT 1 FROM accounts WHERE email = ?", (new_email,)).fetchone():

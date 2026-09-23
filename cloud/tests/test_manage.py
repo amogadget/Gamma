@@ -47,3 +47,4 @@ def test_newer_db_refused():
         conn.commit()
     with pytest.raises(db.NewerDataError):
         db.ensure_current()
+

@@ -7,11 +7,12 @@ from contextlib import asynccontextmanager, closing
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import config, db, oidc, sessions
+from . import config, db, identities, oidc, sessions
 from .accounts import Problem
 from .log import log
 from .routers import accounts as accounts_router
 from .routers import admin as admin_router
+from .routers import external as external_router
 from .routers import oidc as oidc_router
 from .routers import portal as portal_router
 
@@ -20,6 +21,7 @@ def purge() -> None:
     with closing(db.connect()) as conn:
         oidc.purge_expired(conn)
         sessions.purge_stale(conn)
+        identities.purge_expired(conn)
         conn.commit()
 
 
@@ -72,5 +74,6 @@ def create_app() -> FastAPI:
     app.include_router(oidc_router.router)
     app.include_router(accounts_router.router)
     app.include_router(admin_router.router)
+    app.include_router(external_router.router)
     app.include_router(portal_router.router)
     return app

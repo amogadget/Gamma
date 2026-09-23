@@ -7,8 +7,6 @@
 #   caddy    TLS on the host's own 80/443 with a Let's Encrypt certificate,
 #            for a host with a public address (a VPS). The DNS record for the
 #            hostname in .env (CADDY_HOST) must point at the host.
-#   backup   a daily snapshot of cloud.db into ./data/backups (14 kept) —
-#            copy that folder off the machine (rclone to R2, restic, …).
 #
 # Variants layered with -f: compose.tunnel.yml replaces caddy with a
 # Cloudflare Tunnel (no open port; a NAS); compose.build.yml builds the
@@ -38,28 +36,6 @@ services:
       - caddy-config:/config
     depends_on:
       - account
-
-  backup:
-    image: ghcr.io/tim4431/gamma-cloud:latest
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - ./data:/data
-    healthcheck:
-      disable: true   # the image's check probes the web server, which this service does not run
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        while true; do
-          python manage.py backup && python - <<'PY'
-        import os, pathlib
-        keep = 14
-        files = sorted(pathlib.Path(os.environ.get("GAMMA_CLOUD_DATA_DIR", "/data"), "backups").glob("*-manual.db"))
-        for old in files[:-keep]:
-            old.unlink()
-        PY
-          sleep 86400
-        done
 
 volumes:
   caddy-data:

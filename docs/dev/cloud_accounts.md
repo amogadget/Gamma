@@ -13,8 +13,8 @@ copies, so the account server can move to its own repository without a
 change.
 
 Status: **v0** — accounts, the portal, the OIDC provider, the admin API and
-CLI. Plans exist as a column set by an admin; Stripe, provisioning and the
-`servers` list (v1) and outside identity providers (v2) are not built. The
+CLI, and sign-in with Google and GitHub. Plans exist as a column set by an
+admin; Stripe, provisioning and the `servers` list (v1) are not built. The
 consumer side — "Sign in with Gamma Cloud" on every Gamma server — is
 built too and described at the end of this page ("The Gamma side").
 
@@ -22,7 +22,8 @@ built too and described at the end of this page ("The Gamma side").
 
 | | |
 |---|---|
-| accounts | e-mail, username, password (bcrypt), display name, plan, admin flag, soft deletion; the random account id is the identity, e-mail and username both change |
+| accounts | e-mail, username, password (bcrypt; none for an account made through Google/GitHub), display name, plan, admin flag, soft deletion; the random account id is the identity, e-mail and username both change |
+| outside sign-in | Google (OIDC + the one-tap prompt) and GitHub (OAuth), linked to accounts |
 | portal | sign in / register / verify / reset, then Overview, Devices, Settings and (admins) Admin — server-rendered HTML over the JSON API |
 | identity for Gamma servers | an OIDC provider: authorize (PKCE), token, userinfo, JWKS, revoke, discovery |
 | admin | accounts, invites, OIDC clients, the audit log — API and `manage.py` |
@@ -43,7 +44,9 @@ lists every variable): the data directory, the public URL (the OIDC
 issuer; the request's Host is never trusted), the registration mode
 (`open` / `invite` / `closed`, default `invite`), the mail backend
 (`console` logs the links, `smtp` sends them), the Turnstile secret (off
-until set), the desktop client id. The Docker image (`cloud/Dockerfile`)
+until set), the desktop client id, the Google and GitHub OAuth clients
+(each provider off until both its id and secret are set; setup in the
+deploy README). The Docker image (`cloud/Dockerfile`)
 runs uvicorn on 9002 with `--proxy-headers`, so the client address comes
 from Cloudflare's `X-Forwarded-For`.
 
@@ -61,7 +64,8 @@ the signing keys and every token hash.
 | table | what |
 |---|---|
 | `accounts` | `id` (random, the OIDC `sub`; never changes), `username` (unique; the username on every Gamma server, a paid container's hostname label — `accounts.RESERVED_USERNAMES` keeps the names Gamma and the web use), `email` (unique), `email_verified_at`, `password_hash`, `display_name`, `plan`, `is_admin`, `deleted_at` |
-| `identities` | outside providers (v2); the shape is fixed from v0 |
+| `identities` | an account's Google/GitHub link: (`provider`, `subject`) → account, the provider's address at the last sign-in |
+| `external_logins` | one Google/GitHub sign-in in flight (15 min): `redirect` while at the provider, `signup` while the username form waits; keyed by the hash of the `gc_ext` cookie (step 2) |
 | `portal_sessions` | the portal cookie's hash; sliding 30 days, newest 20 per account |
 | `email_tokens` | verify / reset / change-email links: hash, kind, expiry, `used_at`; one live link per (account, kind) |
 | `invites` | codes with uses left and the plan they grant |
@@ -81,8 +85,8 @@ fixed-width UTC strings with a `Z`, so they compare as strings.
 
 [cloud/deploy/README.md](../../cloud/deploy/README.md): the `gamma-cloud`
 image behind a Cloudflare Tunnel on any Docker host (the NAS first, a VPS
-later — the state is the `data/` folder), `compose.yml` with the server,
-the tunnel and a daily backup, `.env.example` for the public URL, SMTP,
+later — the state is the `data/` folder), `compose.yml` with the server
+and the tunnel, `.env.example` for the public URL, SMTP,
 Turnstile and the tunnel token, the first admin and invites, the
 Cloudflare rate rules, updating and rollback. The website links here: the
 header's **Sign in** and the `/login`, `/account`, `/signup` short links
@@ -140,7 +144,8 @@ page) and the **app** shell (a sidebar and a content column):
   and shows the verify notice instead. That is the one abuse control a
   hosted Gamma relies on.
 - **Sign in** (`POST /api/login`): e-mail or username plus password; limits
-  per IP and per name, reset on success.
+  per IP and per name, reset on success. An account without a password is
+  refused like a wrong password.
 - **Reset** (`/api/reset/request` → mail → `/api/reset/confirm`): the
   request answers the same whether the address exists. Confirming sets the
   password, marks the e-mail verified (the mail reached them), signs every
@@ -163,6 +168,58 @@ page) and the **app** shell (a sidebar and a content column):
   which is how a Gamma sidecar will discover the person's servers.
   Everything else under `/api/me` and all of `/api/admin` is portal session
   only: a token minted for a Gamma server can never change the account.
+
+### Sign in with Google and GitHub
+
+`providers.py` is the wire (authorize URLs, the code exchange, verifying
+Google's ID token against Google's keys, reading GitHub's `/user` and
+`/user/emails`), `identities.py` the rules, `routers/external.py` the
+endpoints. The sign-in, register and authorize pages show the providers as
+tiles under the password form ("or continue with"); with Google on, its
+one-tap prompt opens as well (FedCM in Chrome: "Sign in to … with
+google.com"). The pages that load Google's script send
+`Referrer-Policy: strict-origin-when-cross-origin`, which it needs; every
+other page keeps `no-referrer`.
+
+- **The round trip.** A tile posts `POST /api/oauth/{provider}/start`
+  (JSON, so no other site can start a sign-in for the browser) with
+  `next`, a pending authorize `request_id`, or `link`; the answer is the
+  provider URL plus the `gc_ext` cookie. The provider returns the browser to
+  `GET /oauth/{provider}/callback`. The OAuth `state`, the PKCE verifier and
+  the OIDC nonce are all derived from the cookie's token
+  (`identities.derive`), so the row stores only the token's hash, the state
+  the provider sees reveals nothing, and a callback in another browser
+  fails. Cancelling at the provider returns to where it started.
+- **One tap** (`POST /api/oauth/google/one-tap`): the credential is a
+  Google ID token; its nonce must be the one derived from the page's
+  `gc_tap` cookie, so a token lifted from elsewhere cannot be replayed.
+- **Which account** (`identities.resolve`): a linked identity signs in to
+  its account. Otherwise an address the provider is authoritative for
+  (Google: Gmail or a Workspace account, the `hd` claim — Google's own
+  rule; GitHub: the verified primary address) links to the account that
+  has it. If that account never confirmed its address, its password was
+  chosen by someone who never proved they own it: the password is cleared,
+  everything signed out, the address marked confirmed. An address the
+  provider is not authoritative for never attaches to an existing account
+  (the page says to sign in and connect from Settings). A provider without
+  a verified address is refused.
+- **A new person** lands on `/signup/finish`: the provider's address, a
+  suggested username (the GitHub login or the address's local part, made
+  valid and free), the invite code in `invite` mode; `POST
+  /api/oauth/signup` creates the account with that address confirmed, no
+  password, and the identity linked. `closed` registration refuses instead.
+- **A Gamma server's sign-in** that started on the authorize page finishes
+  right after: the code goes to the server without another click (the flow
+  was started by this browser's own JSON call). When it cannot — the request
+  expired, the address is unconfirmed, the person cancelled — the browser
+  goes to `/authorize/resume?request_id=`, the authorize page again.
+- **Settings → Connected accounts**: connect (the same round trip with
+  `link`, back to `/settings?connected=`) or disconnect (`POST
+  /api/me/identities/{provider}/unlink`, refused when it would leave no way
+  in). One identity per provider per account, one account per identity.
+  An account without a password sees *Set a password* instead of *Change*,
+  and confirms the username, e-mail and delete forms with its session alone
+  (`accounts.confirm_ok`). Deleting an account drops its links at once.
 
 Rate limits are the in-process fixed windows of `ratelimit.py` (per IP,
 per name, per account); Cloudflare's rate rules in front are the first
@@ -238,11 +295,19 @@ refresh rotation, code replay, redirect and PKCE checks, the unverified
 gate, sign-in on the authorize page, cancel, a confidential client with
 basic auth and revoke, key rotation), `test_admin.py` (gating, the admin
 flows, that a bearer token never reaches the admin API),
-`test_manage.py` (the CLI, purge, the newer-file refusal). `conftest.py`
+`test_manage.py` (the CLI, purge, the newer-file refusal),
+`test_external.py` (Google/GitHub with the provider stubbed: signup,
+linking by a trusted address, claiming an unconfirmed account, the
+authorize page's path, state and `next` checks, one tap with a real RS256
+token, connect/disconnect, accounts without a password, the step-2
+upgrade). `conftest.py`
 points the data directory at a temp folder and the mail backend at the
 in-memory outbox before the package is imported. CI runs them in the
-`cloud` job of `check.yml`; a merge to `main` publishes
-`ghcr.io/<owner>/gamma-cloud:latest` from `docker.yml`.
+`test` job of `cloud.yml` on a PR that touches `cloud/`; dispatching
+`cloud.yml` from any branch (the `update-account-server` skill) tests and
+publishes `ghcr.io/<owner>/gamma-cloud:latest` — no merge to `main` is
+involved, and the Gamma app's `check.yml` / `docker.yml` skip changes that
+only touch the account server ([github_actions.md](github_actions.md)).
 
 ## The Gamma side: Sign in with Gamma Cloud
 
