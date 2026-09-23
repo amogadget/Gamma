@@ -3,7 +3,6 @@
 import io
 import zipfile
 
-import bcrypt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,22 +10,9 @@ from fastapi.testclient import TestClient
 @pytest.fixture(scope="module")
 def alice(client):
     """A separate TestClient logged in as a real (non-guest) user."""
-    from gamma.app import app
-    from gamma.db import connect_users_db, page_now
-    from gamma import workspaces
-
-    with connect_users_db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE username = 'alice'").fetchone():
-            conn.execute(
-                "INSERT INTO users (username, password_hash, is_guest, created_at) VALUES (?, ?, 0, ?)",
-                ("alice", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
-            )
-            conn.commit()
-    workspaces.ensure_personal("alice")
-    c = TestClient(app)
-    r = c.post("/api/login", json={"username": "alice", "password": "pw"})
-    assert r.status_code == 200, r.text
-    return c
+    from conftest import login, make_user
+    make_user("prefs_alice", "pw")
+    return login("prefs_alice", "pw")
 
 
 # --- prefs -------------------------------------------------------------------
@@ -331,25 +317,25 @@ def test_rename_user_moves_rows_and_directory(client):
     from gamma.db import ws_dir
     from gamma.app import app
 
-    manage.create_user("bob", "pw2")
-    ws = workspace_of("bob")
+    manage.create_user("prefs_bob", "pw2")
+    ws = workspace_of("prefs_bob")
     assert (ws_dir(ws) / "pages.db").exists()
 
-    manage.rename_user("bob", "bobby")
+    manage.rename_user("prefs_bob", "prefs_bobby")
     # Rows follow the account; the workspace directory (named by id) stays put.
-    assert workspace_of("bobby") == ws and (ws_dir(ws) / "pages.db").exists()
+    assert workspace_of("prefs_bobby") == ws and (ws_dir(ws) / "pages.db").exists()
 
     c = TestClient(app)
-    assert c.post("/api/login", json={"username": "bob", "password": "pw2"}).status_code == 401
-    assert c.post("/api/login", json={"username": "bobby", "password": "pw2"}).status_code == 200
+    assert c.post("/api/login", json={"username": "prefs_bob", "password": "pw2"}).status_code == 401
+    assert c.post("/api/login", json={"username": "prefs_bobby", "password": "pw2"}).status_code == 200
 
 
 def test_rename_user_refuses_guest_and_collisions(client, capsys):
     import manage
-    manage.rename_user("guest", "someone")
+    manage.rename_user("guest", "prefs_someone")
     assert "cannot be renamed" in capsys.readouterr().out
-    manage.create_user("carol", "pw3")
-    manage.rename_user("carol", "bobby")  # bobby exists from the test above
+    manage.create_user("prefs_carol", "pw3")
+    manage.rename_user("prefs_carol", "prefs_bobby")  # prefs_bobby exists from the test above
     assert "already exists" in capsys.readouterr().out
-    manage.rename_user("carol", "bad/name")
+    manage.rename_user("prefs_carol", "bad/name")
     assert "must be" in capsys.readouterr().out
