@@ -16,6 +16,7 @@ import re
 from datetime import datetime, timezone
 
 from . import config
+from .providers import NAMES
 
 SITE = "https://gammapdf.com"
 
@@ -44,9 +45,17 @@ form .btn{margin-top:14px}.msg{min-height:1.3em;font-size:13px;margin-top:8px;co
 .pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);color:var(--text-2);white-space:nowrap}
 .pill--ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.pill--warn{background:var(--accent-soft);color:var(--accent-ink);border-color:transparent}.pill--plan{text-transform:capitalize}
 /* auth shell */
-.authwrap{min-height:100vh;display:flex;flex-direction:column}.authtop{display:flex;align-items:center;gap:10px;padding:18px 24px;font-weight:600;color:var(--text)}.authtop a{color:inherit}.authtop em{font-style:normal;color:var(--accent);font-weight:500;margin-left:3px}
+.authwrap{min-height:100vh;display:flex;flex-direction:column}.authtop{display:flex;align-items:center;gap:10px;padding:18px 24px;font-weight:600;color:var(--text)}.authtop a{color:inherit}.authtop svg{display:block}.authtop em{font-style:normal;color:var(--accent);font-weight:500;margin-left:3px}
 .auth{margin:6vh auto 40px;width:min(400px,100% - 32px)}.auth h1{font-size:22px;margin-bottom:6px}.auth .lead{color:var(--text-2);margin-bottom:18px;font-size:14px}.auth .links{margin-top:16px;font-size:13px;color:var(--text-2);display:flex;gap:14px;flex-wrap:wrap}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:22px}
+.fieldhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:12px 0 5px}.fieldhead label{margin:0}.fieldhead a{font-size:12.5px}
+.or{display:flex;align-items:center;gap:12px;margin:20px 0 14px;color:var(--muted);font-size:12.5px}.or::before,.or::after{content:"";flex:1;border-top:1px solid var(--line)}
+.providers{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}
+.provider{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:14px 8px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-weight:500;cursor:pointer;transition:background-color .1s,border-color .1s}
+.provider:hover{background:var(--surface-2)}.provider:disabled{opacity:.6;cursor:default}.provider svg{width:20px;height:20px}
+.switch{margin-top:18px;text-align:center;font-size:13.5px;color:var(--text-2)}.terms{margin-top:12px;text-align:center;font-size:12px;color:var(--muted)}.terms a{color:inherit;text-decoration:underline}
+.via{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);font-size:13.5px}.via svg{width:18px;height:18px;flex:none}
+.conn{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}.conn:first-child{border-top:0;padding-top:0}.conn>svg{width:18px;height:18px;flex:none}.conn .txt{flex:1;min-width:0}.conn .txt b{font-weight:500;display:block}.conn .txt span{color:var(--muted);font-size:12.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* app shell */
 .app{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}
 .side{background:var(--surface-2);border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:2px;position:sticky;top:0;height:100vh;overflow-y:auto}
@@ -114,6 +123,24 @@ function bind(formId, fn){
 }
 function say(msg, text){ msg.classList.add('ok'); msg.textContent = text; }
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// The Google / GitHub buttons ([data-provider]) and Google's one-tap prompt; o is _social() in pages.py.
+function social(o){
+  const msg = document.getElementById('smsg'), fail = (e) => { if (msg) msg.textContent = e.message; };
+  document.querySelectorAll('[data-provider]').forEach(b => b.onclick = async () => {
+    if (msg) msg.textContent = ''; b.disabled = true;
+    try { const d = await api('/api/oauth/' + b.dataset.provider + '/start', {next: o.next || '/', request_id: o.request_id || '', link: !!o.link}); location.href = d.url; }
+    catch (e) { fail(e); b.disabled = false; }
+  });
+  if (!o.tap) return;
+  const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+  s.onload = () => {
+    google.accounts.id.initialize({client_id: o.tap.client_id, nonce: o.tap.nonce, context: o.tap.context || 'signin',
+      auto_select: false, cancel_on_tap_outside: false, itp_support: true, use_fedcm_for_prompt: true,
+      callback: async r => { try { const d = await api('/api/oauth/google/one-tap', {credential: r.credential, next: o.next || '/', request_id: o.request_id || ''}); location.href = d.redirect; } catch (e) { fail(e); } }});
+    google.accounts.id.prompt();
+  };
+  document.head.appendChild(s);
+}
 const out = document.getElementById('signout'); if (out) out.onclick = async (e) => { e.preventDefault(); await api('/api/logout', {}); location.href = '/login'; };
 """
 
@@ -130,12 +157,19 @@ ICONS = {
     "check": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>',
     "mail": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
     "ext": '<svg class=ext viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M8 7h9v9"/></svg>',
+    "google": '<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>',
+    "github": '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>',
     "out": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
 }
 
 
 def esc(value) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
+
+
+def _js(value) -> str:
+    """A value as a JS literal inside an inline <script>."""
+    return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 def _head(title: str) -> str:
@@ -180,37 +214,76 @@ def turnstile_widget() -> str:
     return f'<div class="cf-turnstile" data-sitekey="{esc(config.TURNSTILE_SITEKEY)}" style="margin-top:14px"></div>'
 
 
-def error_page(title: str, message: str) -> str:
-    return auth(title, esc(message), "<p class=links><a href='/'>Back</a></p>")
+def error_page(title: str, message: str, back: str = "/") -> str:
+    return auth(title, esc(message), f"<p class=links><a href='{esc(back)}'>Back</a></p>")
 
 
-def _register_link() -> str:
-    return "<a href=/register>Create an account</a>" if config.REGISTRATION != "closed" else ""
+def _social(social: dict | None, verb: str = "continue", context: str = "signin") -> tuple[str, str]:
+    """(HTML, script) for the Google / GitHub tiles under a sign-in form and
+    Google's one-tap prompt; ``social`` comes from ``external.sign_in_page``."""
+    if not social or not social["providers"]:
+        return "", ""
+    tiles = "".join(f"<button type=button class=provider data-provider={p}>{ICONS[p]}<span>{NAMES[p]}</span></button>"
+                    for p in social["providers"])
+    opts = {**social, "tap": {**social["tap"], "context": context} if social.get("tap") else None}
+    return (f"<div class=or>or {verb} with</div><div class=providers>{tiles}</div><div class=msg id=smsg></div>",
+            f"social({_js(opts)});")
+
+
+def _password_fields() -> str:
+    return ("<label>E-mail or username<input name=login autocomplete=username required autofocus></label>"
+            "<div class=fieldhead><label for=password>Password</label><a href=/reset>Forgot password?</a></div>"
+            "<input id=password name=password type=password autocomplete=current-password required>"
+            "<button type=submit class='btn btn--primary btn--block'>Sign in</button><div class=msg></div>")
+
+
+def _to_register() -> str:
+    return ("<p class=switch>New to Gamma Cloud? <a href=/register>Create an account</a></p>"
+            if config.REGISTRATION != "closed" else "")
+
+
+def _terms() -> str:
+    return f"<p class=terms>By continuing you agree to the <a href='{SITE}/privacy/'>privacy policy</a>.</p>"
 
 
 # --- auth pages ---------------------------------------------------------------
 
-def login_page(next_url: str = "/") -> str:
-    inner = ("<form id=f><label>E-mail or username<input name=login autocomplete=username required autofocus></label>"
-             "<label>Password<input name=password type=password autocomplete=current-password required></label>"
-             "<button type=submit class='btn btn--primary btn--block'>Sign in</button><div class=msg></div></form>"
-             f"<p class=links><a href=/reset>Forgot your password?</a>{_register_link()}</p>")
-    script = f"bind('f', async d => {{ await api('/api/login', d); location.href = {json.dumps(next_url)}; }});"
+def login_page(social: dict | None = None) -> str:
+    tiles, script = _social(social)
+    next_url = (social or {}).get("next", "/")
+    inner = f"<form id=f>{_password_fields()}</form>{tiles}{_to_register()}{_terms()}"
+    script = f"bind('f', async d => {{ await api('/api/login', d); location.href = {_js(next_url)}; }});" + script
     return auth("Sign in", "One account for the desktop app and every Gamma server.", inner, script)
 
 
-def register_page() -> str:
+def register_page(social: dict | None = None) -> str:
     if config.REGISTRATION == "closed":
         return error_page("Registration is closed", "Gamma Cloud is not taking new accounts right now.")
+    tiles, script = _social(social, "sign up", "signup")
     invite = "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
     inner = ("<form id=f><label>E-mail<input name=email type=email autocomplete=email required autofocus></label>"
              "<label>Username <small>lowercase letters, digits, hyphens</small><input name=username autocomplete=username "
              "pattern='[a-z0-9][a-z0-9-]{1,30}[a-z0-9]' required></label>"
              "<label>Password<input name=password type=password autocomplete=new-password minlength=8 required></label>"
              f"{invite}{turnstile_widget()}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
-             "<p class=links>Already have one? <a href=/login>Sign in</a></p>")
-    script = "bind('f', async d => { await api('/api/register', d); location.href = '/'; });"
+             f"{tiles}<p class=switch>Already have an account? <a href=/login>Sign in</a></p>{_terms()}")
+    script = "bind('f', async d => { await api('/api/register', d); location.href = '/'; });" + script
     return auth("Create your account", "Free. You can change the username and e-mail later.", inner, script)
+
+
+def signup_finish_page(flow: dict, suggestion: str) -> str:
+    """After Google/GitHub for a new person: pick the username (and give the
+    invite code in ``invite`` mode)."""
+    p = flow["provider"]
+    invite = "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
+    inner = (f"<div class=via>{ICONS[p]}<span>{NAMES[p]} · <b>{esc(flow['email'])}</b></span></div>"
+             "<form id=f><label>Username <small>your name on every Gamma server</small><input name=username "
+             f"value='{esc(suggestion)}' autocomplete=username pattern='[a-z0-9][a-z0-9-]{{1,30}}[a-z0-9]' required autofocus></label>"
+             f"{invite}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
+             f"<p class=switch><a href=/login>Cancel</a></p>{_terms()}")
+    script = "bind('f', async d => { const r = await api('/api/oauth/signup', d); location.href = r.redirect; });"
+    hello = f"Welcome, {esc(flow['name'])}. " if flow.get("name") else ""
+    return auth("Finish creating your account", hello + "Pick a username; you can change it later.", inner, script)
 
 
 def verify_page(token: str) -> str:
@@ -386,15 +459,32 @@ def devices_page(account: dict, devices: list[dict]) -> str:
                account, "devices", inner, script)
 
 
-def settings_page(account: dict) -> str:
+def _connections(linked: list[dict], enabled: list[str]) -> str:
+    """The Connected accounts rows: every provider offered or linked."""
+    by = {i["provider"]: i for i in linked}
+    rows = ""
+    for p in dict.fromkeys([*enabled, *by]):
+        if p not in NAMES:
+            continue
+        i = by.get(p)
+        btn = (f"<button class='btn btn--sm' data-unlink={p}>Disconnect</button>" if i
+               else f"<button class='btn btn--sm' data-provider={p}>Connect</button>" if p in enabled else "")
+        sub = f"Connected as {esc(i['email'])}" if i else "Not connected"
+        rows += f"<div class=conn>{ICONS[p]}<div class=txt><b>{NAMES[p]}</b><span>{sub}</span></div>{btn}</div>"
+    return rows
+
+
+def settings_page(account: dict, linked: list[dict] | None = None, enabled: list[str] | None = None) -> str:
     def row(title, sub, body):
         return f"<div class=srow><div class=desc><b>{title}</b><span>{sub}</span></div><div>{body}</div></div>"
 
     def foot(label, cls=""):
         return f"<div class=formfoot><button type=submit class='btn btn--sm {cls}'>{label}</button><div class=msg></div></div>"
-    # the password a change needs appears once the field above it is edited (``data-gated``)
+    # the password a change needs appears once the field above it is edited
+    # (``data-gated``); an account without one confirms with its session
+    has_pw = account["has_password"]
     pw = ("<label>Password <small>to confirm it is you</small>"
-          "<input name=password type=password autocomplete=current-password required></label>")
+          "<input name=password type=password autocomplete=current-password required></label>") if has_pw else ""
     profile = (
         row("Display name", "Shown on Gamma servers next to your username.",
             f"<form id=name><label><span class=sr>Display name</span><input name=display_name value='{esc(account['display_name'])}' maxlength=100 "
@@ -407,17 +497,24 @@ def settings_page(account: dict) -> str:
                 f"<div class=current>{esc(account['email'])} {_email_pill(account)}</div>"
                 "<form id=em data-gated><label>New address<input name=new_email type=email placeholder='name@example.org' required></label>"
                 f"<div class=reveal hidden>{pw}</div>{foot('Send confirmation')}</form>")
-    password = row("Password", "Changing it signs out every other browser and device.",
-                   "<form id=pw><div class=fields><label>Current password<input name=current type=password "
-                   "autocomplete=current-password required></label><label>New password <small>8+ characters</small>"
-                   "<input name=new type=password autocomplete=new-password minlength=8 required></label></div>"
-                   f"{foot('Change password')}</form>")
+    new_pw = ("<label>New password <small>8+ characters</small>"
+              "<input name=new type=password autocomplete=new-password minlength=8 required></label>")
+    if has_pw:
+        password = row("Password", "Changing it signs out every other browser and device.",
+                       "<form id=pw><div class=fields><label>Current password<input name=current type=password "
+                       f"autocomplete=current-password required></label>{new_pw}</div>{foot('Change password')}</form>")
+    else:
+        password = row("Password", "You sign in with a connected account. A password lets you sign in with your "
+                       "e-mail or username too.", f"<form id=pw><div class=fields>{new_pw}</div>{foot('Set password')}</form>")
+    conns = _connections(linked or [], enabled or [])
+    connected = row("Connected accounts", "Sign in with one click instead of a password.",
+                    f"{conns}<div class=msg id=smsg></div>") if conns else ""
     delete = row("Delete account", "Signs everything out and removes the account after a grace period. Gamma servers keep their data.",
                  "<button class='btn btn--sm btn--danger' id=delopen>Delete my account…</button>"
                  f"<form id=del class=reveal hidden>{pw}{foot('Delete my account', 'btn--danger')}</form>")
     inner = (_notice(account)
              + f"<section class=section><h2>Profile</h2>{profile}</section>"
-             + f"<section class=section><h2>Sign-in</h2>{email}{password}</section>"
+             + f"<section class=section><h2>Sign-in</h2>{email}{connected}{password}</section>"
              + f"<section class='section danger'><h2>Danger zone</h2>{delete}</section>")
     script = RESEND_JS + """
 document.querySelectorAll('form[data-gated]').forEach(f => {
@@ -425,14 +522,18 @@ document.querySelectorAll('form[data-gated]').forEach(f => {
   const sync = () => { const v = inp.value.trim(), changed = v !== '' && v !== orig; rev.hidden = !changed; btn.disabled = !changed; };
   inp.addEventListener('input', sync); sync();
 });
-document.getElementById('delopen').onclick = (e) => { e.target.hidden = true; const f = document.getElementById('del'); f.hidden = false; f.querySelector('input').focus(); };
+document.getElementById('delopen').onclick = (e) => { e.target.hidden = true; const f = document.getElementById('del'); f.hidden = false; const i = f.querySelector('input'); if (i) i.focus(); };
+social({link: true});
+document.querySelectorAll('[data-unlink]').forEach(b => b.onclick = async () => { const msg = document.getElementById('smsg'); msg.textContent = ''; b.disabled = true;
+  try { await api('/api/me/identities/' + b.dataset.unlink + '/unlink', {}); location.reload(); } catch (e) { msg.textContent = e.message; b.disabled = false; } });
 bind('name', async (d, msg) => { await api('/api/me', d, 'PATCH'); say(msg, 'Saved.'); });
 bind('user', async (d, msg) => { const r = await api('/api/me/username', d); say(msg, 'Your username is now ' + r.account.username + '.'); setTimeout(() => location.reload(), 900); });
 bind('em', async (d, msg) => { await api('/api/email/change', d); say(msg, 'Check the new address for a confirmation link.'); });
-bind('pw', async (d, msg) => { await api('/api/me/password', d); say(msg, 'Changed. Other devices were signed out.'); document.getElementById('pw').reset(); });
+bind('pw', async (d, msg) => { await api('/api/me/password', d); say(msg, 'Saved. Other devices were signed out.'); document.getElementById('pw').reset(); if (!HAS_PW) setTimeout(() => location.reload(), 900); });
 bind('del', async d => { if (!confirm('Delete this account? This cannot be undone.')) return; await api('/api/me/delete', d); location.href = '/login'; });
 """
-    return app("Settings", "Your profile and how you sign in.", account, "settings", inner, script)
+    return app("Settings", "Your profile and how you sign in.", account, "settings", inner,
+               f"const HAS_PW = {_js(has_pw)};" + script)
 
 
 def admin_page(account: dict) -> str:
@@ -507,7 +608,7 @@ loadAccounts(true);
 
 # --- the authorize page -------------------------------------------------------
 
-def authorize_page(req: dict, account, verify_needed: bool = False) -> str:
+def authorize_page(req: dict, account, verify_needed: bool = False, social: dict | None = None) -> str:
     client = req["client"]
     who = esc(client["name"])
     rid = json.dumps(req["id"])
@@ -530,10 +631,8 @@ def authorize_page(req: dict, account, verify_needed: bool = False) -> str:
                   f"document.getElementById('cancel').onclick = async () => {{ const d = await api('/authorize/cancel', {{request_id: {rid}}}); "
                   f"if (d.redirect) location.href = d.redirect; }};")
         return auth(f"Sign in to {client['name']}", "", inner, script)
-    inner = ("<form id=f><label>E-mail or username<input name=login autocomplete=username required autofocus></label>"
-             "<label>Password<input name=password type=password autocomplete=current-password required></label>"
-             "<button type=submit class='btn btn--primary btn--block'>Sign in</button><div class=msg></div></form>"
-             f"<p class=links><a href=/reset>Forgot your password?</a>{_register_link()}</p>")
+    tiles, social_js = _social(social)
+    inner = f"<form id=f>{_password_fields()}</form>{tiles}{_to_register()}{_terms()}"
     script = (f"bind('f', async d => {{ const r = await api('/authorize/login', {{request_id: {rid}, login: d.login, password: d.password}}); "
-              f"if (r.verify_needed) location.reload(); else location.href = r.redirect; }});")
+              f"if (r.verify_needed) location.reload(); else location.href = r.redirect; }});" + social_js)
     return auth(f"Sign in to {client['name']}", "Use your Gamma Cloud account.", inner, script)

@@ -2,14 +2,20 @@
 # so a broken main (whose merge publishes the Docker image) is caught on
 # the PR instead. Backend tests, frontend unit tests
 # + build, the browser suite against an isolated backend, extension zip;
-# no installers. The merge skill waits for this before merging. Overview:
-# docs/dev/github_actions.md.
+# no installers. The account server (cloud/) is checked by cloud.yml
+# instead, so a PR that only touches it skips this. The merge skill waits
+# for this before merging. Overview: docs/dev/github_actions.md.
 
 name: check
 
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "cloud/**"
+      - ".github/workflows/cloud.yml"
+      - ".claude/skills/update-account-server/**"
+      - "docs/dev/cloud_accounts.md"
 
 concurrency:
   group: check-${{ github.event.pull_request.number }}
@@ -41,23 +47,6 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
       - working-directory: backend
         run: python -m pytest tests -q -n auto --dist loadfile
-
-  # The account server (cloud/): its own requirements, its own tests.
-  cloud:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: cloud/requirements*.txt
-      - working-directory: cloud
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
-      - working-directory: cloud
-        run: python -m pytest tests -q
 
   frontend:
     runs-on: ubuntu-latest

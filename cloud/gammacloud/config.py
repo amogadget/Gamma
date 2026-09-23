@@ -19,6 +19,11 @@ variable with a ``GAMMA_CLOUD_`` prefix; nothing is read from the request.
   the pages).
 - ``GAMMA_CLOUD_DESKTOP_CLIENT_ID`` — the one public OIDC client every local
   Gamma sidecar is (default ``gamma-desktop``).
+- ``GAMMA_CLOUD_GOOGLE_CLIENT_ID`` + ``_SECRET``, ``GAMMA_CLOUD_GITHUB_CLIENT_ID``
+  + ``_SECRET`` — sign in with Google / GitHub (``providers.py``); a provider
+  is offered only when both of its values are set. Their callback URLs are
+  ``<public url>/oauth/<provider>/callback``. ``GAMMA_CLOUD_GOOGLE_ONE_TAP=0``
+  turns off Google's sign-in prompt on the sign-in pages.
 """
 
 import os
@@ -52,11 +57,18 @@ TURNSTILE_SITEKEY = os.environ.get("GAMMA_CLOUD_TURNSTILE_SITEKEY", "")
 
 DESKTOP_CLIENT_ID = os.environ.get("GAMMA_CLOUD_DESKTOP_CLIENT_ID", "") or "gamma-desktop"
 
+GOOGLE_CLIENT_ID = os.environ.get("GAMMA_CLOUD_GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.environ.get("GAMMA_CLOUD_GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_ONE_TAP = os.environ.get("GAMMA_CLOUD_GOOGLE_ONE_TAP", "1") not in ("0", "false", "no")
+GITHUB_CLIENT_ID = os.environ.get("GAMMA_CLOUD_GITHUB_CLIENT_ID", "").strip()
+GITHUB_CLIENT_SECRET = os.environ.get("GAMMA_CLOUD_GITHUB_CLIENT_SECRET", "").strip()
+
 # Lifetimes (seconds).
 PORTAL_SESSION_TTL = 30 * 86400        # sliding: refreshed on use
 VERIFY_TOKEN_TTL = 24 * 3600
 RESET_TOKEN_TTL = 3600
 AUTHORIZE_REQUEST_TTL = 600            # a pending sign-in on the authorize page
+EXTERNAL_LOGIN_TTL = 900               # a Google/GitHub round trip, or the signup form after it
 AUTH_CODE_TTL = 120
 ACCESS_TOKEN_TTL = 3600
 ID_TOKEN_TTL = 600

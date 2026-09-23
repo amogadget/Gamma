@@ -8,12 +8,12 @@ NAS). The service itself is described in
 
 ```
 deploy/
-  compose.yml          account + caddy + backup (a VPS with a public address)
+  compose.yml          account + caddy (a VPS with a public address)
   Caddyfile            TLS for CADDY_HOST, proxied to account:9002
   compose.tunnel.yml   layered on compose.yml: cloudflared instead of caddy
   compose.build.yml    layered on compose.yml: build from ./src instead of pulling
   Dockerfile.local     the image built from a copy of cloud/ (compose.build.yml)
-  .env.example         → .env: public URL, registration mode, SMTP, Turnstile, hostname
+  .env.example         → .env: public URL, registration mode, SMTP, Turnstile, Google/GitHub, hostname
 ```
 
 The whole state of the service is the `data/` folder next to the compose
@@ -125,6 +125,29 @@ above.
   the API and the pages; only `/jwks` is cacheable (5 min).
 - **Access** is NOT used: the portal must be reachable by everyone.
 
+## Sign in with Google and GitHub
+
+Each provider shows up on the sign-in pages once both of its values are in
+`.env`; leave them empty to offer only e-mail and password.
+
+- **Google** (Google Cloud console → APIs & Services): configure the OAuth
+  consent screen (external, app name *Gamma Cloud*, scopes `openid`,
+  `email`, `profile`; publish it), then Credentials → Create OAuth client
+  ID → *Web application*:
+  - Authorized JavaScript origins: `https://account.gammapdf.com` (the
+    one-tap prompt needs it; add `http://localhost` and
+    `http://localhost:9002` for a local test).
+  - Authorized redirect URIs: `https://account.gammapdf.com/oauth/google/callback`.
+  - `GAMMA_CLOUD_GOOGLE_CLIENT_ID` / `_SECRET` in `.env`. The one-tap
+    prompt ("Sign in to gammapdf.com with google.com") is on with it;
+    `GAMMA_CLOUD_GOOGLE_ONE_TAP=0` turns it off.
+- **GitHub** (Settings → Developer settings → OAuth Apps → New): homepage
+  `https://gammapdf.com`, callback
+  `https://account.gammapdf.com/oauth/github/callback`; generate a client
+  secret; `GAMMA_CLOUD_GITHUB_CLIENT_ID` / `_SECRET` in `.env`.
+
+Restart the container after editing `.env` (`docker compose up -d`).
+
 ## Connecting Gamma servers
 
 - **The desktop app / any local Gamma**: Settings → Server → Sign-in →
@@ -143,7 +166,7 @@ above.
 ## Updating
 
 ```bash
-cd ~/Container/gamma-account && docker compose pull account backup && docker compose up -d
+cd ~/Container/gamma-account && docker compose pull account && docker compose up -d
 ```
 
 (`/update-account-server` does this after checking the publish finished,
@@ -156,9 +179,10 @@ build, so a rollback is the previous image plus that copy.
 
 ## Backups
 
-The `backup` service snapshots `cloud.db` daily into `data/backups/`
-(`*-manual.db`, 14 kept). Copy that folder off the host — rclone to R2,
-restic, or a nightly `scp` — and treat it as a secret.
+There is no scheduled backup. The server copies `cloud.db` to
+`data/backups/*-v<N>.db` before a schema upgrade (the last 3 kept), and
+`manage.py backup` takes a `*-manual.db` on demand. Treat any copy as a
+secret.
 
 ## The tunnel variant (a NAS)
 

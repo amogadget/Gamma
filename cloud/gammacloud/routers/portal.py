@@ -5,7 +5,8 @@ from contextlib import closing
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import accounts, db, oidc, pages, sessions
+from .. import accounts, db, identities, oidc, pages, providers, sessions
+from .external import sign_in_page
 
 router = APIRouter()
 _HTML = {"Cache-Control": "no-store"}
@@ -43,7 +44,9 @@ def settings(request: Request):
     found = _signed_in(request)
     if not found:
         return RedirectResponse("/login", status_code=302)
-    return HTMLResponse(pages.settings_page(found[0]), headers=_HTML)
+    with closing(db.connect()) as conn:
+        linked = identities.of_account(conn, found[0]["id"])
+    return HTMLResponse(pages.settings_page(found[0], linked, providers.enabled()), headers=_HTML)
 
 
 @router.get("/admin", response_class=HTMLResponse)
@@ -61,12 +64,12 @@ def login(request: Request):
     with closing(db.connect()) as conn:
         if sessions.resolve(conn, request):
             return RedirectResponse("/", status_code=302)
-    return HTMLResponse(pages.login_page(), headers=_HTML)
+    return sign_in_page(request, pages.login_page)
 
 
 @router.get("/register", response_class=HTMLResponse)
-def register():
-    return HTMLResponse(pages.register_page(), headers=_HTML)
+def register(request: Request):
+    return sign_in_page(request, pages.register_page)
 
 
 @router.get("/verify", response_class=HTMLResponse)

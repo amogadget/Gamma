@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 from . import config
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class NewerDataError(RuntimeError):
@@ -57,6 +57,25 @@ def new_id() -> str:
     return secrets.token_urlsafe(15)
 
 
+# One Google/GitHub sign-in in flight (``identities.py``): ``redirect`` while
+# the browser is at the provider, ``signup`` once the identity is known but
+# no account has it yet (the claims wait here for the username form). Keyed
+# by the hash of the browser's ``gc_ext`` cookie.
+EXTERNAL_LOGINS = """CREATE TABLE IF NOT EXISTS external_logins (
+        token_hash TEXT PRIMARY KEY,
+        stage TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        next TEXT NOT NULL DEFAULT '/',
+        request_id TEXT NOT NULL DEFAULT '',
+        link_account TEXT NOT NULL DEFAULT '',
+        subject TEXT NOT NULL DEFAULT '',
+        email TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        handle TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    )"""
+
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
@@ -70,8 +89,9 @@ SCHEMA = [
         created_at TEXT NOT NULL,
         deleted_at TEXT
     )""",
-    # An account signed in through an outside provider (google, github) —
-    # v2; the table exists so the shape is stable from the first version.
+    # An account's sign-in through an outside provider (google, github):
+    # ``identities.py``. ``email`` is the provider's address at the last
+    # sign-in, shown on the Settings page.
     """CREATE TABLE IF NOT EXISTS identities (
         provider TEXT NOT NULL,
         subject TEXT NOT NULL,
@@ -80,6 +100,7 @@ SCHEMA = [
         created_at TEXT NOT NULL,
         PRIMARY KEY (provider, subject)
     )""",
+    EXTERNAL_LOGINS,
     """CREATE TABLE IF NOT EXISTS portal_sessions (
         token_hash TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id),
@@ -214,8 +235,13 @@ def audit(conn, event: str, account_id: str = "", actor: str = "", detail: str =
 
 # --- upgrades -----------------------------------------------------------------
 
+def _step_external_logins(conn) -> None:
+    conn.execute(EXTERNAL_LOGINS)
+
+
 STEPS: list = [
     # (version, name, fn(conn)) — append only; see docs/dev/cloud_accounts.md.
+    (2, "external_logins", _step_external_logins),
 ]
 
 

@@ -8,5 +8,3 @@ services:
     build:
       context: ./src
       dockerfile: deploy/Dockerfile.local
-  backup:
-    image: gamma-cloud:local

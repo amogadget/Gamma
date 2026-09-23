@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from .. import accounts, db, oidc, pages, ratelimit, sessions
 from ..oidc import OAuthError
+from .external import sign_in_page
 
 router = APIRouter()
 
@@ -60,9 +61,30 @@ def authorize(request: Request):
             return HTMLResponse(pages.error_page("Cannot sign in", e.description), status_code=400)
         account = sessions.resolve(conn, request)
         conn.commit()
+    return _authorize_page(request, req, account)
+
+
+def _authorize_page(request: Request, req: dict, account):
     if account and not account["email_verified_at"]:
-        return HTMLResponse(pages.authorize_page(req, account, verify_needed=True))
-    return HTMLResponse(pages.authorize_page(req, account), headers={"Cache-Control": "no-store"})
+        return HTMLResponse(pages.authorize_page(req, account, verify_needed=True), headers={"Cache-Control": "no-store"})
+    if account:
+        return HTMLResponse(pages.authorize_page(req, account), headers={"Cache-Control": "no-store"})
+    return sign_in_page(request, lambda social: pages.authorize_page(req, None, social=social), request_id=req["id"])
+
+
+@router.get("/authorize/resume")
+def authorize_resume(request: Request, request_id: str = ""):
+    """The authorize page again for a request still pending — where a
+    Google/GitHub sign-in started there comes back when it cannot finish
+    on its own (cancelled, or the account's e-mail is unconfirmed)."""
+    with closing(db.connect()) as conn:
+        req = oidc.pending(conn, request_id)
+        account = sessions.resolve(conn, request)
+        conn.commit()
+    if not req:
+        return HTMLResponse(pages.error_page("Cannot sign in", "This sign-in request expired. Start again from the app."),
+                            status_code=400)
+    return _authorize_page(request, req, account)
 
 
 class AuthorizeLogin(BaseModel):

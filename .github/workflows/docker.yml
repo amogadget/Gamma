@@ -1,6 +1,7 @@
 # Server image only. Runs on every push to main (`latest`) — the only
 # workflow a merge triggers; desktop.yml and extension.yml are dispatched by
-# the `release` skill. The desktop
+# the `release` skill. A merge that only touches the account server (cloud/)
+# does not rebuild it; that image is cloud.yml's, published by dispatch. The desktop
 # release (desktop.yml) dispatches this workflow on its new `v<version>` tag
 # with the version as input, which adds the `<version>` and `<major.minor>`
 # image tags — a `push: tags` trigger would not do it, since tags created
@@ -10,6 +11,11 @@ name: Build and publish Docker image
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "cloud/**"
+      - ".github/workflows/cloud.yml"
+      - ".claude/skills/update-account-server/**"
+      - "docs/dev/cloud_accounts.md"
   workflow_dispatch:
     inputs:
       version:
@@ -67,37 +73,3 @@ jobs:
             GAMMA_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  # The account server (cloud/Dockerfile) — one small image, amd64 only:
-  # it runs on one box behind Cloudflare (docs/dev/cloud_accounts.md).
-  cloud:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE_NAME }}-cloud
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}},value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=sha
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: cloud/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=cloud
-          cache-to: type=gha,mode=max,scope=cloud
