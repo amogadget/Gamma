@@ -170,7 +170,7 @@ after a green `test`): `cloud/Dockerfile` for amd64, tagged `latest` and
 branch that holds the work (`gh workflow run cloud.yml --ref dev`) — nothing
 needs to reach `main`, so `:latest` is whatever was published last, from
 whichever branch; the `sha-` tag and the image's revision label say which
-commit. The `update-account-server` skill dispatches it, then deploys.
+commit. The `build-cloud` skill dispatches it; `update-account-server` builds through it, then deploys.
 Like every dispatch, it needs the file on `main` once before the first run.
 
 ## Running and watching by hand
@@ -181,7 +181,7 @@ gh workflow run desktop.yml --ref main -f publish=false      # build check only
 gh workflow run desktop.yml --ref main -f prerelease=true -f version=1.2.0-rc1
 gh workflow run extension.yml --ref main                     # extension release — the `release` skill
 gh workflow run docker.yml --ref v0.2.3 -f version=0.2.3     # re-tag an image
-gh workflow run cloud.yml --ref dev                          # test + publish the account server — the `update-account-server` skill
+gh workflow run cloud.yml --ref dev                          # test + publish the account server — the `build-cloud` skill
 
 gh run list --limit 5
 gh run watch <run-id> --exit-status

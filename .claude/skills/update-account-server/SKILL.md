@@ -10,7 +10,7 @@ description: Publish the Gamma Cloud account server (ghcr.io/tim4431/gamma-cloud
 `account`, `caddy`; Cloudflare in front). The account server ships on its
 own: `.github/workflows/cloud.yml`, dispatched from ANY branch, runs the
 `cloud/` tests and publishes `ghcr.io/tim4431/gamma-cloud:latest` (plus
-`:sha-<short>`); this skill dispatches it and deploys the result. A merge to
+`:sha-<short>`); this skill builds through the `build-cloud` skill and deploys the result. A merge to
 `main` publishes nothing for the account server. Deployment details:
 [cloud/deploy/README.md](../../../cloud/deploy/README.md); workflows:
 [docs/dev/github_actions.md](../../../docs/dev/github_actions.md).
@@ -21,29 +21,14 @@ never read them out, copy them off the host, or overwrite them.
 
 ## Publish from the branch
 
-What ships is what is COMMITTED on the branch (normally `dev`); never commit
-here.
+Follow the `build-cloud` skill's steps (`.claude/skills/build-cloud/SKILL.md`):
+what ships is what is COMMITTED and pushed on the branch (normally `dev`);
+never commit here. A red run → stop; nothing was published. Note the run's
+`headSha` to check against after the update.
 
-```bash
-git status --short cloud/                    # uncommitted cloud/ changes → say they will NOT ship, ask whether to go on
-git fetch -q origin
-git log --oneline origin/<branch>..HEAD      # local commits not pushed yet → git push origin <branch>
-gh workflow run cloud.yml --ref <branch>
-gh run list --workflow cloud.yml --branch <branch> --event workflow_dispatch --limit 1 --json databaseId,headSha,status
-gh run watch <run-id> --exit-status
-```
-
-- The run's `headSha` must be the branch head you meant to ship; note it to
-  check against after the update.
-- `test` red → stop and report (`gh run view <run-id> --log-failed`); the
-  `publish` job does not run and `:latest` stays on the previous build.
-- `gh workflow run` answering *could not find any workflows named cloud.yml*
-  means `cloud.yml` is not on `main` yet: `workflow_dispatch` is read from the
-  default branch, so the file needs one merge to `main` (the `merge` skill)
-  before the first dispatch. After that, dispatch works from any branch.
-- Only to redeploy an image already published (no new build): skip the
-  dispatch and use the newest successful run's `headSha`
-  (`gh run list --workflow cloud.yml --limit 5`).
+Only to redeploy an image already published (no new build): skip the build
+and use the newest successful run's `headSha`
+(`gh run list --workflow cloud.yml --limit 5`).
 
 What is running now (the image's commit label):
 
