@@ -4,12 +4,13 @@ import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
 import ImportReviewDialog from "../transfers/ImportReviewDialog";
-import { parsePdfCitation } from "../pdf/pdfCitation.js";
+import { parseGammaLink } from "../shared/model/gammaLinks.js";
 import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
   DockWindow,
+  GammaNavContext,
   OpenTabs,
   PopoverAnchor,
   useCopied,
@@ -764,7 +765,11 @@ function LibraryApp() {
   const [inputUrl, setInputUrl] = useState(initialUrl); // current page's source URL (shown in page properties)
   const [addUrl, setAddUrl] = useState(""); // "+" popover: URL to open
   const [pdfUrl, setPdfUrl] = useState("");
-  const [pdfCitation, setPdfCitation] = useState(() => parsePdfCitation(window.location.href, window.location.origin));
+  // A pasted citation URL on a cold load opens the paper at the passage.
+  const [pdfCitation, setPdfCitation] = useState(() => {
+    const link = parseGammaLink(window.location.href, window.location.origin);
+    return link?.kind === "citation" ? link : null;
+  });
   const [docId, setDocId] = useState("");
   const [focusedBlockId, setFocusedBlockId] = useState("");
   const [focusedBlock, setFocusedBlock] = useState(null);
@@ -3839,6 +3844,40 @@ function LibraryApp() {
     setBlocks(next);
   }
 
+  // Gamma's own links (chat citations, copied page/block links) open in
+  // place wherever they are rendered — the chat, a note, an embed card —
+  // through GammaNavContext.
+  async function openPageLink(id, citation) {
+    if (shareMode && id !== focusedBlockId) return;
+    if (citation && id === focusedBlockId) pushNav();
+    setPdfCitation(citation ? { ...citation } : null);
+    if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
+    if (citation) { setPdfHidden(false); setPhonePanel(null); }
+  }
+
+  // A [[ref]] chip or a copied block link: scroll to it on this page, else
+  // open the page that holds it.
+  async function openBlockLink(id) {
+    function findBlock(list) {
+      for (const b of list || []) {
+        if (b.id === id) return b;
+        const found = findBlock(b.children || []);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (findBlock(blocks)) {
+      suppressAutosaveRef.current = true;
+      pendingBlockScrollRef.current = id;
+      setBlocks((prev) => expandToBlock(prev, id));
+    } else {
+      pushNav(); // block-ref click = link jump to another page
+      pendingBlockScrollRef.current = id;
+      const rootId = refCache[id]?.page_root_id;
+      await openBlock(rootId && rootId !== id ? rootId : id);
+    }
+  }
+
   async function onFetchRefs(ids) {
     try {
       const res = await fetch(`/api/block-search?ids=${ids.join(",")}`);
@@ -6505,6 +6544,15 @@ function LibraryApp() {
   }
 
   // Login page state
+  // One navigation for every Gamma link card on screen (chat, notes, embeds).
+  // Declared above the loading/unavailable returns below — it is a hook.
+  // Rebuilt when what the handlers close over changes; a click reads the
+  // current value, so the cards themselves never re-render for navigation.
+  const gammaNav = useMemo(
+    () => ({ openPage: openPageLink, openBlock: openBlockLink }),
+    [focusedBlockId, blocks, refCache, shareMode],
+  );
+
   if (workspaceUnavailable) return <WorkspaceUnavailablePage />;
   if (authUser === null) return <AuthLoading />;
 
@@ -7599,31 +7647,7 @@ function LibraryApp() {
                   refCache,
                   onFetchRefs,
                   onCacheRef,
-                  onBlockRefClick: async (id) => {
-                    function findBlock(list) {
-                      for (const b of list || []) {
-                        if (b.id === id) return b;
-                        const found = findBlock(b.children || []);
-                        if (found) return found;
-                      }
-                      return null;
-                    }
-                    if (findBlock(blocks)) {
-                      suppressAutosaveRef.current = true;
-                      pendingBlockScrollRef.current = id;
-                      setBlocks((prev) => expandToBlock(prev, id));
-                    } else {
-                      pushNav(); // block-ref click = link jump to another page
-                      pendingBlockScrollRef.current = id;
-                      const cached = refCache[id];
-                      const rootId = cached?.page_root_id;
-                      if (rootId && rootId !== id) {
-                        await openBlock(rootId);
-                      } else {
-                        await openBlock(id);
-                      }
-                    }
-                  },
+                  onBlockRefClick: openBlockLink,
                   // Functional updates: these two fire from editor lifecycle
                   // (CodeMirror onChange, blur on unmount when a row moves in
                   // the tree), where the closure's tree can be a render stale
@@ -7835,13 +7859,7 @@ function LibraryApp() {
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
           openTabs={openTabs}
-          onOpenPage={async (id, citation) => {
-            if (shareMode && id !== focusedBlockId) return;
-            if (citation && id === focusedBlockId) pushNav();
-            setPdfCitation(citation ? { ...citation } : null);
-            if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
-            if (citation) { setPdfHidden(false); setPhonePanel(null); }
-          }}
+          onOpenPage={openPageLink}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatNotes={chatNotes} setChatNotes={setChatNotes} focusedNote={focusedNote}
           chatImages={chatImages} setChatImages={setChatImages}
@@ -8352,6 +8370,7 @@ function LibraryApp() {
   );
 
   return (
+    <GammaNavContext.Provider value={gammaNav}>
     <div
       ref={appRef}
       className={`app layout-horizontal ${pseudoFullscreen ? "pseudoFullscreen" : ""} ${isPhone ? "phoneUI" : ""}`}
@@ -9438,5 +9457,6 @@ function LibraryApp() {
         </ContextMenu>
       ) : null}
     </div>
+    </GammaNavContext.Provider>
   );
 }

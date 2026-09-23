@@ -6,7 +6,9 @@ export function PdfCitationOverlay({ citation, wrapRef, ready }) {
   const scrolled = useRef(null);
   useLayoutEffect(() => {
     setResult(null);
-    if (!citation || !ready || !wrapRef.current) return;
+    // A citation without a quote just points at a page (the viewer already
+    // scrolled there) — nothing to locate, nothing to mark.
+    if (!citation?.quote || !ready || !wrapRef.current) return;
     const frame = requestAnimationFrame(() => {
       const found = citationRects(ready.runs, wrapRef.current, citation.quote);
       setResult(found);
@@ -28,7 +30,7 @@ export function PdfCitationOverlay({ citation, wrapRef, ready }) {
     });
     return () => cancelAnimationFrame(frame);
   }, [citation, ready, wrapRef]);
-  if (!citation || !result) return null;
+  if (!citation?.quote || !result) return null;
   return <>
     {result.rects.map((r, i) => <div key={i} className="pdfCitationMark" aria-hidden="true"
       style={{ left: `${r.left}%`, top: `${r.top}%`, width: `${r.width}%`, height: `${r.height}%` }} />)}

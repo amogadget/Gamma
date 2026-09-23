@@ -13,12 +13,30 @@ custom prompt too. A quote should fit on one page and identify one passage.
 Copy it verbatim, including parenthetical references. A shorter distinctive
 substring is also valid; do not add a period where the source continues.
 
-The link is plain Markdown, so it persists with the reply. Clicking it
-(`ChatMarkdown` → `onOpenPage(id, citation)`) opens the library page, waits for
-that PDF and the cited page's text layer, then matches the quote in the
-browser; a pasted link on a cold load works the same way
-(`parsePdfCitation` on the initial URL). Only the cited page is force-rendered.
-No document scan and no server-side coordinates.
+The link is plain Markdown, so it persists with the reply — and renders the
+same wherever it appears. `shared/model/gammaLinks.js` classifies one link
+into this library (`parseGammaLink` → `block` / `page` / `citation`), and
+`GammaLinkCard` (`shared/ui/Widgets.jsx`) draws it as a card in the chat and
+in a note's rendered markdown alike. Clicking it calls `openPage(id,
+citation)` from `GammaNavContext`, which App provides once: the library page
+opens in place, waits for that PDF and the cited page's text layer, then
+matches the quote in the browser. A pasted link on a cold load works the same
+way (the same classifier on the initial URL). Only the cited page is
+force-rendered. No document scan and no server-side coordinates.
+
+The quote is optional: `?page=…&pdf_page=N` alone opens the paper at that
+page with nothing highlighted.
+
+**The origin is not part of the test.** A server moves — a desktop sidecar on
+`127.0.0.1`, the NAS URL, a workspace mirrored onto another server — and
+links written before the move still name this library's pages. A link whose
+host differs from the tab's (`foreign`) is claimed only when its id resolves
+locally, which the note renderer checks through the same `[[ref]]` batch
+lookup it uses for the card's title; an id that doesn't resolve stays an
+ordinary external link, which is what a link to somebody else's Gamma should
+be. Pasting normalises the other way: the "Paste as" chooser offers
+**Citation** / **Page link** for a recognised link and stores it host- and
+workspace-free (`relativeGammaLink`), so new notes never learn a host.
 
 `pdf/pdfCitation.js` keeps source offsets through Unicode ligature folding,
 dehyphenation and whitespace normalization. Fallback passes tolerate differing
@@ -61,7 +79,8 @@ cancelled. The marks (`.pdfCitationMark`, the translation shimmer) ignore
 pointer input and never touch the annotation or note store. A click outside
 the passage or Escape removes them; there is no close button.
 
-Coverage: `frontend/tests/pdfCitation.test.mjs`, the citation scenario in
+Coverage: `frontend/tests/gammaLinks.test.mjs` (the classifier),
+`frontend/tests/pdfCitation.test.mjs`, the citation scenario in
 `frontend/tests/e2e/scenarios/pdf.mjs`, and `backend/tests/test_pdf_citations.py`.
 The frontend fixture includes the failing PDF.js runs from physical
 pages 20–22 of Krantz et al., *A quantum engineer's guide to superconducting

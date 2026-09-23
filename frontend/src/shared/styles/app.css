@@ -4040,8 +4040,10 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   cursor: pointer;
 }
 .chatToolActionHead.plain { cursor: default; }
-/* Compact source cards stay inline with a reply, including short PDF citations. */
-.chatLinkCard {
+/* Gamma link cards: a link into this library (a chat source or citation, the
+   same link pasted into a note) and the chat's external links. Inline with
+   the surrounding text, so a citation mid-sentence stays one line. */
+.gammaLinkCard {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -4060,16 +4062,26 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   vertical-align: baseline;
   cursor: pointer;
 }
-.chatLinkCard:hover {
+.gammaLinkCard:hover {
   background: var(--accent-bg-light);
   border-color: var(--accent);
 }
-.chatLinkCard:focus-visible {
+.gammaLinkCard:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.chatLinkCard > svg { flex: none; }
-.chatLinkLabel { min-width: 0; overflow-wrap: anywhere; }
+.gammaLinkCard > svg { flex: none; }
+.gammaLinkLabel { min-width: 0; overflow-wrap: anywhere; }
+/* The resolved page title beside an author-written label ("p. 3 · Paper"). */
+.gammaLinkSrc {
+  color: var(--text-muted);
+  font-weight: 400;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gammaLinkSrc::before { content: "·"; margin-right: 5px; }
 .chatToolActionHead:hover:not(.plain) { color: var(--text); }
 .chatToolAction.err .chatToolActionHead { color: var(--danger); }
 .chatToolActionHead svg { flex: none; }
