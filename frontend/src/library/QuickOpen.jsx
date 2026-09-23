@@ -16,8 +16,21 @@ export default function QuickOpen({ open, onClose, pages, recentViews, openTabs,
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listRef = useRef(null);
+  const inputRef = useRef(null);
 
   useEffect(() => { if (open) { setQuery(""); setActive(0); } }, [open]);
+  // Modal focus: autoFocus only runs at mount, and a page that finishes
+  // loading right after Ctrl+P may focus its editor — the keystrokes meant
+  // for the palette would land in the page. Pull focus back while open.
+  useEffect(() => {
+    if (!open) return undefined;
+    const hold = (e) => {
+      const input = inputRef.current;
+      if (input && !input.closest('[role="dialog"]')?.contains(e.target)) input.focus();
+    };
+    document.addEventListener("focusin", hold, true);
+    return () => document.removeEventListener("focusin", hold, true);
+  }, [open]);
   useEffect(() => { setActive(0); }, [query]);
   useEffect(() => {
     listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
@@ -49,6 +62,7 @@ export default function QuickOpen({ open, onClose, pages, recentViews, openTabs,
         <div className="quickOpenInput">
           <SearchIcon size={15} />
           <input
+            ref={inputRef}
             autoFocus
             className="searchInput"
             placeholder="Search pages by title"
