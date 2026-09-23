@@ -45,6 +45,8 @@ services:
     env_file: .env
     volumes:
       - ./data:/data
+    healthcheck:
+      disable: true   # the image's check probes the web server, which this service does not run
     entrypoint: ["sh", "-c"]
     command:
       - |
