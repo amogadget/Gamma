@@ -109,6 +109,7 @@ def public(account) -> dict:
         "email_verified": bool(account["email_verified_at"]), "display_name": account["display_name"],
         "plan": account["plan"], "is_admin": bool(account["is_admin"]), "created_at": account["created_at"],
         "has_password": bool(account["password_hash"]),
+        "app_signed_in": bool(account["app_signed_in_at"]),
     }
 
 
@@ -286,7 +287,10 @@ def set_display_name(conn, account_id: str, name: str) -> None:
 
 
 def revoke_everything(conn, account_id: str) -> None:
+    """Every browser, every grant with its access tokens, and every code
+    minted but not yet exchanged (it would become a new grant)."""
     conn.execute("DELETE FROM portal_sessions WHERE account_id = ?", (account_id,))
+    conn.execute("DELETE FROM oauth_codes WHERE account_id = ?", (account_id,))
     conn.execute("UPDATE grants SET revoked_at = ?, refresh_hash = NULL WHERE account_id = ? AND revoked_at IS NULL",
                  (now(), account_id))
     conn.execute("DELETE FROM access_tokens WHERE account_id = ?", (account_id,))

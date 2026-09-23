@@ -152,9 +152,11 @@ def delete_user(username):
         if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
             print(f"User '{username}' not found.")
             return
+        held = cloud_auth.refresh_token_of(username)
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
         conn.execute("DELETE FROM identities WHERE username = ?", (username,))
         conn.commit()
+    cloud_auth.revoke_refresh(held)
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
@@ -243,12 +245,14 @@ def link_identity(username, subject, cloud_username, email=""):
 
 def unlink_identity(username):
     """Detach an account's Gamma Cloud identity and sign it out everywhere."""
+    held = cloud_auth.refresh_token_of(username)
     with connect_users_db() as conn:
         if not cloud_auth.unlink(conn, username):
             print(f"'{username}' is not linked to Gamma Cloud.")
             return
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
         conn.commit()
+    cloud_auth.revoke_refresh(held)
     print(f"Unlinked '{username}'. Set a password with set-password if it has none.")
 
 

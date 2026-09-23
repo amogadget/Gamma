@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from .. import accounts, db, oidc
 from ..accounts import Problem
-from .accounts import portal_account, send_verify
+from .accounts import portal_account, send_mail, verify_message
 
 router = APIRouter(prefix="/api/admin")
 
@@ -91,8 +91,9 @@ def admin_resend_verify(account_id: str, request: Request):
             raise HTTPException(404, "no such account")
         if account["email_verified_at"]:
             return {"ok": True, "already": True}
-        send_verify(conn, account)
+        message = verify_message(conn, account)
         conn.commit()
+    send_mail(*message)
     return {"ok": True}
 
 

@@ -59,12 +59,14 @@ def cloud_callback(request: Request, code: str = "", state: str = "", error: str
     ratelimit.check(f"cloud-callback:ip:{ratelimit.client_ip(request)}", 30, 600)
     if error:
         return _login_redirect(error_description or ("Sign-in cancelled." if error == "access_denied" else error))
+    refresh = ""
     try:
         claims, tokens, next_path = cloud_auth.exchange(request, code=code, state=state)
-        claims["_refresh_token"] = tokens.get("refresh_token", "")
+        refresh = claims["_refresh_token"] = tokens.get("refresh_token", "")
         username = cloud_auth.resolve_account(claims)
     except CloudAuthError as e:
         log.info(f"cloud sign-in refused: {e}")
+        cloud_auth.revoke_later([refresh])  # a refused sign-in leaves no device behind at the account server
         return _login_redirect(str(e))
     token = new_session(username)
     resp = RedirectResponse(next_path, status_code=302, headers={"Cache-Control": "no-store"})
@@ -84,6 +86,7 @@ async def cloud_unlink(request: Request):
     password, so unlinking would lock it out: refused until a password is
     set."""
     user = require_personal_user(request, "unlink from a browser session")
+    held = cloud_auth.refresh_token_of(user)
     with connect_users_db() as conn:
         row = conn.execute("SELECT password_hash FROM users WHERE username = ?", (user,)).fetchone()
         if not row or not row[0]:
@@ -91,5 +94,6 @@ async def cloud_unlink(request: Request):
         if not cloud_auth.unlink(conn, user):
             raise HTTPException(404, "no Gamma Cloud account is linked")
         conn.commit()
+    cloud_auth.revoke_later([held])
     log.info(f"cloud sign-in: {user} unlinked")
     return {"ok": True}

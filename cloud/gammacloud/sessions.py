@@ -8,6 +8,8 @@ down) and a session older than ``PORTAL_SESSION_TTL`` since it was last seen
 is gone.
 """
 
+import re
+
 from fastapi import Request
 
 from . import accounts, config
@@ -16,6 +18,7 @@ from .ratelimit import agent_of, ip_of
 
 COOKIE = "gc_session"
 MAX_PER_ACCOUNT = 20
+ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def create(conn, account_id: str, request: Request | None) -> str:
@@ -50,6 +53,26 @@ def resolve(conn, request: Request):
     if (parse(now()) - parse(row["last_seen_at"])).total_seconds() > 3600:
         conn.execute("UPDATE portal_sessions SET last_seen_at = ? WHERE token_hash = ?", (now(), row["token_hash"]))
     return account
+
+
+def of_account(conn, account_id: str, request: Request) -> list[dict]:
+    """An account's signed-in browsers, the latest seen first; ``current``
+    is the one asking. A row's ``id`` is the head of its token's hash:
+    enough to name it, useless as a cookie."""
+    mine = token_hash(request.cookies.get(COOKIE) or "")
+    rows = conn.execute("SELECT * FROM portal_sessions WHERE account_id = ? AND last_seen_at >= ? "
+                        "ORDER BY last_seen_at DESC", (account_id, after(-config.PORTAL_SESSION_TTL))).fetchall()
+    return [{"id": r["token_hash"][:16], "created_at": r["created_at"], "last_seen_at": r["last_seen_at"], "ip": r["ip"],
+             "user_agent": r["user_agent"], "current": r["token_hash"] == mine} for r in rows]
+
+
+def end(conn, account_id: str, session_id: str) -> bool:
+    """Sign one of an account's browsers out by its ``of_account`` id."""
+    if not ID_RE.match(session_id or ""):
+        return False
+    cur = conn.execute("DELETE FROM portal_sessions WHERE account_id = ? AND substr(token_hash, 1, 16) = ?",
+                       (account_id, session_id))
+    return bool(cur.rowcount)
 
 
 def drop(conn, request: Request) -> None:

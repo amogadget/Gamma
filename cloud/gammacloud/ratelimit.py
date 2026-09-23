@@ -12,12 +12,13 @@ _buckets: dict[str, list] = defaultdict(lambda: [0.0, 0])
 
 
 def client_ip(request: Request) -> str:
-    """Trusts the first X-Forwarded-For hop (Cloudflare sets it), else the
-    socket peer."""
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "?"
+    """Cloudflare's ``CF-Connecting-IP`` (Cloudflare sets it and replaces any
+    a client sends), else the connection's peer. ``X-Forwarded-For`` is never
+    read here: its first hop is whatever the client wrote, and behind Caddy
+    it is only Cloudflare's own address. The origin must be reachable
+    through Cloudflare alone for the header to be trusted
+    (cloud/deploy/README.md)."""
+    return request.headers.get("cf-connecting-ip", "").strip() or (request.client.host if request.client else "?")
 
 
 def ip_of(request: Request | None) -> str:

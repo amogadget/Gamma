@@ -23,8 +23,9 @@ ISSUER = "https://account.test"
 
 
 class FakeAccountServer:
-    """Answers the three HTTP calls the client makes: discovery, JWKS and
-    the token endpoint. ``person`` is who the next sign-in is."""
+    """Answers the HTTP calls the client makes: discovery, JWKS, the token
+    and the revocation endpoints. ``person`` is who the next sign-in is;
+    ``revoked`` the refresh tokens the client gave back."""
 
     def __init__(self):
         self.key = ed25519.Ed25519PrivateKey.generate()
@@ -32,8 +33,11 @@ class FakeAccountServer:
         self.person = {"sub": "sub-ca_alice", "preferred_username": "ca_alice", "email": "ca_alice@example.org", "email_verified": True,
                        "name": "Alice", "plan": "free"}
         self.token_calls = []
+        self.token_agents = []
         self.aud = None  # override the audience of the next ID token
         self.refresh = "rt-1"
+        self.revoked = []
+        self.revoke_fails = False
 
     def jwk(self):
         raw = self.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
@@ -49,12 +53,18 @@ class FakeAccountServer:
     def http(self, url, data=None, headers=None):
         if url == ISSUER + "/.well-known/openid-configuration":
             return {"issuer": ISSUER, "authorization_endpoint": ISSUER + "/authorize", "token_endpoint": ISSUER + "/token",
-                    "jwks_uri": ISSUER + "/jwks"}
+                    "jwks_uri": ISSUER + "/jwks", "revocation_endpoint": ISSUER + "/revoke"}
+        if url == ISSUER + "/revoke":
+            if self.revoke_fails:
+                raise cloud_auth.CloudAuthError("cannot reach the account server")
+            self.revoked.append(parse_qs(data.decode())["token"][0])
+            return {}
         if url == ISSUER + "/jwks":
             return {"keys": [self.jwk()]}
         if url == ISSUER + "/token":
             form = {k: v[0] for k, v in parse_qs(data.decode()).items()}
             self.token_calls.append(form)
+            self.token_agents.append((headers or {}).get("User-Agent", ""))
             code = json.loads(base64.urlsafe_b64decode(form["code"] + "==").decode())
             challenge = base64.urlsafe_b64encode(hashlib.sha256(form["code_verifier"].encode()).digest()).rstrip(b"=").decode()
             if challenge != code["challenge"] or form["redirect_uri"] != code["redirect_uri"]:
@@ -70,6 +80,8 @@ class FakeAccountServer:
 def cloud(monkeypatch):
     fake = FakeAccountServer()
     monkeypatch.setattr(cloud_auth, "_http", fake.http)
+    # revocation runs on a thread in the server; here it runs inline so the asserts see it
+    monkeypatch.setattr(cloud_auth, "revoke_later", lambda tokens: [cloud_auth.revoke_refresh(t) for t in tokens if t])
     monkeypatch.setenv("GAMMA_CLOUD_ISSUER", ISSUER)
     monkeypatch.delenv("GAMMA_CLOUD_CLIENT_ID", raising=False)
     monkeypatch.delenv("GAMMA_CLOUD_CLIENT_SECRET", raising=False)
@@ -124,6 +136,8 @@ def test_refuse_policy(cloud):
     r = callback(c, start(c))
     assert "not linked" in error_of(r)
     assert c.get("/api/session").json()["user"] is None
+    # the refused sign-in's refresh token went back: no device is left at the account server
+    assert cloud.revoked == ["rt-1"]
 
 
 def test_provision_policy_creates_account(cloud, monkeypatch):
@@ -144,7 +158,24 @@ def test_provision_policy_creates_account(cloud, monkeypatch):
     c2 = browser()
     assert callback(c2, start(c2)).headers["location"] == "/"
     assert c2.get("/api/session").json()["user"] == "ca_alice"
-    assert cloud_auth.refresh_token_of("ca_alice") == "rt-1"
+    assert cloud_auth.refresh_token_of("ca_alice") == "rt-1" and cloud.revoked == []
+    # a newer sign-in replaces the refresh token and gives the old one back
+    cloud.refresh = "rt-2"
+    c3 = browser()
+    assert callback(c3, start(c3)).headers["location"] == "/"
+    assert cloud_auth.refresh_token_of("ca_alice") == "rt-2" and cloud.revoked == ["rt-1"]
+
+
+def test_sign_in_names_this_install(cloud, monkeypatch):
+    monkeypatch.setenv("GAMMA_CLOUD_POLICY", "provision")
+    cloud.person.update({"sub": "sub-ca_uma", "preferred_username": "ca_uma", "email": "ca_uma@example.org"})
+    for _ in range(2):
+        c = browser()
+        callback(c, start(c))
+    first, second = cloud.token_calls[-2:]
+    assert first["device_id"] == second["device_id"] and len(first["device_id"]) >= 16  # stable per install
+    assert first["device_name"]
+    assert cloud.token_agents[-1].startswith("Gamma/") and "; http://testserver)" in cloud.token_agents[-1]
 
 
 def test_claim_policy_links_existing_username(cloud, monkeypatch):
@@ -159,6 +190,7 @@ def test_claim_policy_links_existing_username(cloud, monkeypatch):
     # ca_bob has a password, so unlinking is allowed and signs the identity off
     assert c.post("/api/auth/cloud/unlink").json()["ok"] is True
     assert c.get("/api/auth/cloud/status").json()["identity"] is None
+    assert cloud.revoked == ["rt-1", "rt-1"]  # the refused first try's token, then the unlinked one's
     # a different cloud account with the same username cannot claim a linked or taken name
     r = callback(c, start(c))
     assert r.headers["location"] == "/"  # ca_bob re-claims (unlinked, claim policy)
@@ -196,6 +228,9 @@ def test_link_signed_in_account(cloud):
     # and ca_carol cannot link a second cloud account
     cloud.person["sub"] = "sub-ca_carol-2"
     assert "Unlink it first" in error_of(callback(c, start(c, link="1")))
+    # an account server that cannot be reached does not stop an unlink
+    cloud.revoke_fails = True
+    assert c.post("/api/auth/cloud/unlink").json()["ok"] is True
     # linking needs a session
     assert browser().get("/api/auth/cloud/start", params={"link": "1"}, follow_redirects=False).status_code == 401
 
@@ -269,6 +304,7 @@ def test_rename_and_delete_follow_identities(cloud, monkeypatch):
     assert admin.delete("/api/admin/users/ynez2").status_code == 200
     with connect_users_db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM identities WHERE username = 'ynez2'").fetchone()[0] == 0
+    assert cloud.revoked == ["rt-1"]
 
 
 def test_cli_link_and_unlink(cloud, capsys):

@@ -1,6 +1,7 @@
 """The portal pages (HTML). The data behind them comes from ``/api``."""
 
 from contextlib import closing
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -13,34 +14,37 @@ NO_STORE = pages.NO_STORE
 
 
 def _app_page(request: Request, render):
-    """An app page: ``render(account, devices, linked identities)`` gives its
-    HTML, or None for a 404; signed out redirects to the login page."""
+    """An app page: ``render(account, devices, linked identities, browsers)``
+    gives its HTML, or None for a 404; signed out goes to the login page and
+    comes back here."""
     with closing(db.connect()) as conn:
         account = sessions.resolve(conn, request)
         if not account:
-            return RedirectResponse("/login", status_code=302)
+            return RedirectResponse("/login?" + urlencode({"next": request.url.path}), status_code=302)
         devices = oidc.devices(conn, account["id"])
         linked = identities.of_account(conn, account["id"])
+        browsers = sessions.of_account(conn, account["id"], request)
         conn.commit()
-    html = render(accounts.public(account), devices, linked)
+    html = render(accounts.public(account), devices, linked, browsers)
     if html is None:
         return HTMLResponse(pages.error_page("Not found", "There is no such page."), status_code=404)
     return HTMLResponse(html, headers=NO_STORE)
 
 
 @router.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return _app_page(request, lambda account, devices, _: pages.overview_page(account, devices))
+def home(request: Request, mail: str = ""):
+    """``?mail=failed``: registration could not send the confirmation mail."""
+    return _app_page(request, lambda account, devices, *_: pages.overview_page(account, devices, mail_failed=mail == "failed"))
 
 
 @router.get("/devices", response_class=HTMLResponse)
 def devices(request: Request):
-    return _app_page(request, lambda account, devices, _: pages.devices_page(account, devices))
+    return _app_page(request, lambda account, devices, _, browsers: pages.devices_page(account, devices, browsers))
 
 
 @router.get("/settings", response_class=HTMLResponse)
 def settings(request: Request):
-    return _app_page(request, lambda account, _, linked: pages.settings_page(account, linked, providers.enabled()))
+    return _app_page(request, lambda account, _, linked, __: pages.settings_page(account, linked, providers.enabled()))
 
 
 @router.get("/admin", response_class=HTMLResponse)
@@ -49,11 +53,11 @@ def admin(request: Request):
 
 
 @router.get("/login", response_class=HTMLResponse)
-def login(request: Request):
+def login(request: Request, next: str = "/"):
     with closing(db.connect()) as conn:
         if sessions.resolve(conn, request):
-            return RedirectResponse("/", status_code=302)
-    return sign_in_page(request, pages.login_page)
+            return RedirectResponse(identities.safe_next(next), status_code=302)
+    return sign_in_page(request, pages.login_page, next_url=next)
 
 
 @router.get("/register", response_class=HTMLResponse)

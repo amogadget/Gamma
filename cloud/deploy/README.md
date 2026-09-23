@@ -117,6 +117,23 @@ above.
 - **Cache**: nothing to do — the server sets `Cache-Control: no-store` on
   the API and the pages; only `/jwks` is cacheable (5 min).
 - **Access** is NOT used: the portal must be reachable by everyone.
+- **Origin lock-down.** The server takes the client address (rate limits,
+  the address on the Devices page) from Cloudflare's `CF-Connecting-IP`.
+  On the VPS, Caddy also answers direct connections to port 443, so anyone
+  who knows the host's address can bypass Cloudflare, including its rate
+  rules, and set that header themselves. Accept Cloudflare only: allow 443
+  from the ranges at <https://www.cloudflare.com/ips/> in the host's
+  firewall, or in the Caddyfile before `reverse_proxy`:
+
+  ```
+  @direct not remote_ip <the Cloudflare ranges>
+  abort @direct
+  ```
+
+  Before switching it on, check that Caddy sees the real peer address and
+  not Docker's gateway: with access logging on, a request through the
+  hostname must log a Cloudflare address. The tunnel variant opens no port
+  and needs none of this.
 
 ## Sign in with Google and GitHub
 

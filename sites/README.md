@@ -38,7 +38,7 @@ the extension zip, and for the star count. Every element keeps a working
 fallback link if that call fails. There are no cookies and no analytics, in
 line with the app's privacy policy.
 
-The header's **Sign in** link and the `/login`, `/account` and `/signup`
+The header's **Log in** link and the `/login`, `/account` and `/signup`
 short links go to the Gamma Cloud account server at `account.gammapdf.com`
 ([docs/dev/cloud_accounts.md](../docs/dev/cloud_accounts.md)); the site
 itself has no accounts.

@@ -50,9 +50,13 @@ lists every variable):
 - the Google and GitHub OAuth clients — a provider is off until both its
   id and secret are set; setup in the deploy README.
 
-The Docker image (`cloud/Dockerfile`) runs uvicorn on 9002 with
-`--proxy-headers`, so the client address comes from Cloudflare's
-`X-Forwarded-For`.
+The Docker image (`cloud/Dockerfile`) runs uvicorn on 9002. The client
+address (rate limits, the address on a device or browser row) is
+Cloudflare's `CF-Connecting-IP`, else the connection's peer
+(`ratelimit.client_ip`); `X-Forwarded-For` is never read, since its first
+hop is whatever the client wrote and behind Caddy it only names
+Cloudflare. The header is only as good as the rule that the origin answers
+Cloudflare alone (the deploy README's origin lock-down).
 
 ## Data
 
@@ -67,7 +71,7 @@ the signing keys and every token hash.
 
 | table | what |
 |---|---|
-| `accounts` | `id` (random, the OIDC `sub`; never changes), `username` (unique; the username on every Gamma server, a paid container's hostname label — `accounts.RESERVED_USERNAMES` keeps the names Gamma and the web use), `email` (unique), `email_verified_at`, `password_hash`, `display_name`, `plan`, `is_admin`, `deleted_at` |
+| `accounts` | `id` (random, the OIDC `sub`; never changes), `username` (unique; the username on every Gamma server, a paid container's hostname label — `accounts.RESERVED_USERNAMES` keeps the names Gamma and the web use), `email` (unique), `email_verified_at`, `password_hash`, `display_name`, `plan`, `is_admin`, `deleted_at`, `app_signed_in_at` (the first sign-in to a Gamma app or server; step 3) |
 | `identities` | an account's Google/GitHub link: (`provider`, `subject`) → account, the provider's address at the last sign-in |
 | `external_logins` | one Google/GitHub sign-in in flight (15 min): `redirect` while at the provider, `signup` while the username form waits; keyed by the hash of the `gc_ext` cookie (step 2) |
 | `portal_sessions` | the portal cookie's hash; sliding 30 days, newest 20 per account |
@@ -75,8 +79,9 @@ the signing keys and every token hash.
 | `invites` | codes with uses left and the plan they grant |
 | `oauth_clients` | confidential OIDC clients (share-host, container) with exact redirect URIs; the desktop client is built in, not a row |
 | `oauth_requests` | a sign-in in progress on the authorize page (10 min) |
-| `oauth_codes` | authorization codes (2 min, single use) |
-| `grants` | one per device: the rotating refresh token's hash, 90 days from the last rotation, `revoked_at` |
+| `oauth_codes` | authorization codes (2 min, single use) and what the exchange issued (`grant_id`, `access_hash`), so a replay revokes exactly that |
+| `grants` | one per device: the rotating refresh token's hash, 90 days from the last rotation, `revoked_at`, the client's `device_id` and `device_name` (a new sign-in with the same `device_id` replaces the grant) |
+| `refresh_history` | every refresh token a live grant rotated away from, with when: the retry window and reuse detection |
 | `access_tokens` | opaque bearer tokens (1 h), tied to their grant |
 | `signing_keys` | Ed25519 private keys; the newest unretired one signs, a retired one stays published a week |
 | `audit` | every account-changing event |
@@ -101,10 +106,17 @@ header's **Sign in** and the `/login`, `/account`, `/signup` short links
 
 `routers/accounts.py` is the JSON API under `/api`; `routers/portal.py`
 serves the pages from `pages.py`: small server-rendered shells whose
-inline script posts JSON to the API — no framework, no build. A browser
-form cannot post JSON cross-site without a CORS preflight, which together
-with the `SameSite=Lax` cookie is the CSRF protection; there is no
-separate token.
+inline script posts JSON to the API — no framework, no build. The CSRF
+protection is `app.same_origin`: a request that changes anything (every
+method but GET/HEAD/OPTIONS, except the OAuth `/token` and `/revoke`) must
+carry `Sec-Fetch-Site: same-origin`, or, from an older browser, an
+`Origin` equal to the public URL; a request with neither is not from a
+browser. `SameSite=Lax` alone would not do: it does not tell
+account.gammapdf.com from a sibling `*.gammapdf.com` page such as a hosted
+container, and a POST without a JSON body needs no CORS preflight. There is
+no separate token. The pages' buttons go through one script helper, `act`:
+a failure is shown next to the button and the button comes back; a lost
+session goes to `/login?next=` and returns to the page.
 
 Two shells in the gammapdf.com palette (`sites/site/styles.css`), light
 and dark, in the quiet bordered look of a workspace tool: the **auth**
@@ -113,16 +125,33 @@ page) and the **app** shell (a sidebar and a content column):
 
 - **Overview** (`/`): a greeting with username, plan and admin tags.
   A *Get started* checklist (account created, e-mail confirmed, signed in
-  from a Gamma app) with a progress bar, hidden once all three are done.
-  Then the latest sign-ins beside a plan card (a placeholder pointing at
+  from a Gamma app — `app_signed_in_at`, so signing everything out does not
+  undo it) with a progress bar, hidden once all three are done. Then the
+  signed-in Gamma apps beside a plan card (a placeholder pointing at
   self-hosting until hosted servers exist) and an account summary:
   username, e-mail state, member since, and the account id with a copy
-  button — what Gamma servers key on; it never changes.
-- **Devices** (`/devices`): every grant with an icon by client kind, a
-  readable platform from the agent (a Gamma server names itself
-  `Gamma/<version> (<its address>)` on the token request), relative last
-  use ("Active now", "2 days ago"), sign-in date and address; sign one out,
-  or all behind a confirm.
+  button — what Gamma servers key on; it never changes. `?mail=failed`
+  (registration could not send the mail) changes the verify notice.
+- **Devices** (`/devices`): two lists.
+  - *Gamma apps*: every live grant, titled by the machine's name when the
+    app sent one (`device_name`), else the client's name; then the client,
+    the system and version from the agent (a Gamma server sends
+    `Gamma/<version> (<system>; <its address>)`), the sign-in date and the
+    last address. At the row's end the last activity — the last refresh or
+    the last use of the grant's access token, written at most every 10
+    minutes (`config.LAST_ACTIVE_TOUCH`) — and *Sign out*.
+  - *Browsers*: the portal sessions (`sessions.of_account`), this one
+    marked, the others with *Sign out* (`POST /api/sessions/{id}/revoke`,
+    the id being the head of the token's hash).
+
+  A row signed out leaves in place. *Sign out everywhere else* is
+  `accounts.revoke_everything` behind a confirm. The page says what
+  signing an app out does: its key stops working, but sessions its own
+  Gamma server already opened stay until signed out there (see "Not built
+  yet" below). Dates are UTC on the server and shown in the viewer's time
+  zone by the page's script (`<time datetime>`, `data-at`). On a phone the
+  rows stack: the details take the width, the time and the button go
+  under them.
 - **Settings** (`/settings`): labelled rows.
   - Display name.
   - **Username**: the password field and the button appear once the name
@@ -149,7 +178,11 @@ page) and the **app** shell (a sidebar and a content column):
   attempts count toward the per-IP limit. The account starts unverified,
   the verify mail goes out, and the browser is signed in so the account page
   can resend the mail. Taken e-mail or username answers 409 with a message —
-  a deleted account keeps both through the grace period.
+  a deleted account keeps both through the grace period. Every mail goes
+  out after the commit, so a slow mail server never holds cloud.db's write
+  lock; a registration whose mail fails still succeeds, answering
+  `mailed: false`, and the page lands on `/?mail=failed`. The other mails
+  (resend, reset, e-mail change) answer 503 when they fail.
 - **Verified e-mail is the gate.** An unverified account can use the
   portal but the authorize page refuses to sign it in to any Gamma server
   and shows the verify notice instead. That is the one abuse control a
@@ -166,8 +199,8 @@ page) and the **app** shell (a sidebar and a content column):
   required, a few times a day): the account id stays, so nothing linked to
   it moves.
 - **Change password** and **sign out everywhere** revoke every portal
-  session and every grant (`accounts.revoke_everything`), keeping only the
-  browser that asked.
+  session, every grant and every code not yet exchanged
+  (`accounts.revoke_everything`), keeping only the browser that asked.
 - **Delete** (`/api/me/delete`, password required): soft — `deleted_at`,
   password cleared, everything revoked; `manage.py purge-deleted --days 30`
   removes the rows later. Tearing down a paid container is the provisioner's
@@ -232,9 +265,10 @@ other page keeps `no-referrer`.
   and confirms the username, e-mail and delete forms with its session alone
   (`accounts.confirm_ok`). Deleting an account drops its links at once.
 
-Rate limits are the in-process fixed windows of `ratelimit.py` (per IP,
-per name, per account; the `oauth-callback:ip` window is shared by
-`one_tap`); Cloudflare's rate rules in front are the first line. Mail (`mail.py`) has three backends; every message is plain text plus
+Rate limits are the in-process fixed windows of `ratelimit.py` (per IP —
+`client_ip`, see "Running" — per name, per account; the `oauth-callback:ip`
+window is shared by `one_tap`); Cloudflare's rate rules in front are the
+first line. Mail (`mail.py`) has three backends; every message is plain text plus
 an HTML alternative from `mail.compose` (portal palette, a button for the
 link with the raw URL under it, inline styles only).
 
@@ -267,12 +301,32 @@ is no consent screen: every client is first party, the page names the
 server that asks.
 
 **Tokens.** `POST /token` with `authorization_code` checks the code's
-client, redirect URI, expiry and PKCE verifier; a replayed code revokes the
-grant it produced. The answer is an opaque access token, an ID token and,
-for the desktop client with `offline_access`, a refresh token.
-`refresh_token` rotates: the old refresh token and the grant's access
-tokens die, a new pair is issued. Revoking a device on the account page,
-changing the password or deleting the account revokes the grant.
+client, redirect URI, expiry and PKCE verifier; a replayed code revokes
+what its first exchange issued — that grant or that access token, nothing
+else of the account. The answer is an opaque access token, an ID token and,
+for the desktop client with `offline_access`, a refresh token. The desktop
+client may send `device_id` (8–64 of `[A-Za-z0-9_-]`, else dropped) and
+`device_name` with the code; a new grant revokes the live grant of the
+same account, client and `device_id`, so a machine that signs in again is
+one row on the Devices page, not two.
+
+`refresh_token` rotates: the refresh token moves to `refresh_history`, the
+grant's access tokens die, a new pair is issued. For
+`config.REFRESH_REUSE_GRACE` (60 s) the replaced token still rotates once
+more, for a client whose answer was lost; used later, it means two parties
+hold the device's key, and the grant is revoked (`grant.reuse` in the
+audit). A client must therefore refresh one request at a time and keep the
+newest token. Revoking a device on the account page, changing the password
+or deleting the account revokes the grant; `/revoke` accepts the current
+refresh token or any one the grant rotated away from.
+
+A code exchange and a refresh take cloud.db's write lock before they read
+(`db.begin_write`), so a revoke cannot land between the check and the new
+tokens. `/token` and `/revoke` parse the form on the event loop and do the
+rest in the threadpool: a request waiting for the lock never holds up the
+server. A lock held past `db.BUSY_TIMEOUT` (10 s) answers 503 — on `/token`
+as `temporarily_unavailable`, elsewhere with `Retry-After` — never a stack
+trace.
 
 **The ID token** is signed EdDSA with the active key (`kid` in the header)
 and carries `iss`, `sub` (the account id), `aud` (the client id), `exp`
@@ -316,6 +370,13 @@ invites; OIDC clients; the audit log. The portal's Admin page, the API and
   authorize page's path, state and `next` checks, one tap with a real
   RS256 token, connect/disconnect, accounts without a password, the
   step-2 upgrade.
+- `test_devices.py`: the grants behind the Devices page — a revoke landing
+  while a refresh waits for the lock, `/api/health` answering while a
+  `/token` request waits, code replay touching only its own grant,
+  sign-out-everywhere voiding pending codes, the refresh retry window and
+  reuse detection, one grant per `device_id`, last activity, the page,
+  signing one browser out, the 503, the same-origin check, the client
+  address, the audit, the checklist, `/login?next=`, the step-3 upgrade.
 
 `conftest.py` points the data directory at a temp folder and the mail
 backend at the in-memory outbox before the package is imported. CI runs
@@ -344,6 +405,18 @@ account server subject is which local account, the last verified claims
 refresh token,
 Fernet-encrypted with the data directory's key, kept for the desktop's
 later use (`cloud_auth.refresh_token_of`).
+
+**The device.** The desktop client names this install on the code
+exchange (`cloud_auth.device`): `device_id`, made once and kept in the
+`settings` KV as `cloud_device_id`, and `device_name`, the machine's host
+name; the user agent is `Gamma/<version> (<system>; <address>)`. A refresh
+token this server stops holding is revoked at the account server
+(`revoke_later`, RFC 7009, on a background thread, failures logged as
+warnings): the one a newer sign-in replaced (`link` returns it), the one a
+refused sign-in or a failed ID-token check leaves behind, and the one an
+unlink (`/api/auth/cloud/unlink`, `manage.py unlink-identity`) or an
+account deletion (Settings → Users, `manage.py delete-user`) drops. So a
+row on the Devices page always stands for a key this server holds.
 
 **Configuration.** Settings → Server → Sign-in, stored in the `settings`
 KV: the account server's address (`cloud_issuer`; empty = off), the client
@@ -391,4 +464,8 @@ equivalents; renaming and deleting an account carry or drop its identity.
 **Not built yet** (steps 5–6 of the plan): the desktop shell's first-run
 sign-in, the offline grace on the sidecar (today the year-long session
 cookie is what keeps a laptop signed in), and using the stored refresh
-token to read `/api/me` for the person's servers.
+token to read `/api/me` for the person's servers. Until the sidecar checks
+its grant, signing an app out on the Devices page stops its key but not
+the sessions it already opened; the page says so. The check (at start,
+hourly, one refresh at a time, the new token saved before use) would end
+those sessions on `invalid_grant` and keep working offline.
