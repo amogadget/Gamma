@@ -49,12 +49,12 @@ def portal_account(conn, request: Request):
     return account
 
 
-def send_mail(to: str, subject: str, body: str) -> None:
+def send_mail(to: str, subject: str, body: str, html: str = "") -> None:
     """A mail that cannot be sent is a 503 with a plain message, never a
     stack trace: the provider being down or the domain unverified is an
     operator's problem, logged as a warning."""
     try:
-        mail.send(to, subject, body)
+        mail.send(to, subject, body, html)
     except mail.MailError as e:
         log.warning("mail to %s failed: %s", to, e)
         raise HTTPException(503, "We could not send the e-mail right now. Try again in a few minutes.") from e

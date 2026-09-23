@@ -9,6 +9,9 @@ def test_register_verify_login_flow(client):
     account = register(client)
     assert account["username"] == "alice" and account["email_verified"] is False and account["plan"] == "free"
     assert mail.outbox[-1]["to"] == "alice@example.org"
+    sent = mail.outbox[-1]
+    token = last_link("/verify")
+    assert f'href="http://testserver/verify?token={token}"' in sent["html"] and "Hi alice," in sent["html"]
     # registering signs the browser in
     me = client.get("/api/me").json()
     assert me["account"]["username"] == "alice" and me["auth"] == "session"
@@ -169,7 +172,7 @@ def test_pages_render(client):
     assert r.status_code == 200 and "alice" in r.text and "not confirmed" in r.text
     assert client.get("/login", follow_redirects=False).status_code == 302
     assert "Change username" in client.get("/settings").text
-    assert "Sign out everywhere" in client.get("/devices").text
+    assert "No app or server holds a key" in client.get("/devices").text  # nothing to sign out yet
     assert client.get("/admin").status_code == 404
     make_admin("alice")
     r = client.get("/admin")
