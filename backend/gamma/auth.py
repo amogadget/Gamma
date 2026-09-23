@@ -301,6 +301,12 @@ def requested_ws(carrier) -> str:
     return (carrier.query_params.get("ws") or carrier.headers.get(WORKSPACE_HEADER) or "").strip()
 
 
+def is_guest_workspace(ws: str) -> bool:
+    from . import workspaces  # local: workspaces imports seed, which imports db
+
+    return ws == workspaces.default_workspace("guest")
+
+
 def workspace_access(username: str, requested: str, default_ws: str) -> tuple[str, str | None]:
     """``(workspace_id, role)`` for an account's request: the named
     workspace, else the account's default (created on the spot if the

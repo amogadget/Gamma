@@ -1,6 +1,7 @@
 // The Logseq-style outliner: block rows (markdown rendering, inline
 // editing, [[refs]], link chips, image drop/paste), drag handles, and the tree.
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { textOf } from "../shared/lib/textOf";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import { MergeChip } from "../collaboration/MergeResolver";
@@ -97,15 +98,6 @@ function mdPreprocessProse(content, nested) {
     .replace(/!\[\[([a-zA-Z0-9_-]+)\]\]/g, nested ? "[$1](blockref:$1)" : "[$1](blockembed:$1)")
     .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")
     .replace(/==([^=\n]+?)==/g, "<mark>$1</mark>"));
-}
-
-// Plain text of a rendered element tree (link labels arrive as React children).
-function textOf(children) {
-  if (children == null) return "";
-  if (typeof children === "string" || typeof children === "number") return String(children);
-  if (Array.isArray(children)) return children.map(textOf).join("");
-  if (children.props?.children != null) return textOf(children.props.children);
-  return "";
 }
 
 // GitHub URLs get a readable label without any fetch: owner/repo, #issue/PR,

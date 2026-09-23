@@ -2,7 +2,7 @@ from conftest import invite, last_link, make_admin, register, verify
 
 from fastapi.testclient import TestClient
 
-from gammacloud import config, mail, ratelimit
+from gammacloud import accounts, config, mail, ratelimit
 
 
 def test_register_verify_login_flow(client):
@@ -53,6 +53,9 @@ def test_validation_and_uniqueness(client):
         r = client.post("/api/register", json=body)
         assert r.status_code == 400, override
         assert word.lower() in r.json()["detail"].lower()
+    # a username is 3 to 32 characters: one and two are refused, three accepted
+    assert not accounts.USERNAME_RE.match("a") and not accounts.USERNAME_RE.match("ab")
+    assert accounts.USERNAME_RE.match("abc")
     ratelimit.clear()  # rejected attempts count against the per-IP limit
     register(client, "alice", code=code)
     r = client.post("/api/register", json={"email": "alice@example.org", "username": "other", "password": "correct horse battery",

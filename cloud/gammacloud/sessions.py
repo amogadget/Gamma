@@ -12,6 +12,7 @@ from fastapi import Request
 
 from . import accounts, config
 from .db import after, new_token, now, parse, token_hash
+from .ratelimit import agent_of, ip_of
 
 COOKIE = "gc_session"
 MAX_PER_ACCOUNT = 20
@@ -22,7 +23,7 @@ def create(conn, account_id: str, request: Request | None) -> str:
     ts = now()
     conn.execute("INSERT INTO portal_sessions (token_hash, account_id, created_at, last_seen_at, ip, user_agent) "
                  "VALUES (?, ?, ?, ?, ?, ?)",
-                 (token_hash(token), account_id, ts, ts, _ip(request), _agent(request)))
+                 (token_hash(token), account_id, ts, ts, ip_of(request), agent_of(request)))
     # An account keeps its newest MAX_PER_ACCOUNT browsers signed in.
     conn.execute("DELETE FROM portal_sessions WHERE account_id = ? AND token_hash NOT IN (SELECT token_hash FROM "
                  "portal_sessions WHERE account_id = ? ORDER BY last_seen_at DESC LIMIT ?)",
@@ -57,9 +58,11 @@ def drop(conn, request: Request) -> None:
         conn.execute("DELETE FROM portal_sessions WHERE token_hash = ?", (token_hash(token),))
 
 
-def set_cookie(response, token: str) -> None:
-    response.set_cookie(COOKIE, token, httponly=True, samesite="lax", secure=config.PUBLIC_URL.startswith("https://"),
-                        max_age=config.PORTAL_SESSION_TTL, path="/")
+def set_cookie(response, token: str, *, name: str = COOKIE, max_age: int | None = config.PORTAL_SESSION_TTL) -> None:
+    """The portal cookie by default; ``identities.py``'s cookies pass their
+    own name and lifetime."""
+    response.set_cookie(name, token, httponly=True, samesite="lax", secure=config.PUBLIC_URL.startswith("https://"),
+                        max_age=max_age, path="/")
 
 
 def clear_cookie(response) -> None:
@@ -69,16 +72,3 @@ def clear_cookie(response) -> None:
 def purge_stale(conn) -> int:
     cur = conn.execute("DELETE FROM portal_sessions WHERE last_seen_at < ?", (after(-config.PORTAL_SESSION_TTL),))
     return cur.rowcount
-
-
-def _ip(request: Request | None) -> str:
-    if request is None:
-        return ""
-    from .ratelimit import client_ip
-    return client_ip(request)[:64]
-
-
-def _agent(request: Request | None) -> str:
-    if request is None:
-        return ""
-    return request.headers.get("user-agent", "")[:200]

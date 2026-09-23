@@ -629,8 +629,6 @@
 .integrationCopy { position: absolute; top: 6px; right: 6px; }
 .integrationCopy.on { color: var(--accent); }
 .integrationCopyStatus:empty { display: none; }
-/* A successful copy is shown by the check icon; keep the sentence for screen readers. */
-.integrationCopyStatus.ok { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .integrationAdvanced { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
 .integrationAdvanced summary, .integrationDetails summary { cursor: pointer; font-size: calc(13px * var(--ui-font-scale, 1)); }
 .integrationAdvanced > summary { font-weight: 600; }

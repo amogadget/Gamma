@@ -136,20 +136,21 @@ The Chrome Web Store upload stays manual
 
 ## `check.yml`
 
-Five parallel Ubuntu jobs on every PR to `main` (`paths-ignore`: a PR that
-changes only `cloud/`, `cloud.yml`, the `update-account-server` skill or
-[cloud_accounts.md](cloud_accounts.md) skips it — `cloud.yml` checks
-those): brand asset consistency, backend pytest (Python
-3.12, `requirements.txt` + `requirements-dev.txt`, `-n auto` over pytest-xdist), the frontend unit tests
-+ build (Node 22, `npm test` then `npm run build`), the browser suite
-(`npm run e2e -- --continue` against a backend started from the checkout
-with `GAMMA_E2E_PYTHON=python` — both requirements files, since a scenario
-builds its Zotero fixture from a backend test module — Playwright's Chromium installed with its
-system deps; on a failure the harness's `failures/` folders — screenshots,
-page problems, the error, the server log tail — are uploaded as the
-`e2e-failures` artifact), and a manifest parse + zip of the extension. No
-installers. The `merge` skill waits for it before merging; a red check is
-fixed on the branch as normal work.
+Five parallel Ubuntu jobs on every PR to `main`: brand asset consistency,
+backend pytest (Python 3.12, `requirements.txt` + `requirements-dev.txt`,
+`-n auto` over pytest-xdist), the frontend unit tests + build (Node 22,
+`npm test` then `npm run build`), the browser suite
+(`npm run e2e -- --continue` against a backend started from the checkout with
+`GAMMA_E2E_PYTHON=python` — both requirements files, since a scenario
+builds its Zotero fixture from a backend test module — Playwright's
+Chromium installed with its system deps; on a failure the harness's
+`failures/` folders — screenshots, page problems, the error, the server
+log tail — are uploaded as the `e2e-failures` artifact), and a manifest
+parse + zip of the extension. No installers. A PR that changes only
+`cloud/`, `cloud.yml`, the `update-account-server` skill or
+[cloud_accounts.md](cloud_accounts.md) skips it (`paths-ignore`);
+`cloud.yml` checks those. The `merge` skill waits for it before merging; a
+red check is fixed on the branch as normal work.
 
 ## `docker.yml`
 
@@ -162,16 +163,18 @@ tag) it also pushes `<version>` and `<major.minor>`. Setup notes:
 
 ## `cloud.yml`
 
-The account server ([cloud_accounts.md](cloud_accounts.md)) on its own
-schedule. `test`: its pytest with `cloud/requirements*.txt` — on a PR that
-touches `cloud/`, and first on every dispatch. `publish` (dispatch only,
-after a green `test`): `cloud/Dockerfile` for amd64, tagged `latest` and
-`sha-<short>`, pushed to `ghcr.io/tim4431/gamma-cloud`. Dispatch it from the
-branch that holds the work (`gh workflow run cloud.yml --ref dev`) — nothing
-needs to reach `main`, so `:latest` is whatever was published last, from
-whichever branch; the `sha-` tag and the image's revision label say which
-commit. The `build-cloud` skill dispatches it; `update-account-server` builds through it, then deploys.
-Like every dispatch, it needs the file on `main` once before the first run.
+The account server ([cloud_accounts.md](cloud_accounts.md)) outside the
+release flow. `test`: its pytest with `cloud/requirements*.txt` — on a PR
+that touches `cloud/`, and first on every dispatch. `publish` (dispatch
+only, after a green `test`): `cloud/Dockerfile` for amd64, tagged `latest`
+and `sha-<short>`, pushed to `ghcr.io/tim4431/gamma-cloud`. Dispatch it
+from the branch that holds the work
+(`gh workflow run cloud.yml --ref dev`) — nothing needs to reach `main`.
+So `:latest` is whatever was
+published last, from whichever branch; the `sha-` tag and the image's
+revision label say which commit. The `build-cloud` skill dispatches it;
+`update-account-server` builds through it, then deploys. Like every
+dispatch, it needs the file on `main` once before the first run.
 
 ## Running and watching by hand
 

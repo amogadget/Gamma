@@ -187,7 +187,7 @@ li + li { margin-top: 8px; }
 .feature--stack { display: block; }
 .feature__text--center { text-align: center; max-width: 68ch; margin: 0 auto 36px; }
 .feature__text--center > p { margin: 0 auto; }
-.illustration { display: block; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); }
+.illustration { display: block; margin: 0; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); }
 .trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 20px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .card img { width: 100%; border-bottom: 1px solid var(--line); }

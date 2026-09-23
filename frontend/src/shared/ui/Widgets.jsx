@@ -1,6 +1,7 @@
 // Shared presentational widgets: workspace chrome, dockable windows, chat
 // markdown, and the auto-growing textarea.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { textOf } from "../lib/textOf";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -196,7 +197,7 @@ function GammaLinkCard({ link, label, children }) {
   const cited = link.kind === "citation";
   // A bare link (autolinked, or link text that is the URL itself) is not a
   // label — the resolved title or the page number reads better.
-  const raw = textOfNode(children).trim();
+  const raw = textOf(children).trim();
   const text = /^(https?:\/\/|\/?\?)/i.test(raw) ? "" : raw;
   const title = cited
     ? (link.quote ? `Show this passage in the PDF: “${link.quote}”` : `Open this paper at page ${link.page}`)
@@ -225,17 +226,6 @@ function GammaLinkCard({ link, label, children }) {
       {text && label && label !== text ? <span className="gammaLinkSrc">{label}</span> : null}
     </a>
   );
-}
-
-// Plain text of a rendered element tree (link labels arrive as React
-// children). Mirrors BlockTree's textOf; kept here so Widgets stays
-// importable on its own.
-function textOfNode(children) {
-  if (children == null) return "";
-  if (typeof children === "string" || typeof children === "number") return String(children);
-  if (Array.isArray(children)) return children.map(textOfNode).join("");
-  if (children.props?.children != null) return textOfNode(children.props.children);
-  return "";
 }
 
 // Keep the renderer type stable: replacing it on each streamed delta unmounts

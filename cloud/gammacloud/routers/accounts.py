@@ -15,7 +15,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .. import accounts, captcha, config, db, mail, oidc, ratelimit, sessions
-from ..accounts import Problem
 from ..log import log
 
 router = APIRouter(prefix="/api")
@@ -65,10 +64,6 @@ def send_verify(conn, account) -> None:
     send_mail(account["email"], *accounts.verify_mail(account, token))
 
 
-def _problem(e: Problem):
-    raise HTTPException(e.status, e.detail)
-
-
 # --- config for the pages -----------------------------------------------------
 
 @router.get("/config")
@@ -96,20 +91,13 @@ def register(body: RegisterBody, request: Request):
     ratelimit.check(f"register:ip:{ip}", 5, 3600)
     if not captcha.verify(body.turnstile, ip):
         raise HTTPException(400, "The anti-bot check failed. Reload and try again.")
-    try:
-        email = accounts.norm_email(body.email)
-        username = accounts.norm_username(body.username)
-        password = accounts.check_password(body.password)
-    except Problem as e:
-        _problem(e)
+    email = accounts.norm_email(body.email)
+    username = accounts.norm_username(body.username)
+    password = accounts.check_password(body.password)
     with closing(db.connect()) as conn:
-        try:
-            plan = accounts.take_invite(conn, body.invite)
-            account = accounts.create(conn, email=email, username=username, password=password, plan=plan,
-                                      display_name=body.display_name)
-        except Problem as e:
-            conn.rollback()
-            _problem(e)
+        plan = accounts.take_invite(conn, body.invite)
+        account = accounts.create(conn, email=email, username=username, password=password, plan=plan,
+                                  display_name=body.display_name)
         send_verify(conn, account)
         token = sessions.create(conn, account["id"], request)
         conn.commit()
@@ -194,11 +182,7 @@ def change_username(body: UsernameBody, request: Request):
         if not accounts.confirm_ok(account, body.password):
             raise HTTPException(403, "The password is wrong.")
         ratelimit.check(f"username-change:{account['id']}", 5, 86400)
-        try:
-            accounts.set_username(conn, account["id"], body.username)
-        except Problem as e:
-            conn.rollback()
-            _problem(e)
+        accounts.set_username(conn, account["id"], body.username)
         conn.commit()
         return {"account": accounts.public(accounts.by_id(conn, account["id"]))}
 
@@ -214,10 +198,7 @@ def change_password(body: PasswordBody, request: Request):
         account = portal_account(conn, request)
         if not accounts.confirm_ok(account, body.current):
             raise HTTPException(403, "The current password is wrong.")
-        try:
-            accounts.check_password(body.new)
-        except Problem as e:
-            _problem(e)
+        accounts.check_password(body.new)
         accounts.set_password(conn, account["id"], body.new)
         token = sessions.create(conn, account["id"], request)  # this browser stays signed in
         conn.commit()
@@ -288,10 +269,7 @@ def reset_request(body: ResetRequestBody, request: Request):
     ratelimit.check(f"reset:ip:{ip}", 5, 3600)
     if not captcha.verify(body.turnstile, ip):
         raise HTTPException(400, "The anti-bot check failed. Reload and try again.")
-    try:
-        email = accounts.norm_email(body.email)
-    except Problem as e:
-        _problem(e)
+    email = accounts.norm_email(body.email)
     ratelimit.check(f"reset:email:{email}", 3, 3600)
     with closing(db.connect()) as conn:
         account = accounts.by_email(conn, email)
@@ -311,10 +289,7 @@ class ResetConfirmBody(BaseModel):
 @router.post("/reset/confirm")
 def reset_confirm(body: ResetConfirmBody, request: Request):
     ratelimit.check(f"reset-confirm:ip:{ratelimit.client_ip(request)}", 20, 600)
-    try:
-        accounts.check_password(body.password)
-    except Problem as e:
-        _problem(e)
+    accounts.check_password(body.password)
     with closing(db.connect()) as conn:
         found = accounts.consume_email_token(conn, body.token, "reset")
         if not found:
@@ -339,10 +314,7 @@ class EmailChangeBody(BaseModel):
 
 @router.post("/email/change")
 def email_change(body: EmailChangeBody, request: Request):
-    try:
-        new_email = accounts.norm_email(body.new_email)
-    except Problem as e:
-        _problem(e)
+    new_email = accounts.norm_email(body.new_email)
     with closing(db.connect()) as conn:
         account = portal_account(conn, request)
         if not accounts.confirm_ok(account, body.password):
@@ -365,11 +337,7 @@ def email_confirm(body: TokenBody, request: Request):
             raise HTTPException(400, "This link is not valid any more.")
         account, new_email = found
         old_email = account["email"]
-        try:
-            accounts.set_email(conn, account["id"], new_email)
-        except Problem as e:
-            conn.rollback()
-            _problem(e)
+        accounts.set_email(conn, account["id"], new_email)
         conn.commit()
     try:
         mail.send(old_email, *accounts.email_changed_notice(account, new_email))

@@ -25,8 +25,7 @@ import sys
 from contextlib import closing
 
 from gammacloud import accounts, config, db, oidc
-from gammacloud.accounts import Problem
-from gammacloud.routers.admin import make_invite
+from gammacloud.accounts import Problem, make_invite
 
 
 def _account(conn, username: str):

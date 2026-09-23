@@ -1,12 +1,14 @@
 # The Gamma Cloud account server in production (cloud/deploy/README.md).
 #
-#   account  the server: ghcr.io/tim4431/gamma-cloud (docker.yml publishes
-#            it on every merge to main), its data directory on ./data — that
+#   account  the server: ghcr.io/tim4431/gamma-cloud (cloud.yml publishes
+#            it when dispatched; a merge to main never does), its data
+#            directory on ./data — that
 #            directory IS the secret (signing keys, token hashes): back it up
 #            encrypted, never share it.
-#   caddy    TLS on the host's own 80/443 with a Let's Encrypt certificate,
-#            for a host with a public address (a VPS). The DNS record for the
-#            hostname in .env (CADDY_HOST) must point at the host.
+#   caddy    TLS on the host's own 80/443 with its internal certificate
+#            (`tls internal`; Cloudflare holds the public one), for a host
+#            with a public address (a VPS). The DNS record for the hostname
+#            in .env (CADDY_HOST) must point at the host.
 #
 # Variants layered with -f: compose.tunnel.yml replaces caddy with a
 # Cloudflare Tunnel (no open port; a NAS); compose.build.yml builds the

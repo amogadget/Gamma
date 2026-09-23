@@ -21,14 +21,10 @@ file (`cloud.db`, its backups). That folder is the secret: it holds the
 signing keys and every token hash. Moving to another host is copying
 `data/`, `.env` and the compose files and starting them there.
 
-## The current deployment (2026-09-22)
+## The current deployment
 
 `root@69.63.206.178`, folder `/root/Container/gamma-account/`, running
-`compose.yml` with the GHCR image (the `src/` copy there is left from the
-first, built-from-source start). The admin account `tim` and a first
-invite exist. Mail is still `console` (the links show in
-`docker compose logs account`) until the Resend domain is verified — the
-SMTP credential is already in `.env`. Updates go through the
+`compose.yml` with the GHCR image. Updates go through the
 `update-account-server` skill (`.claude/skills/`).
 
 ## First deployment on a VPS
@@ -55,9 +51,6 @@ SMTP credential is already in `.env`. Updates go through the
    docker compose up -d
    ```
 
-   Before the image is on GHCR, copy the repository's `cloud/` folder to
-   `./src` (without `data/`, `tests/`, `__pycache__`) and add
-   `-f compose.yml -f compose.build.yml --build` to the `up`.
 3. **Check** from the host and from outside:
 
    ```bash
@@ -170,10 +163,11 @@ cd ~/Container/gamma-account && docker compose pull account && docker compose up
 ```
 
 (`/update-account-server` does this after checking the publish finished,
-and verifies the running commit afterwards.)
+and verifies the running commit afterwards.) To run a patch from source
+instead, copy `cloud/` to `./src` and layer `compose.build.yml` with
+`--build`.
 
-(Or re-copy `src/` and `--build` while running from source.) The server
-upgrades its own `cloud.db` at start with a copy taken first
+The server upgrades its own `cloud.db` at start with a copy taken first
 (`data/backups/*-v<N>.db`) and refuses a database written by a newer
 build, so a rollback is the previous image plus that copy.
 

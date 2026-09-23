@@ -35,6 +35,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from . import accounts, config
 from .db import after, audit, new_id, new_token, now, parse, token_hash
+from .ratelimit import agent_of, ip_of
 
 SCOPES = ("openid", "email", "profile", "offline_access")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -314,7 +315,7 @@ def refresh_grant(conn, client: dict, refresh_token: str, request=None) -> dict:
     refresh = new_token(32)
     conn.execute("UPDATE grants SET refresh_hash = ?, rotated_at = ?, last_used_at = ?, expires_at = ?, ip = ?, "
                  "user_agent = ? WHERE id = ?",
-                 (token_hash(refresh), now(), now(), after(config.REFRESH_TOKEN_TTL), _ip(request), _agent(request),
+                 (token_hash(refresh), now(), now(), after(config.REFRESH_TOKEN_TTL), ip_of(request), agent_of(request),
                   row["id"]))
     conn.execute("DELETE FROM access_tokens WHERE grant_id = ?", (row["id"],))
     return _token_response(conn, account, client, row["scope"], row["id"], refresh, nonce="",
@@ -328,7 +329,7 @@ def _new_grant(conn, account_id: str, client_id: str, scope: str, request) -> tu
     conn.execute("INSERT INTO grants (id, account_id, client_id, scope, refresh_hash, created_at, rotated_at, "
                  "last_used_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                  (grant_id, account_id, client_id, scope, token_hash(refresh), ts, ts, ts,
-                  after(config.REFRESH_TOKEN_TTL), _ip(request), _agent(request)))
+                  after(config.REFRESH_TOKEN_TTL), ip_of(request), agent_of(request)))
     return grant_id, refresh
 
 
@@ -405,9 +406,8 @@ def revoke_grant(conn, grant_id: str, actor: str = "") -> None:
 
 def devices(conn, account_id: str) -> list[dict]:
     """The live grants of an account — the portal's "signed-in devices"."""
-    rows = conn.execute("SELECT g.*, c.name AS client_name FROM grants g LEFT JOIN oauth_clients c "
-                        "ON c.client_id = g.client_id WHERE g.account_id = ? AND g.revoked_at IS NULL "
-                        "AND g.expires_at > ? ORDER BY g.last_used_at DESC", (account_id, now())).fetchall()
+    rows = conn.execute("SELECT * FROM grants WHERE account_id = ? AND revoked_at IS NULL AND expires_at > ? "
+                        "ORDER BY last_used_at DESC", (account_id, now())).fetchall()
     out = []
     for r in rows:
         client = get_client(conn, r["client_id"]) or {"name": r["client_id"], "kind": "?"}
@@ -424,16 +424,3 @@ def purge_expired(conn) -> None:
     conn.execute("DELETE FROM email_tokens WHERE expires_at <= ?", (ts,))
     conn.execute("UPDATE grants SET revoked_at = ?, refresh_hash = NULL WHERE expires_at <= ? AND revoked_at IS NULL",
                  (ts, ts))
-
-
-def _ip(request) -> str:
-    if request is None:
-        return ""
-    from .ratelimit import client_ip
-    return client_ip(request)[:64]
-
-
-def _agent(request) -> str:
-    if request is None:
-        return ""
-    return request.headers.get("user-agent", "")[:200]

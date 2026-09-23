@@ -3,8 +3,8 @@ invite, the e-mail links (verify, reset, change-email), plans, deletion.
 
 Everything takes an open connection and commits nothing: the router owns
 the transaction so one request is one commit. The ``Problem`` exception
-carries the status and the message the API returns; the routers turn it
-into an HTTPException.
+carries the status and the message the API returns; the app's handler
+answers it.
 """
 
 import re
@@ -14,7 +14,7 @@ import bcrypt
 from . import config, mail
 from .db import after, audit, new_id, new_token, now, token_hash
 
-USERNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?$")
+USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD = 8
 MAX_PASSWORD = 200
@@ -128,6 +128,19 @@ def take_invite(conn, code: str) -> str:
         raise Problem(403, "That invite code is not valid.")
     conn.execute("UPDATE invites SET uses_left = uses_left - 1 WHERE code = ?", (code,))
     return row["plan"]
+
+
+def make_invite(conn, *, uses: int, plan: str, note: str, created_by: str) -> dict:
+    """A new invite code; returns its row."""
+    if plan not in config.PLANS:
+        raise Problem(400, "unknown plan")
+    if not 1 <= uses <= 10000:
+        raise Problem(400, "uses must be 1..10000")
+    code = new_token(9)
+    conn.execute("INSERT INTO invites (code, uses_left, plan, created_by, created_at, note) VALUES (?, ?, ?, ?, ?, ?)",
+                 (code, uses, plan, created_by, now(), note[:200]))
+    audit(conn, "invite.create", actor=created_by, detail=f"{code} uses={uses} plan={plan}")
+    return dict(conn.execute("SELECT * FROM invites WHERE code = ?", (code,)).fetchone())
 
 
 def create(conn, *, email: str, username: str, password: str | None, plan: str = "free",

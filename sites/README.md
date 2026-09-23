@@ -23,7 +23,7 @@ sites/
 
 1. copies `site/` to `dist/`, expanding the includes in every `.html`;
 2. copies the artwork the page uses from the repository into `dist/media/`:
-   the favicon (`frontend/public/media/icons/`), the hero PNGs and the
+   the favicon (`frontend/public/media/icons/`), the hero PNG and the
    illustration SVGs (`docs/assets/branding/`), the six README demos
    (`docs/assets/demos/`) and the app screenshot (`docs/assets/screenshots/`).
    The site keeps no copies of its own, so regenerating brand assets or
@@ -100,8 +100,8 @@ dispatch). It needs two repository secrets:
 - Section order and tone follow the survey in
   [docs/research/website.md](../docs/research/website.md).
 - The page must work without `site.js` (it does: every link has a static
-  fallback) and in both color schemes (the illustrations have light and
-  dark variants; the screenshot and demos are shown as recorded).
+  fallback) and in both color schemes (the illustrations are light-only;
+  the screenshot and demos are shown as recorded).
 - A new page: add a `.html` under `site/` with the two includes, or a
   Markdown source to the `PAGES` list in `build.mjs`, and a `<url>` to
   `sitemap.xml`.

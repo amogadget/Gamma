@@ -60,7 +60,7 @@ named to the user to add by hand.
 SSH uses public-key auth (no password prompt expected). `pull` then `up -d`
 recreates only the containers whose image or config changed — no `down`, so
 the portal is gone for seconds, not the whole pull. `--remove-orphans` stops
-services the compose file no longer has (the old `backup` sidecar):
+services the compose file has dropped:
 
 ```bash
 ssh root@69.63.206.178 "cd /root/Container/gamma-account && docker compose pull account && docker compose up -d --remove-orphans"
@@ -90,8 +90,8 @@ step running, mail errors).
 ## Rollback
 
 Pin the previous image by its sha tag (every publish also tags
-`sha-<short commit>`; older images came from `docker.yml` with the same scheme): set `image: ghcr.io/tim4431/gamma-cloud:sha-<old>` for
-`account` in the host's `compose.yml`, `docker compose up -d`.
+`sha-<short commit>`): set `image: ghcr.io/tim4431/gamma-cloud:sha-<old>`
+for `account` in the host's `compose.yml`, `docker compose up -d`.
 If the new build already migrated `cloud.db`, the old build refuses it:
 restore the `data/backups/*-v<N>.db` copy taken at that start — ask the user
 first, it discards everything written since.

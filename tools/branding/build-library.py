@@ -1,5 +1,5 @@
 """Build the Link and organize story in Gamma's light branding style."""
-from branding import MARK, write_svg, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
+from branding import MARK, FONT, write_svg, scene_heading, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
 
 SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: find your papers, follow your ideas</title>
@@ -24,10 +24,9 @@ MARK
     </g>
   </defs>
   SCENE_BACKGROUND
-  <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <g font-family="SCENE_FONT">
     SCENE_LOGO
-    <text x="120" y="235" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">Find your papers. Follow your ideas.</text>
-    <text x="122" y="288" font-size="28" fill="#6b6a65">From the first download to the next connection — without losing your place.</text>
+    SCENE_HEADING
 
     <!-- Three stages, connected in reading order. -->
     <g font-size="25" font-weight="600" fill="#1a1a18">
@@ -121,6 +120,6 @@ MARK
     <text x="960" y="1013" text-anchor="middle" font-size="25" fill="#6b6a65">A library you can find your way around. A reading trail you can retrace.</text>
   </g>
 </svg>
-'''.replace('MARK', MARK).replace('SCENE_LOGO', SCENE_LOGO).replace('SCENE_SHADOW', SCENE_SHADOW).replace('SCENE_BACKGROUND', SCENE_BACKGROUND)
+'''.replace('MARK', MARK).replace('SCENE_LOGO', SCENE_LOGO).replace('SCENE_SHADOW', SCENE_SHADOW).replace('SCENE_BACKGROUND', SCENE_BACKGROUND).replace('SCENE_FONT', FONT).replace('SCENE_HEADING', scene_heading([(235, 'Find your papers. Follow your ideas.')], [(288, 'From the first download to the next connection — without losing your place.')]))
 
 write_svg('gamma-library-light', SVG)

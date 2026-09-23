@@ -20,6 +20,15 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
 
 
+def ip_of(request: Request | None) -> str:
+    """The client address as stored on a session or grant row."""
+    return client_ip(request)[:64] if request is not None else ""
+
+
+def agent_of(request: Request | None) -> str:
+    return request.headers.get("user-agent", "")[:200] if request is not None else ""
+
+
 _MAX_KEYS = 50000
 
 

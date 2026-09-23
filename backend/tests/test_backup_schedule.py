@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -155,16 +154,3 @@ def test_multiple_targets_dynamic_scope_and_revocation(workspace, monkeypatch):
     assert not any(b['task_id'] == selected['id'] for b in ws_backup.list_backups(workspace))
     data = {k: v for k, v in selected.items() if k in TaskInput.model_fields}
     assert not tasks.save('scheduled_owner', {**data, 'enabled': False}, selected['id'])['enabled']
-
-
-def test_legacy_schedule_migrates_once(workspace):
-    directory = ws_backup.store_dir(workspace)
-    directory.mkdir(parents=True)
-    legacy = dict(enabled=True, cadence='weekly', uploads=False, keep=7,
-                  next_run='2026-09-28T03:00:00+00:00', last_success=None, last_error=None)
-    (directory / 'schedule.json').write_text(json.dumps(legacy), encoding='utf-8')
-    task = tasks.list_tasks('scheduled_owner')[0]
-    assert task['workspaces'] == [workspace] and task['cron'] == '0 3 * * 1'
-    assert task['retention_mode'] == 'count' and task['retention_value'] == 7
-    assert (directory / 'schedule.migrated').exists()
-    assert tasks.list_tasks('scheduled_owner') == [task]

@@ -18,7 +18,7 @@ from fastapi.responses import RedirectResponse
 from .. import cloud_auth, ratelimit
 from ..auth import require_personal_user, require_user, set_session_cookie
 from ..cloud_auth import CloudAuthError
-from ..db import connect_users_db, page_now
+from ..db import connect_users_db
 from ..logbuf import log
 from .auth import new_session
 
@@ -91,5 +91,5 @@ async def cloud_unlink(request: Request):
         if not cloud_auth.unlink(conn, user):
             raise HTTPException(404, "no Gamma Cloud account is linked")
         conn.commit()
-    log.info(f"cloud sign-in: {user} unlinked at {page_now()}")
+    log.info(f"cloud sign-in: {user} unlinked")
     return {"ok": True}

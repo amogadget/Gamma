@@ -130,6 +130,10 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | GET | `/workspaces/{id}/backups/{name}/download` | the snapshot as a zip — the same zip `/export` gives (any member) |
 | POST | `/workspaces/{id}/backups/{name}/restore?mode=` | restore it in place: `replace` (owner) / `merge` (editor), the same rules as `/import-data` |
 | DELETE | `/workspaces/{id}/backups/{name}` | delete a snapshot (owner) |
+| GET/POST | `/backup-tasks` | the account's scheduled backup tasks (`routers/backup_tasks.py`, `gamma/backup_schedule.py`; signed-in non-guest) / create one `{name, enabled, scope: selected\|all_owned, workspaces[], cron, uploads, retention_mode: days\|count, retention_value}`; `cron` is five UTC fields, targets must be workspaces the owner owns (at most 100 tasks) |
+| PUT/DELETE | `/backup-tasks/{id}` | replace the task (same body; 409 while it runs) / delete it, keeping its snapshots |
+| POST | `/backup-tasks/{id}/run` | queue a run now, paused or not (409 while it runs) |
+| POST | `/backup-tasks/preview` | `{cron}` → `{runs: [next three ISO times], timezone: "UTC"}` |
 | PUT/DELETE | `/workspaces/{id}/members/{user}` | shared workspaces: invite or set a role `{role}`, incl. owner (owner) / remove (owner) or leave (yourself) |
 | GET | `/workspaces/find-page/{page_id}` | which of my workspaces holds the page (deep links without `ws`) |
 

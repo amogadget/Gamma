@@ -1,5 +1,5 @@
 # Build the image from a copy of the source instead of pulling it from GHCR
-# (before the first merge to main, or for a patch under test):
+# (a patch under test):
 #   rsync/scp the repository's cloud/ folder to ./src, then
 #   docker compose -f compose.yml -f compose.build.yml up -d --build
 services:

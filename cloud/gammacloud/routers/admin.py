@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 from .. import accounts, db, oidc
 from ..accounts import Problem
-from ..db import new_token, now
 from .accounts import portal_account, send_verify
 
 router = APIRouter(prefix="/api/admin")
@@ -69,20 +68,16 @@ def patch_account(account_id: str, body: AccountPatch, request: Request):
         account = accounts.by_id(conn, account_id)
         if not account:
             raise HTTPException(404, "no such account")
-        try:
-            if body.plan is not None:
-                accounts.set_plan(conn, account_id, body.plan, admin["id"])
-            if body.is_admin is not None:
-                if account_id == admin["id"] and not body.is_admin:
-                    raise Problem(400, "you cannot demote yourself")
-                accounts.set_admin(conn, account_id, body.is_admin, admin["id"])
-            if body.verified:
-                accounts.mark_verified(conn, account_id)
-            if body.username is not None:
-                accounts.set_username(conn, account_id, body.username, admin["id"])
-        except Problem as e:
-            conn.rollback()
-            raise HTTPException(e.status, e.detail)
+        if body.plan is not None:
+            accounts.set_plan(conn, account_id, body.plan, admin["id"])
+        if body.is_admin is not None:
+            if account_id == admin["id"] and not body.is_admin:
+                raise Problem(400, "you cannot demote yourself")
+            accounts.set_admin(conn, account_id, body.is_admin, admin["id"])
+        if body.verified:
+            accounts.mark_verified(conn, account_id)
+        if body.username is not None:
+            accounts.set_username(conn, account_id, body.username, admin["id"])
         conn.commit()
         return {"account": _row(accounts.by_id(conn, account_id))}
 
@@ -134,22 +129,9 @@ def list_invites(request: Request):
 def create_invite(body: InviteBody, request: Request):
     with closing(db.connect()) as conn:
         admin = require_admin(conn, request)
-        row = make_invite(conn, uses=body.uses, plan=body.plan, note=body.note, created_by=admin["id"])
+        row = accounts.make_invite(conn, uses=body.uses, plan=body.plan, note=body.note, created_by=admin["id"])
         conn.commit()
         return {"invite": row}
-
-
-def make_invite(conn, *, uses: int, plan: str, note: str, created_by: str) -> dict:
-    from .. import config
-    if plan not in config.PLANS:
-        raise HTTPException(400, "unknown plan")
-    if not 1 <= uses <= 10000:
-        raise HTTPException(400, "uses must be 1..10000")
-    code = new_token(9)
-    conn.execute("INSERT INTO invites (code, uses_left, plan, created_by, created_at, note) VALUES (?, ?, ?, ?, ?, ?)",
-                 (code, uses, plan, created_by, now(), note[:200]))
-    db.audit(conn, "invite.create", actor=created_by, detail=f"{code} uses={uses} plan={plan}")
-    return dict(conn.execute("SELECT * FROM invites WHERE code = ?", (code,)).fetchone())
 
 
 @router.delete("/invites/{code}")
@@ -186,12 +168,8 @@ def list_clients(request: Request):
 def create_client(body: ClientBody, request: Request):
     with closing(db.connect()) as conn:
         admin = require_admin(conn, request)
-        try:
-            client_id, secret = oidc.create_client(conn, name=body.name, kind=body.kind,
-                                                   redirect_uris=body.redirect_uris, server_id=body.server_id,
-                                                   actor=admin["id"])
-        except Problem as e:
-            raise HTTPException(e.status, e.detail)
+        client_id, secret = oidc.create_client(conn, name=body.name, kind=body.kind, redirect_uris=body.redirect_uris,
+                                               server_id=body.server_id, actor=admin["id"])
         conn.commit()
     return {"client_id": client_id, "client_secret": secret}
 

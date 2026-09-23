@@ -8,6 +8,7 @@ import { API, apiJson, copyText, isPdfFile, readNdjson } from "../shared/lib/uti
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "../shared/ui/Widgets";
 import PaperMentionInput from "./PaperMentionInput";
 import { MAX_CHAT_REFERENCES } from "./paperMentions";
+import { READ_TOOLS, WRITE_TOOLS, toolsForKind } from "./chatSettings";
 import { addUsage, cachedPercent, conversationUsage, fmtTokens, liveUsage, usageDetail } from "./tokenUsage";
 import { createTitleScorer } from "../library/librarySearch";
 import { pageAttachment } from "../library/libraryUtils";
@@ -168,7 +169,7 @@ export default function ChatDock({
   const chatMessages = sessionState.replies.get(chatKey)?.messages || loadedMessages;
   // A reply is streaming into THIS conversation. Other buckets stream on
   // their own — asking one paper never waits for another's answer.
-  const busyHere = sessionState.active.has(chatKey);
+  const busyHere = session.isActive(chatKey);
   const folderChat = organizeFolder != null;
   // Which of the three chat kinds this is — each has its own tool permission
   // map in Settings → Assistant (prefs.js CHAT_KINDS): the folder chat, a
@@ -181,9 +182,8 @@ export default function ChatDock({
   const perm = (key) => chatToolPerms?.[key] !== false;
   const toggleTools = () => setAgentEnabled(!agentEnabled);
   // What the agent may do here after applying the shared permissions.
-  const agentReads = perm("list") || perm("read") || perm("block_read") || perm("view") || perm("search")
-    || perm("web_search") || perm("web_read");
-  const agentWrites = perm("rename") || perm("move") || perm("block_edit");
+  const agentReads = READ_TOOLS.some(perm);
+  const agentWrites = WRITE_TOOLS.some(perm);
   // Agent fields riding on /api/ai/chat ({} = plain chat): folder chats reach
   // the folder's pages, page chats get the read + note-block tools for their
   // own page.
@@ -191,8 +191,7 @@ export default function ChatDock({
     if (!toolsEnabled) return {};
     const scope = organizeFolder != null && (agentReads || agentWrites)
       ? { agent_scope: "folder", folder: organizeFolder }
-      : focusedBlockId && (perm("read") || perm("block_read") || perm("view") || perm("search")
-                           || perm("web_search") || perm("web_read") || perm("block_edit"))
+      : focusedBlockId && toolsForKind("pdf").some(perm)
         ? { agent_scope: "page", page_id: focusedBlockId }
         : null;
     return scope

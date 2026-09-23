@@ -18,6 +18,7 @@ from ..oidc import OAuthError
 from .external import sign_in_page
 
 router = APIRouter()
+EXPIRED = "This sign-in request expired. Start again from the app."
 
 
 def _no_store(payload, status=200):
@@ -65,10 +66,9 @@ def authorize(request: Request):
 
 
 def _authorize_page(request: Request, req: dict, account):
-    if account and not account["email_verified_at"]:
-        return HTMLResponse(pages.authorize_page(req, account, verify_needed=True), headers={"Cache-Control": "no-store"})
     if account:
-        return HTMLResponse(pages.authorize_page(req, account), headers={"Cache-Control": "no-store"})
+        return HTMLResponse(pages.authorize_page(req, account, verify_needed=not account["email_verified_at"]),
+                            headers=pages.NO_STORE)
     return sign_in_page(request, lambda social: pages.authorize_page(req, None, social=social), request_id=req["id"])
 
 
@@ -82,8 +82,7 @@ def authorize_resume(request: Request, request_id: str = ""):
         account = sessions.resolve(conn, request)
         conn.commit()
     if not req:
-        return HTMLResponse(pages.error_page("Cannot sign in", "This sign-in request expired. Start again from the app."),
-                            status_code=400)
+        return HTMLResponse(pages.error_page("Cannot sign in", EXPIRED), status_code=400)
     return _authorize_page(request, req, account)
 
 
@@ -105,7 +104,7 @@ def authorize_login(body: AuthorizeLogin, request: Request):
     with closing(db.connect()) as conn:
         req = oidc.pending(conn, body.request_id)
         if not req:
-            raise HTTPException(400, "This sign-in request expired. Start again from the app.")
+            raise HTTPException(400, EXPIRED)
         account = accounts.by_login(conn, who)
         if not accounts.password_ok(account, body.password):
             raise HTTPException(401, "Wrong e-mail, username or password.")
@@ -134,7 +133,7 @@ def authorize_continue(body: AuthorizeContinue, request: Request):
     with closing(db.connect()) as conn:
         req = oidc.pending(conn, body.request_id)
         if not req:
-            raise HTTPException(400, "This sign-in request expired. Start again from the app.")
+            raise HTTPException(400, EXPIRED)
         account = sessions.resolve(conn, request)
         if not account:
             raise HTTPException(401, "not signed in")

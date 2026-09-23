@@ -1,6 +1,6 @@
 """Regenerate the light 'read from any place' illustrations: one library on the
 server, edited from the iPad, and the edit reaching every other device as it is typed."""
-from branding import MARK, write_svg, typewriter, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
+from branding import MARK, FONT, write_svg, scene_heading, typewriter, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
 
 LOOP = 8  # seconds: a note is typed on the shared page, the sync runs, every device shows it
 K = lambda *ts: ';'.join(f'{t / LOOP:.4f}' for t in ts)  # keyTimes from seconds
@@ -14,6 +14,7 @@ def landed_line(x, y, w):
             + f'<animate attributeName="opacity" values="0;0;0.9;0.9;0" keyTimes="{K(0, LANDED, LANDED + 0.25, LOOP - 0.3, LOOP)}" dur="{LOOP}s" repeatCount="indefinite"/></rect>')
 
 
+heading = scene_heading([(332, 'Read from'), (424, 'any place.')], [(494, 'One library on your server, open on every device.'), (536, 'A note written on one is on all of them as you type.')])
 svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: read from any place</title>
   <desc id="desc">One library on the lab server, open on the office desktop, an iPad with a pencil and a phone. A note is typed on the shared page from the iPad; the sync button between the devices spins, and the new line appears on every other device's screen.</desc>
@@ -36,12 +37,9 @@ MARK
     </g>
   </defs>
   {SCENE_BACKGROUND}
-  <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <g font-family="{FONT}">
     {SCENE_LOGO}
-    <text x="120" y="332" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">Read from</text>
-    <text x="120" y="424" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">any place.</text>
-    <text x="122" y="494" font-size="28" fill="#6b6a65">One library on your server, open on every device.</text>
-    <text x="122" y="536" font-size="28" fill="#6b6a65">A note written on one is on all of them as you type.</text>
+    {heading}
     <g font-size="22" font-weight="500" fill="#5a4a24">
       <rect x="122" y="596" width="176" height="44" rx="22" fill="#ecdfc4"/><text x="210" y="625" text-anchor="middle">Any browser</text>
       <rect x="314" y="596" width="184" height="44" rx="22" fill="#ecdfc4"/><text x="406" y="625" text-anchor="middle">iPad + Pencil</text>

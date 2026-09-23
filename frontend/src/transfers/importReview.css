@@ -1,40 +1,40 @@
-.reportModal.importReviewModal { width: min(1120px, calc(100vw - 32px)); max-width: 1120px; max-height: 90vh; }
+.reportModal.importReviewModal { width: min(1120px, calc(100vw - 32px)); max-width: 1120px; max-height: calc(100dvh - 48px); }
 .importReviewModal .settingsDialogContent { min-height: 0; overflow-y: auto; }
 .importReviewHeader { margin: 8px 0 16px; }
 .importReviewHeader strong { overflow-wrap: anywhere; }
-.importReviewHeader p, .importDestination { color: var(--text-muted); font-size: 13px; margin: 6px 0; }
+.importReviewHeader p, .importDestination { color: var(--text-muted); font-size: calc(13px * var(--ui-font-scale, 1)); margin: 6px 0; }
 .importReviewColumns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .importReviewColumns section { border: 1px solid var(--border); border-radius: 10px; min-width: 0; display: flex; flex-direction: column; }
-.importReviewColumns h3 { font-size: 14px; margin: 14px 14px 8px; }
+.importReviewColumns h3 { font-size: calc(14px * var(--ui-font-scale, 1)); margin: 14px 14px 8px; }
 .importDestination { margin: 0 14px 8px; overflow-wrap: anywhere; }
 .importTreeScroll { overflow: auto; height: min(34vh, 360px); padding: 0 10px 12px; }
-.importTree { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.importTree { list-style: none; padding: 0; margin: 0; font-size: calc(13px * var(--ui-font-scale, 1)); }
 .importTree .importTree { padding-left: 16px; border-left: 1px solid var(--border); margin-left: 7px; }
 .importTree summary { padding: 7px 0; cursor: pointer; overflow-wrap: anywhere; }
 .importTree summary svg { vertical-align: middle; margin: 0 6px 0 2px; }
 .importTreeFile { display: flex; gap: 7px; align-items: flex-start; padding: 8px 0; }
 .importTreeFile > svg { flex-shrink: 0; margin-top: 2px; color: var(--text-muted); }
 .importFileText { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
-.importFileText small { display: block; color: var(--text-muted); font-size: 11px; margin-top: 3px; }
-.importKind { text-transform: uppercase; color: var(--text-muted); font-size: 10px; padding-top: 3px; }
-.importEmpty { display: block; margin: 0 0 8px 22px; color: var(--text-muted); font-size: 11px; }
+.importFileText small { display: block; color: var(--text-muted); font-size: calc(11px * var(--ui-font-scale, 1)); margin-top: 3px; }
+.importKind { text-transform: uppercase; color: var(--text-muted); font-size: calc(10px * var(--ui-font-scale, 1)); padding-top: 3px; }
+.importEmpty { display: block; margin: 0 0 8px 22px; color: var(--text-muted); font-size: calc(11px * var(--ui-font-scale, 1)); }
 .importWarning, .importFileText .importWarning { color: var(--text-primary); }
-.importFileText .importWarning { border-left: 2px solid #b58b39; padding-left: 6px; }
-.importWarnings { margin: 14px 0; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.importFileText .importWarning { border-left: 2px solid #d9822b; padding-left: 6px; }
+.importWarnings { margin: 14px 0; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: calc(13px * var(--ui-font-scale, 1)); }
 .importWarnings summary { cursor: pointer; font-weight: 600; }
 .importWarnings ul { max-height: 160px; overflow: auto; padding-left: 20px; margin-bottom: 0; }
 .importWarnings li { padding: 5px 0; overflow-wrap: anywhere; }
 .importWarnings li span { display: block; color: var(--text-muted); margin-top: 3px; }
 .importReviewFooter { position: sticky; bottom: 0; background: var(--bg-surface); padding-top: 12px; }
-.importStepsNav { display: flex; gap: 20px; color: var(--text-muted); font-size: 12px; padding: 2px 0 8px; }
+.importStepsNav { display: flex; gap: 20px; color: var(--text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); padding: 2px 0 8px; }
 .importStepsNav [aria-current="step"] { color: var(--text-primary); font-weight: 600; }
-.importFileSize { color: var(--text-muted); font-size: 12px; margin-left: 10px; }
+.importFileSize { color: var(--text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); margin-left: 10px; }
 .importSelectionToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
 .importSelectionActions { display: flex; gap: 6px; margin-left: auto; }
-.importSelectionToolbar p { width: 100%; margin: 0; color: var(--text-muted); font-size: 12px; }
+.importSelectionToolbar p { width: 100%; margin: 0; color: var(--text-muted); font-size: calc(12px * var(--ui-font-scale, 1)); }
 .importTree input { vertical-align: middle; flex-shrink: 0; margin: 2px 2px 0 0; accent-color: var(--accent); }
 .importUploadProgress { padding: 28px 4px 36px; }
-.importUploadProgress > div { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; font-size: 13px; }
+.importUploadProgress > div { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; font-size: calc(13px * var(--ui-font-scale, 1)); }
 .importUploadProgress span { color: var(--text-muted); }
 .importUploadProgress progress { display: block; width: 100%; height: 9px; accent-color: var(--accent); }
 @media (max-width: 640px) {

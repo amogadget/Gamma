@@ -159,7 +159,6 @@ def targets(task):
 
 
 def list_tasks(owner):
-    migrate_legacy()
     result = []
     for path in root().glob('*.json'):
         try:
@@ -239,7 +238,6 @@ def _prune(task, ws, at):
 
 
 def run_due(at=None):
-    migrate_legacy()
     at = at or now()
     for path in root().glob('*.json'):
         try:
@@ -272,33 +270,6 @@ def run_due(at=None):
                 _write(task)
         except Exception:
             log.exception('[backups] Could not process task %s', path.stem)
-
-
-def migrate_legacy():
-    """Import the previous per-workspace settings once; preserve old snapshots."""
-    with locked('migration') as acquired:
-        if not acquired:
-            return
-        for path in (config.BACKUPS_DIR / 'workspaces').glob('*/schedule.json'):
-            ws = path.parent.name
-            try:
-                info = workspaces.get(ws)
-                owners = [m['username'] for m in workspaces.members(ws) if m['role'] == 'owner']
-                if not info or not owners or ws == workspaces.default_workspace('guest'):
-                    continue
-                old = json.loads(path.read_text(encoding='utf-8-sig'))
-                task_id = hashlib.sha256(('legacy-backup:' + ws).encode()).hexdigest()[:32]
-                if not task_path(task_id).exists():
-                    _write(dict(id=task_id, owner=owners[0], name=info['name'] + ' backup',
-                                scope='selected', workspaces=[ws], enabled=old['enabled'], uploads=old['uploads'],
-                                cron='0 3 * * 1' if old['cadence'] == 'weekly' else '0 3 * * *',
-                                retention_mode='count', retention_value=old.get('keep', 7),
-                                created_at=now().isoformat(), next_run=old['next_run'],
-                                last_run=old.get('last_success'), last_success=old.get('last_success'),
-                                last_error=old.get('last_error'), state='pending', requested=False))
-                path.rename(path.with_suffix('.migrated'))
-            except Exception:
-                log.exception('[backups] Could not migrate schedule for %s', ws)
 
 
 @asynccontextmanager

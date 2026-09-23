@@ -92,12 +92,11 @@ mode) returns NDJSON lines of
 `{"delta"}`/`{"error"}` parsed from the provider's SSE; upstream failures
 before the first byte still return normal HTTP errors. Every AI NDJSON
 stream (chat, the tool loop, translation) runs through `keepalive_lines`
-(`routers/ai.py`): the source generator is pumped from a worker thread and a
-`{"ping": 1}` line goes out after 15 s of silence, so a reverse proxy's idle
-timeout (nginx and Synology default to 60 s, Cloudflare to 100 s) doesn't
-cut the response while the model thinks over a long context — before this
-the browser saw a bare "network error" mid-reply and nothing reached the
-server log. Clients skip `ping`. A consumer that leaves before the source
+(`routers/ai.py`), which pumps the source generator from a worker thread.
+A `{"ping": 1}` line goes out after 15 s of silence, so a reverse proxy's
+idle timeout (nginx and Synology default to 60 s, Cloudflare to 100 s) does
+not cut the response while the model thinks over a long context.
+Clients skip `ping`. A consumer that leaves before the source
 ends (Stop, or the connection dropped anyway) stops the source at its next
 yield and logs a warning with the elapsed time. The client turns a
 failure with no reply text into an AI message carrying `error: true` — shown
@@ -503,11 +502,11 @@ bucket exists when ChatDock reloads (a destination holding a real conversation
 wins; empty save-echo rows are overwritten) — folder conversations follow
 renames and moves, and are deleted with their folder.
 
-Replies stream per bucket, independently: `chat/chatSession.js` (owned by
+Replies stream per bucket, independently. `chat/chatSession.js` (owned by
 App, so navigation can unmount the dock while a request runs) keeps one
-in-flight reply per bucket — `active` is the set of streaming buckets, each
+in-flight reply per bucket. `active` is the set of streaming buckets, each
 with its own `AbortController`. Asking one paper, opening another and asking
-it too runs both requests at once; the composer, the Stop button and the
+it too runs both requests at once. The composer, the Stop button and the
 edit/re-send controls are disabled only while THIS bucket's reply streams
 (`busyHere` in `ChatDock`), and Stop aborts only that one. A bucket refuses
 a second question until its reply ends. The stream's `done` agent event

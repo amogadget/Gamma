@@ -32,7 +32,7 @@ page with nothing highlighted.
 links written before the move still name this library's pages. A link whose
 host differs from the tab's (`foreign`) is claimed only when its id resolves
 locally, which the note renderer checks through the same `[[ref]]` batch
-lookup it uses for the card's title; an id that doesn't resolve stays an
+lookup it uses for the card's title. An id that doesn't resolve stays an
 ordinary external link, which is what a link to somebody else's Gamma should
 be. Pasting normalises the other way: the "Paste as" chooser offers
 **Citation** / **Page link** for a recognised link and stores it host- and

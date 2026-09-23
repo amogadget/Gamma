@@ -15,10 +15,12 @@ import json
 import re
 from datetime import datetime, timezone
 
-from . import config
+from . import accounts, config
 from .providers import NAMES
 
 SITE = "https://gammapdf.com"
+NO_STORE = {"Cache-Control": "no-store"}
+USERNAME_PATTERN = accounts.USERNAME_RE.pattern.strip("^$")   # the <input pattern> of every username field
 
 LOGO = ('<svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
         '<rect width="32" height="32" rx="7" fill="#1e1e1c"/>'
@@ -29,21 +31,20 @@ LOGO = ('<svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http
         '<rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/><rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/></svg>')
 
 CSS = """
-:root{--bg:#f7f6f3;--surface:#fff;--surface-2:#f1efea;--text:#1f1e1b;--text-2:#5f5c55;--muted:#8a877e;--line:#e6e3db;--line-2:#d9d5cb;--accent:#e8a020;--accent-ink:#9a6206;--accent-soft:#faf0d9;--dark:#1e1e1c;--dark-fg:#eeebe4;--danger:#b3261e;--danger-soft:#fbe9e7;--ok:#2f7a3d;--ok-soft:#e3f2e5;--font:Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;color-scheme:light}
-@media(prefers-color-scheme:dark){:root{--bg:#191918;--surface:#202020;--surface-2:#262625;--text:#ecebe6;--text-2:#b5b2a9;--muted:#85827a;--line:#2f2f2c;--line-2:#3b3b37;--accent-ink:#f0b74a;--accent-soft:#3a301d;--danger:#e5766d;--danger-soft:#3a2422;--ok:#7fc98d;--ok-soft:#1e3122;color-scheme:dark}}
+:root{--bg:#f7f6f3;--surface:#fff;--surface-2:#f1efea;--text:#1f1e1b;--text-2:#5f5c55;--muted:#8a877e;--line:#e6e3db;--line-2:#d9d5cb;--accent:#e8a020;--accent-ink:#9a6206;--accent-soft:#faf0d9;--primary:#1e1e1c;--primary-fg:#eeebe4;--primary-hover:#31312e;--danger:#b3261e;--danger-soft:#fbe9e7;--ok:#2f7a3d;--ok-soft:#e3f2e5;--font:Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#191918;--surface:#202020;--surface-2:#262625;--text:#ecebe6;--text-2:#b5b2a9;--muted:#85827a;--line:#2f2f2c;--line-2:#3b3b37;--accent-ink:#f0b74a;--accent-soft:#3a301d;--primary:#e8a020;--primary-fg:#1a1a18;--primary-hover:#f0b03a;--danger:#e5766d;--danger-soft:#3a2422;--ok:#7fc98d;--ok-soft:#1e3122;color-scheme:dark}}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}[hidden]{display:none!important}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--font);-webkit-font-smoothing:antialiased;min-height:100vh}
 a{color:var(--accent-ink);text-decoration:none}a:hover{text-decoration:underline}h1,h2,h3{margin:0;line-height:1.2;letter-spacing:-.01em;font-weight:600}h1{font-size:24px}h2{font-size:15px}p{margin:0}code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;border-radius:6px;font:inherit;font-weight:500;font-size:14px;line-height:1.2;border:1px solid var(--line-2);background:var(--surface);color:var(--text);white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color .1s,border-color .1s}
 .btn:hover{background:var(--surface-2);text-decoration:none}.btn:disabled{opacity:.5;cursor:default}
-.btn--primary{background:var(--dark);color:var(--dark-fg);border-color:var(--dark)}.btn--primary:hover{background:#31312e}
+.btn--primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}.btn--primary:hover{background:var(--primary-hover)}
 .btn--danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,var(--line-2))}.btn--danger:hover{background:var(--danger-soft)}
 .btn--sm{padding:4px 9px;font-size:13px}.btn--block{width:100%;padding:9px 12px}
-@media(prefers-color-scheme:dark){.btn--primary{background:var(--accent);color:#1a1a18;border-color:var(--accent)}.btn--primary:hover{background:#f0b03a}}
 label{display:block;font-size:12.5px;font-weight:500;color:var(--text-2);margin:12px 0 5px}label small{font-weight:400;color:var(--muted)}
 input,select{width:100%;padding:8px 10px;border:1px solid var(--line-2);border-radius:6px;background:var(--surface);color:inherit;font:inherit;font-size:14px}input:focus,select:focus{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:0;border-color:var(--accent)}
-form .btn{margin-top:14px}.msg{min-height:1.3em;font-size:13px;margin-top:8px;color:var(--danger)}.msg.ok{color:var(--ok)}
+form .btn{margin-top:14px}.cf-turnstile{margin-top:14px}.msg{min-height:1.3em;font-size:13px;margin-top:8px;color:var(--danger)}.msg.ok{color:var(--ok)}
 .pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);color:var(--text-2);white-space:nowrap}
-.pill--ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.pill--warn{background:var(--accent-soft);color:var(--accent-ink);border-color:transparent}.pill--plan{text-transform:capitalize}
+.pill--ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.pill--warn{background:var(--accent-soft);color:var(--accent-ink);border-color:transparent}
 /* auth shell */
 .authwrap{min-height:100vh;display:flex;flex-direction:column}.authtop{display:flex;align-items:center;gap:10px;padding:18px 24px;font-weight:600;color:var(--text)}.authtop a{color:inherit}.authtop svg{display:block}.authtop em{font-style:normal;color:var(--accent);font-weight:500;margin-left:3px}
 .auth{margin:6vh auto 40px;width:min(400px,100% - 32px)}.auth h1{font-size:22px;margin-bottom:6px}.auth .lead{color:var(--text-2);margin-bottom:18px;font-size:14px}.auth .links{margin-top:16px;font-size:13px;color:var(--text-2);display:flex;gap:14px;flex-wrap:wrap}
@@ -92,9 +93,8 @@ form .btn{margin-top:14px}.msg{min-height:1.3em;font-size:13px;margin-top:8px;co
 .notice{background:var(--accent-soft);color:var(--accent-ink);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:8px;padding:10px 14px;font-size:13.5px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
 .empty{color:var(--text-2);font-size:13.5px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.actions .btn{margin-top:0}
 .danger{border-color:color-mix(in srgb,var(--danger) 35%,var(--line))}.danger>h2{color:var(--danger)}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:640px){.grid2{grid-template-columns:1fr}}
 form.inline{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}form.inline label{margin:0;flex:1;min-width:120px}form.inline .btn{margin:0}
-table{width:100%;border-collapse:collapse;font-size:13.5px}th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:last-child td{border-bottom:0}td .btn{margin:0}
+.section>.body.tbl{padding:0}table{width:100%;border-collapse:collapse;font-size:13.5px}th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:last-child td{border-bottom:0}td .btn{margin:0}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px}.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px;font:inherit;font-weight:500;color:var(--text-2);cursor:pointer;margin-bottom:-1px}.tabs button.on{color:var(--text);border-bottom-color:var(--text)}
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}.toolbar input{max-width:320px}.toolbar .spacer{flex:1}
 select.sm{width:auto;padding:3px 6px;font-size:13px}.mono{font-family:var(--mono);font-size:12px}
@@ -211,7 +211,7 @@ def app(title: str, lead: str, account: dict, active: str, inner: str, script: s
 def turnstile_widget() -> str:
     if not config.TURNSTILE_SITEKEY:
         return ""
-    return f'<div class="cf-turnstile" data-sitekey="{esc(config.TURNSTILE_SITEKEY)}" style="margin-top:14px"></div>'
+    return f'<div class="cf-turnstile" data-sitekey="{esc(config.TURNSTILE_SITEKEY)}"></div>'
 
 
 def error_page(title: str, message: str, back: str = "/") -> str:
@@ -246,6 +246,10 @@ def _terms() -> str:
     return f"<p class=terms>By continuing you agree to the <a href='{SITE}/privacy/'>privacy policy</a>.</p>"
 
 
+def _invite_field() -> str:
+    return "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
+
+
 # --- auth pages ---------------------------------------------------------------
 
 def login_page(social: dict | None = None) -> str:
@@ -260,12 +264,11 @@ def register_page(social: dict | None = None) -> str:
     if config.REGISTRATION == "closed":
         return error_page("Registration is closed", "Gamma Cloud is not taking new accounts right now.")
     tiles, script = _social(social, "sign up", "signup")
-    invite = "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
     inner = ("<form id=f><label>E-mail<input name=email type=email autocomplete=email required autofocus></label>"
              "<label>Username <small>lowercase letters, digits, hyphens</small><input name=username autocomplete=username "
-             "pattern='[a-z0-9][a-z0-9-]{1,30}[a-z0-9]' required></label>"
+             f"pattern='{USERNAME_PATTERN}' required></label>"
              "<label>Password<input name=password type=password autocomplete=new-password minlength=8 required></label>"
-             f"{invite}{turnstile_widget()}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
+             f"{_invite_field()}{turnstile_widget()}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
              f"{tiles}<p class=switch>Already have an account? <a href=/login>Sign in</a></p>{_terms()}")
     script = "bind('f', async d => { await api('/api/register', d); location.href = '/'; });" + script
     return auth("Create your account", "Free. You can change the username and e-mail later.", inner, script)
@@ -275,29 +278,32 @@ def signup_finish_page(flow: dict, suggestion: str) -> str:
     """After Google/GitHub for a new person: pick the username (and give the
     invite code in ``invite`` mode)."""
     p = flow["provider"]
-    invite = "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
     inner = (f"<div class=via>{ICONS[p]}<span>{NAMES[p]} · <b>{esc(flow['email'])}</b></span></div>"
              "<form id=f><label>Username <small>your name on every Gamma server</small><input name=username "
-             f"value='{esc(suggestion)}' autocomplete=username pattern='[a-z0-9][a-z0-9-]{{1,30}}[a-z0-9]' required autofocus></label>"
-             f"{invite}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
+             f"value='{esc(suggestion)}' autocomplete=username pattern='{USERNAME_PATTERN}' required autofocus></label>"
+             f"{_invite_field()}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
              f"<p class=switch><a href=/login>Cancel</a></p>{_terms()}")
     script = "bind('f', async d => { const r = await api('/api/oauth/signup', d); location.href = r.redirect; });"
     hello = f"Welcome, {esc(flow['name'])}. " if flow.get("name") else ""
     return auth("Finish creating your account", hello + "Pick a username; you can change it later.", inner, script)
 
 
-def verify_page(token: str) -> str:
-    script = (f"api('/api/verify', {{token: {json.dumps(token)}}}).then(() => {{ document.getElementById('msg').textContent = "
-              f"'Your e-mail address is confirmed. Taking you to your account…'; setTimeout(() => location.href = '/', 1200); }})"
+def _token_page(title: str, api_path: str, token: str, done_js: str) -> str:
+    """A mailed link's landing page: posts the token, shows ``done_js`` (a
+    JS expression over the answer ``d``), then goes to the Overview."""
+    script = (f"api({_js(api_path)}, {{token: {_js(token)}}}).then(d => {{ document.getElementById('msg').textContent = "
+              f"{done_js}; setTimeout(() => location.href = '/', 1200); }})"
               f".catch(e => {{ document.getElementById('msg').textContent = e.message; }});")
-    return auth("Confirming your e-mail", "One moment.", "<p id=msg class=msg></p><p class=links><a href='/'>Overview</a></p>", script)
+    return auth(title, "One moment.", "<p id=msg class=msg></p><p class=links><a href='/'>Overview</a></p>", script)
+
+
+def verify_page(token: str) -> str:
+    return _token_page("Confirming your e-mail", "/api/verify", token,
+                       "'Your e-mail address is confirmed. Taking you to your account…'")
 
 
 def email_confirm_page(token: str) -> str:
-    script = (f"api('/api/email/confirm', {{token: {json.dumps(token)}}}).then(d => {{ document.getElementById('msg').textContent = "
-              f"'Your e-mail address is now ' + d.email + '.'; setTimeout(() => location.href = '/', 1500); }})"
-              f".catch(e => {{ document.getElementById('msg').textContent = e.message; }});")
-    return auth("Changing your e-mail", "One moment.", "<p id=msg class=msg></p><p class=links><a href='/'>Overview</a></p>", script)
+    return _token_page("Changing your e-mail", "/api/email/confirm", token, "'Your e-mail address is now ' + d.email + '.'")
 
 
 def reset_page() -> str:
@@ -491,7 +497,7 @@ def settings_page(account: dict, linked: list[dict] | None = None, enabled: list
             f"placeholder='{esc(account['username'])}'></label>{foot('Save')}</form>")
         + row("Username", "Your name on every Gamma server: lowercase letters, digits and hyphens.",
               f"<form id=user data-gated><label><span class=sr>Username</span><input name=username value='{esc(account['username'])}' "
-              f"pattern='[a-z0-9][a-z0-9-]{{1,30}}[a-z0-9]' required></label><div class=reveal hidden>{pw}</div>"
+              f"pattern='{USERNAME_PATTERN}' required></label><div class=reveal hidden>{pw}</div>"
               f"{foot('Change username')}</form>"))
     email = row("E-mail address", "A confirmation link goes to the new address; the current one stays until you open it.",
                 f"<div class=current>{esc(account['email'])} {_email_pill(account)}</div>"
@@ -542,19 +548,19 @@ def admin_page(account: dict) -> str:
         "<div class=tabs><button class=on data-tab=accounts>Accounts</button><button data-tab=invites>Invites</button>"
         "<button data-tab=clients>Clients</button><button data-tab=audit>Audit log</button></div>"
         "<div id=tab-accounts><div class=toolbar><input id=q placeholder='Search username, e-mail or id' autocomplete=off><span class=spacer></span><span class=empty id=count></span></div>"
-        "<div class=section><div class=body style='padding:0'><table><thead><tr><th>Username</th><th>E-mail</th><th>Plan</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody id=accounts></tbody></table></div></div>"
+        "<div class=section><div class='body tbl'><table><thead><tr><th>Username</th><th>E-mail</th><th>Plan</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody id=accounts></tbody></table></div></div>"
         "<div class=actions><button class='btn btn--sm' id=more>Load more</button></div></div>"
         "<div id=tab-invites hidden><div class=section><h2>New invite</h2><div class=body><form id=inv class=inline>"
         "<label>Uses<input name=uses type=number value=1 min=1 max=10000></label>"
         f"<label>Plan<select name=plan>{plans}</select></label><label>Note<input name=note placeholder='who it is for'></label>"
         "<button type=submit class='btn btn--primary btn--sm'>Create</button><div class=msg></div></form></div></div>"
-        "<div class=section><div class=body style='padding:0'><table><thead><tr><th>Code</th><th>Uses left</th><th>Plan</th><th>Note</th><th>Created</th><th></th></tr></thead><tbody id=invites></tbody></table></div></div></div>"
+        "<div class=section><div class='body tbl'><table><thead><tr><th>Code</th><th>Uses left</th><th>Plan</th><th>Note</th><th>Created</th><th></th></tr></thead><tbody id=invites></tbody></table></div></div></div>"
         "<div id=tab-clients hidden><div class=section><h2>New client <span>a hosted Gamma server or the share host</span></h2><div class=body><form id=cli class=inline>"
         "<label>Name<input name=name required></label><label>Kind<select name=kind><option value=container>container</option><option value=share-host>share-host</option></select></label>"
         "<label>Callback URL<input name=redirect placeholder='https://name.gammapdf.com/api/auth/cloud/callback' required></label>"
         "<button type=submit class='btn btn--primary btn--sm'>Create</button><div class=msg></div></form><div id=secret hidden class=secretbox></div></div></div>"
-        "<div class=section><div class=body style='padding:0'><table><thead><tr><th>Client id</th><th>Name</th><th>Kind</th><th>Callback</th><th></th></tr></thead><tbody id=clients></tbody></table></div></div></div>"
-        "<div id=tab-audit hidden><div class=section><div class=body style='padding:0'><table><thead><tr><th>When</th><th>Event</th><th>Account</th><th>Actor</th><th>Detail</th></tr></thead><tbody id=audit></tbody></table></div></div></div>")
+        "<div class=section><div class='body tbl'><table><thead><tr><th>Client id</th><th>Name</th><th>Kind</th><th>Callback</th><th></th></tr></thead><tbody id=clients></tbody></table></div></div></div>"
+        "<div id=tab-audit hidden><div class=section><div class='body tbl'><table><thead><tr><th>When</th><th>Event</th><th>Account</th><th>Actor</th><th>Detail</th></tr></thead><tbody id=audit></tbody></table></div></div></div>")
     script = """
 const PLANS = %s; let offset = 0, query = '';
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
@@ -615,11 +621,9 @@ def authorize_page(req: dict, account, verify_needed: bool = False, social: dict
     if account and verify_needed:
         inner = (f"<p class=lead><b>{who}</b> wants to sign you in as <b>{esc(account['username'])}</b>, but your e-mail address is not "
                  "confirmed yet. Open the link we mailed you, then try again from the app.</p>"
-                 "<button class='btn btn--block' id=resend>Resend the mail</button><div class=msg id=err></div>"
+                 "<button class='btn btn--block' data-resend>Resend the mail</button>"
                  "<p class=links><a href=/>Your account</a></p>")
-        script = ("document.getElementById('resend').onclick = async (ev) => { ev.target.disabled = true; try { await api('/api/verify/resend', {}); "
-                  "ev.target.textContent = 'Sent'; } catch (e) { document.getElementById('err').textContent = e.message; } };")
-        return auth("Confirm your e-mail first", "", inner, script)
+        return auth("Confirm your e-mail first", "", inner, RESEND_JS)
     if account:
         inner = (f"<p class=lead>Continue as <b>{esc(account['username'])}</b> ({esc(account['email'])})?</p>"
                  "<button class='btn btn--primary btn--block' id=go>Continue</button>"

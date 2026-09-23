@@ -1,11 +1,12 @@
-# Server image only. Runs on every push to main (`latest`) — the only
-# workflow a merge triggers; desktop.yml and extension.yml are dispatched by
-# the `release` skill. A merge that only touches the account server (cloud/)
-# does not rebuild it; that image is cloud.yml's, published by dispatch. The desktop
-# release (desktop.yml) dispatches this workflow on its new `v<version>` tag
-# with the version as input, which adds the `<version>` and `<major.minor>`
-# image tags — a `push: tags` trigger would not do it, since tags created
-# with GITHUB_TOKEN never trigger workflows. Overview: docs/dev/github_actions.md.
+# Server image only. Runs on every push to main (`latest`) — the only workflow
+# a merge triggers; desktop.yml and extension.yml are dispatched by the
+# `release` skill. A merge that only touches the account server (cloud/) does
+# not rebuild it (paths-ignore, the same list as check.yml); that image is
+# cloud.yml's, published by dispatch. The desktop release (desktop.yml)
+# dispatches this workflow on its new `v<version>` tag with the version as
+# input, which adds the `<version>` and `<major.minor>` image tags —
+# a `push: tags` trigger would not do it, since tags created with GITHUB_TOKEN
+# never trigger workflows. Overview: docs/dev/github_actions.md.
 name: Build and publish Docker image
 
 on:

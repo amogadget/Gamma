@@ -129,11 +129,11 @@ row, not a second identity: the callback verifies the account server's ID
 token, finds the `identities` row (or links, claims or provisions one per
 the admin's policy), inserts the same `sessions` row the password login
 does and sets the same cookie. An account the cloud provisioned has an
-EMPTY password hash and the password login refuses it; `manage.py
-set-password` gives it one. The settings live in the `settings` KV
-(`cloud_issuer`, `cloud_client_id`, `cloud_client_secret` — Fernet-encrypted
-with the data directory's key —, `cloud_policy`) or come from
-`GAMMA_CLOUD_*` on a provisioned container.
+EMPTY password hash and the password login refuses it. `manage.py
+set-password` gives it one. The settings live in the `settings` KV:
+`cloud_issuer`, `cloud_client_id`, `cloud_client_secret` (Fernet-encrypted
+with the data directory's key) and `cloud_policy`. A provisioned container
+takes them from `GAMMA_CLOUD_*` instead.
 
 ## First-run seeding
 

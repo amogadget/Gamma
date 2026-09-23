@@ -27,14 +27,14 @@ class NewerDataError(RuntimeError):
     """cloud.db was written by a newer build."""
 
 
-def now() -> str:
-    """UTC, fixed width, ``Z`` suffix — so timestamps compare as strings."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-
 def after(seconds: float) -> str:
+    """UTC, fixed width, ``Z`` suffix — so timestamps compare as strings."""
     t = datetime.now(timezone.utc).timestamp() + seconds
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def now() -> str:
+    return after(0)
 
 
 def parse(ts: str) -> datetime:
@@ -265,13 +265,8 @@ def ensure_current() -> list[str]:
     pending = [(v, name, fn) for v, name, fn in STEPS if v > version]
     if not pending:
         return []
-    backups = config.DATA_DIR / "backups"
-    backups.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    with closing(sqlite3.connect(str(config.DB_PATH))) as src, \
-            closing(sqlite3.connect(str(backups / f"{stamp}-v{version}.db"))) as dst:
-        src.backup(dst)
-    for older in sorted(backups.glob("*-v*.db"))[:-3]:
+    snapshot(f"v{version}")
+    for older in sorted((config.DATA_DIR / "backups").glob("*-v*.db"))[:-3]:
         older.unlink()
     done = []
     for v, name, fn in pending:

@@ -220,8 +220,8 @@ def list_identities():
     if not rows:
         print("No account is linked to Gamma Cloud.")
     for username, subject, email, claims, last in rows:
-        username = json.loads(claims or "{}").get("username", "")
-        print(f"{username:<20} cloud username {username:<20} {email:<30} sub={subject}  last login {last[:10]}")
+        cloud_username = json.loads(claims or "{}").get("username", "")
+        print(f"{username:<20} cloud username {cloud_username:<20} {email:<30} sub={subject}  last login {last[:10]}")
 
 
 def link_identity(username, subject, cloud_username, email=""):
@@ -271,7 +271,7 @@ def migrate(status_only: bool = False, dry_run: bool = False):
     """Upgrade the data directory to this Gamma's schema version (also done
     at every server start). ``--status`` only reports; ``--dry-run`` reports
     what would run. On Windows stop the server first: an upgrade may move
-    directories that open database usernames would lock."""
+    directories that open database handles would lock."""
     st = migrations.status()
     if st["fresh"]:
         print("No data directory yet — nothing to migrate.")

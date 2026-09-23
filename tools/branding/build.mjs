@@ -105,10 +105,8 @@ if (check) {
     for (const [p, width, height, svg, transparent] of storeJobs) {
       emit(p, await renderPng(browser, svg, width, height, transparent), { source: 'tools/branding/store-layouts.mjs', variant: path.basename(p, '.png') });
     }
-    for (const theme of ['light']) {
-      const p = `docs/assets/branding/gamma-hero-${theme}`;
-      emit(`${p}.png`, await renderPng(browser, read(`${p}.svg`).toString(), 1920, 1080, false), { source: `${p}.svg`, variant: theme });
-    }
+    const hero = 'docs/assets/branding/gamma-hero-light';
+    emit(`${hero}.png`, await renderPng(browser, read(`${hero}.svg`).toString(), 1920, 1080, false), { source: `${hero}.svg`, variant: 'light' });
   } finally { await browser.close(); }
   fs.writeFileSync(lockPath, JSON.stringify({ inputs: inputs(), outputs }, null, 2) + '\n');
   console.log(`Generated ${Object.keys(outputs).length} brand outputs. Run node tools/branding/build.mjs --check to verify.`);

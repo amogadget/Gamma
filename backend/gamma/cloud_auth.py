@@ -32,7 +32,6 @@ locally (issuer, audience, nonce, expiry, ``email_verified``) — the account
 server is never called on a data request.
 """
 
-import base64
 import hashlib
 import json
 import secrets
@@ -47,16 +46,11 @@ import jwt
 from cryptography.fernet import InvalidToken
 
 from . import config, mcp_oauth
+from .chatgpt_oauth import _b64url
 from .db import connect_users_db, page_now
-
-
-def _conn() -> sqlite3.Connection:
-    conn = connect_users_db()
-    conn.row_factory = sqlite3.Row
-    return conn
 from .logbuf import log
 from .publisher_sessions import cipher
-from .server_settings import _set_raw, validate_public_url
+from .server_settings import _get_raw, _set_raw, public_url_settings, validate_public_url
 
 PROVIDER = "gamma-cloud"
 POLICIES = ("refuse", "claim", "provision")
@@ -82,11 +76,6 @@ def _conn() -> sqlite3.Connection:
 
 # --- settings -----------------------------------------------------------------
 
-def _setting(conn, key: str) -> str:
-    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return row[0] if row else ""
-
-
 def settings() -> dict:
     """The effective configuration: ``issuer``, ``client_id``, ``policy``,
     ``has_secret``, ``enabled``, and ``source`` (``environment`` when
@@ -97,11 +86,10 @@ def settings() -> dict:
         return {"issuer": env["issuer"], "client_id": env["client_id"] or DEFAULT_CLIENT_ID,
                 "policy": env["policy"] if env["policy"] in POLICIES else "refuse",
                 "has_secret": bool(env["client_secret"]), "enabled": True, "source": "environment"}
-    with connect_users_db() as conn:
-        issuer = _setting(conn, "cloud_issuer")
-        client_id = _setting(conn, "cloud_client_id")
-        policy = _setting(conn, "cloud_policy")
-        has_secret = bool(_setting(conn, "cloud_client_secret"))
+    issuer = _get_raw("cloud_issuer")
+    client_id = _get_raw("cloud_client_id")
+    policy = _get_raw("cloud_policy")
+    has_secret = bool(_get_raw("cloud_client_secret"))
     return {"issuer": issuer, "client_id": client_id or DEFAULT_CLIENT_ID,
             "policy": policy if policy in POLICIES else "refuse",
             "has_secret": has_secret, "enabled": bool(issuer), "source": "saved"}
@@ -111,8 +99,7 @@ def client_secret() -> str:
     env = config.cloud_env()
     if env["issuer"]:
         return env["client_secret"]
-    with connect_users_db() as conn:
-        stored = _setting(conn, "cloud_client_secret")
+    stored = _get_raw("cloud_client_secret")
     if not stored:
         return ""
     try:
@@ -223,14 +210,11 @@ def verify_id_token(token: str, *, issuer: str, client_id: str, nonce: str) -> d
 
 # --- the flow -----------------------------------------------------------------
 
-def _b64url(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-
-
-def public_base(request) -> str:
+def callback_base(request) -> str:
     """This server's address for the callback: the admin-confirmed public
     URL, else the request's own origin (a local sidecar on 127.0.0.1)."""
-    from .server_settings import public_url_settings
+    # Unlike mcp_oauth.public_base, no Host checks: a plain-HTTP LAN origin
+    # or a sidecar without a confirmed public URL must still reach the callback.
     configured = public_url_settings()["public_url"]
     return configured or str(request.base_url).rstrip("/")
 
@@ -242,7 +226,7 @@ def begin(request, *, link_user: str | None, next_path: str) -> str:
     if not cfg["enabled"]:
         raise CloudAuthError("Cloud sign-in is not set up on this server.")
     doc = discovery(cfg["issuer"])
-    base = public_base(request)
+    base = callback_base(request)
     state = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
     nonce = secrets.token_urlsafe(16)
@@ -260,7 +244,7 @@ def exchange(request, *, code: str, state: str) -> tuple[dict, dict, str]:
     """The callback's first half: (claims, tokens, next path) for a valid
     code + state, or CloudAuthError."""
     cfg = settings()
-    base = public_base(request)
+    base = callback_base(request)
     pending = mcp_oauth.load("cloud_login", base, state or "", consume=True) if state else None
     if not pending:
         raise CloudAuthError("This sign-in expired or was already used. Start again.")
@@ -342,7 +326,7 @@ def resolve_account(claims: dict) -> str:
     """The callback's second half: the local username this identity signs
     in as — linking, claiming or provisioning per the rules in the module
     docstring — or CloudAuthError. Commits."""
-    from . import seed, workspaces
+    from . import seed
 
     cfg = settings()
     subject = claims["sub"]
@@ -399,7 +383,6 @@ def resolve_account(claims: dict) -> str:
     with connect_users_db() as conn:
         link(conn, username, claims, claims.get("_refresh_token", ""))
         conn.commit()
-    workspaces.ensure_personal(username)
     log.info(f"cloud sign-in: provisioned account {username}" + (" (admin)" if is_admin_seed else ""))
     return username
 

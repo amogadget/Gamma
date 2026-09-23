@@ -88,15 +88,13 @@ e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
 
 ## Model
 
-The brush set is deliberately small: pressure-sensitive pen, monoline and
+Three brushes, no textures: pressure-sensitive pen, monoline and
 highlighter. A pen preset's options switch between Pen and Monoline; the
-style survives preset duplication and reload. Monoline shares the existing
+style survives preset duplication and reload. Monoline shares the
 smooth outline renderer with pressure-based thinning disabled. Pressure and
 timing stay in the samples. Live canvas, retained SVG, eraser geometry and
 server exports all honor the style; partial erasing preserves it in each
-surviving piece. This borrows PencilKit's useful distinction between a
-pressure pen and an even line without adding textured brushes or a second
-rendering engine.
+surviving piece.
 
 An ink group is a block with these properties (no schema change):
 
@@ -147,11 +145,10 @@ Plain JSON (`application/json`), one per group:
   samples, 4 MB, finite numbers, unique stroke ids.
 
 For `tool: "pen"`, optional `brush: "monoline"` selects constant width.
-Omitting `brush` keeps the original pressure behavior and serialized form;
-highlighters do not accept it. This is an additive `gamma-ink` v1 field:
-updated clients read old files, but older servers with strict validation
-must be upgraded before uploading monoline strokes. The embedded Gamma
-payload in annotated PDF exports retains the brush for re-import.
+Omitting `brush` keeps the pressure behavior and serialized form;
+highlighters do not accept it. Older servers reject `brush`
+(`extra="forbid"`). The embedded Gamma payload in annotated PDF exports
+retains the brush for re-import.
 
 The codec lives twice by design (`ink.py` `decode_stroke`/`encode_points`,
 `ink/ink.js` `decodeStroke`/`encodeStroke`); the two test files pin the same

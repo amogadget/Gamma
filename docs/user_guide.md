@@ -118,9 +118,7 @@ The **link button** in the top bar shares the open page, Notion-style:
 
 ## Workspaces
 
-<picture>
-  <img alt="Personal workspaces next to a shared research library where an owner and an editor type into two blocks of the same page at the same time and a viewer reads along" src="assets/branding/gamma-workspaces-light.svg" width="100%">
-</picture>
+<img alt="Personal workspaces next to a shared research library where an owner and an editor type into two blocks of the same page at the same time and a viewer reads along" src="assets/branding/gamma-workspaces-light.svg" width="100%">
 
 A workspace is a separate library — its own pages, PDFs and chats. Your account starts with a personal one; the account menu (top right) lists every workspace you belong to and switches between them; **Workspaces…** opens Settings → Workspaces.
 
@@ -132,9 +130,7 @@ A workspace is a separate library — its own pages, PDFs and chats. Your accoun
 
 ## Offline copies
 
-<picture>
-  <img alt="One library on the lab server, open on a desktop, an iPad and a phone; a note typed from the iPad appears on every other device as the sync between them runs" src="assets/branding/gamma-anywhere-light.svg" width="100%">
-</picture>
+<img alt="One library on the lab server, open on a desktop, an iPad and a phone; a note typed from the iPad appears on every other device as the sync between them runs" src="assets/branding/gamma-anywhere-light.svg" width="100%">
 
 Your library lives on your server and opens from any browser — the office desktop, the iPad, a phone. For the places without a connection (the train, a flight, a lab without Wi-Fi) keep an **offline copy**: a workspace on a Gamma that runs on your own laptop, holding a full copy of a workspace on the server, and keeping the two in step by itself.
 
@@ -165,9 +161,7 @@ Many journal PDFs need a subscription your browser has (through the campus netwo
 
 ## Assistants: Codex and Claude Code
 
-<picture>
-  <img alt="Gamma in the middle of an assistant prompt that mentions @Gamma and a paper, the Obsidian, Notion and Zotero import and export arrows, and the Gamma Connector saving a paper with the publisher sign-in kept per journal" src="assets/branding/gamma-connections-light.svg" width="100%">
-</picture>
+<img alt="Gamma in the middle of an assistant prompt that mentions @Gamma and a paper, the Obsidian, Notion and Zotero import and export arrows, and the Gamma Connector saving a paper with the publisher sign-in kept per journal" src="assets/branding/gamma-connections-light.svg" width="100%">
 
 Codex, Claude Code and any other MCP client can search and read your papers, notes, highlights and PDF text — read-only, for one workspace you approve in the browser. Then, in the assistant: *"@Gamma, in the Rydberg arrays paper, how is the blockade radius measured?"*, or paste a Gamma page or share link with your question.
 

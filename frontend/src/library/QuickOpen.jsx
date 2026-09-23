@@ -57,7 +57,7 @@ export default function QuickOpen({ open, onClose, pages, recentViews, openTabs,
   if (!open) return null;
   const choose = (page) => { if (page) { onClose(); onOpen(page.id); } };
   return (
-    <div className="reportOverlay quickOpenOverlay" data-popover="quick-open" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="reportOverlay quickOpenOverlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="reportModal quickOpen" role="dialog" aria-label="Open a page">
         <div className="quickOpenInput">
           <SearchIcon size={15} />

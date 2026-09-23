@@ -16,7 +16,9 @@ const POLICIES = [
   ["provision", "Provision", null, "Any verified cloud account gets an account here, named after its username"],
 ];
 
-export function CloudSignInSettings({ setStatus }) {
+// `action` receives the Save button (present while the draft is dirty) so
+// the Server pane can put it on its Sign-in section rule.
+export function CloudSignInSettings({ setStatus, action }) {
   const [saved, setSaved] = React.useState(null); // the `cloud` object of /api/admin/settings
   const [draft, setDraft] = React.useState({ issuer: "", client_id: "", secret: "", policy: "refuse" });
   const [error, setError] = React.useState("");
@@ -50,6 +52,10 @@ export function CloudSignInSettings({ setStatus }) {
   }
   const set = (key) => (value) => setDraft((d) => ({ ...d, [key]: value }));
   const disabled = !saved || managed || busy;
+  React.useEffect(() => {
+    action?.(dirty ? <button className="uiBtn sm primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save sign-in"}</button> : null);
+    return () => action?.(null);
+  }, [dirty, busy, draft]); // eslint-disable-line react-hooks/exhaustive-deps
   return <>
     <Row icon={CloudIcon} label="Account server"
       hint={managed ? "Set by the server's environment" : "The Gamma Cloud address people sign in through; empty turns it off"}
@@ -77,10 +83,7 @@ export function CloudSignInSettings({ setStatus }) {
     <Row icon={UserIcon} label="Unknown cloud accounts"
       hint="What a cloud account that is not linked to an account here may do"
       title="Refuse: only linked accounts. Claim: a cloud username equal to an unlinked username here takes it over — for a server whose accounts were created under cloud usernames. Provision: every verified cloud account gets an account — the free share host.">
-      <span className="setRowControls">
-        <Segmented value={draft.policy} onChange={disabled ? () => {} : set("policy")} options={POLICIES} />
-        {dirty ? <button className="uiBtn sm primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save sign-in"}</button> : null}
-      </span>
+      <Segmented value={draft.policy} onChange={set("policy")} options={POLICIES} disabled={disabled} />
     </Row>
     {error ? <p className="settingsPaneHint aiKeysError" role="alert">{error}</p> : null}
   </>;
