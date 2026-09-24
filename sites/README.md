@@ -70,9 +70,14 @@ cd sites
 npm run deploy     # build + wrangler deploy
 ```
 
-From CI: `.github/workflows/site.yml` deploys on every push to `main` that
-touches `sites/`, the assets it copies, or `PRIVACY.md` (and on manual
-dispatch). It needs two repository secrets:
+From CI: `.github/workflows/site.yml` checks a PR that touches `sites/`,
+the assets it copies, or `PRIVACY.md` (build, pages present, includes
+expanded, a wrangler dry run), and checks + deploys on a push to `main`
+touching them or on a manual dispatch from any branch — the `build-site`
+skill (`gh workflow run site.yml --ref dev`), so the site ships without a
+merge. The app's `check.yml` and `docker.yml` skip site-only changes
+([docs/dev/github_actions.md](../docs/dev/github_actions.md)). Deploying
+needs two repository secrets:
 
 | Secret | Value |
 |---|---|

@@ -6,14 +6,17 @@ description: Merge the branch's committed work into main via a PR and report the
 # Merge to main
 
 One job: get what is already committed on the branch into `main`. The
-`check` workflow validates the PR (and `cloud` when `cloud/` changed);
-the merge itself triggers only `docker.yml`
+`check` workflow validates the PR (and `cloud` when `cloud/` changed,
+`site` when `sites/` or its inputs changed; `check` is skipped for a PR
+that only touches those); the merge itself triggers `docker.yml`
 (`ghcr.io/tim4431/gamma:latest`; skipped for a merge that only touches
-`cloud/`). The desktop app and the browser extension are NOT released by
-a merge — run the `release` skill for that (it dispatches `desktop.yml`
-/ `extension.yml` on `main`). The account server does not need a merge
-at all: the `update-account-server` skill publishes and deploys it from
-the branch. Details: `docs/dev/github_actions.md`.
+`cloud/` or `sites/`) and, when the site's inputs changed, `site.yml`,
+which redeploys gammapdf.com from `main`. The desktop app and the browser
+extension are NOT released by a merge — run the `release` skill for that
+(it dispatches `desktop.yml` / `extension.yml` on `main`). The account
+server and the website do not need a merge at all: `update-account-server`
+/ `build-site` publish them from the branch. Details:
+`docs/dev/github_actions.md`.
 
 **Scope: existing commits only.** Uncommitted changes are ongoing work —
 leave them in the tree, never commit them here. If there is nothing
