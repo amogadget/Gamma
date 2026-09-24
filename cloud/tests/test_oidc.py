@@ -106,10 +106,8 @@ def test_refresh_rotates(client):
     fresh = r.json()
     assert fresh["refresh_token"] != tokens["refresh_token"] and "id_token" in fresh
     assert decode(fresh["id_token"])["preferred_username"] == "alice"
-    # the old refresh token and the old access token are dead
-    r = client.post("/token", data={"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
-                                    "client_id": config.DESKTOP_CLIENT_ID})
-    assert r.status_code == 400
+    # the old access token is dead (the old refresh token's retry window and
+    # reuse detection: test_devices.py)
     assert client.get("/userinfo", headers={"Authorization": "Bearer " + tokens["access_token"]}).status_code == 401
     assert client.get("/userinfo", headers={"Authorization": "Bearer " + fresh["access_token"]}).status_code == 200
     # revoking from the portal kills it

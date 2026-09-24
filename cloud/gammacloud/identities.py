@@ -86,11 +86,6 @@ def to_signup(conn, flow: dict, ident: Identity) -> str:
     return token
 
 
-def set_cookie(response, name: str, token: str, max_age: int | None = None) -> None:
-    response.set_cookie(name, token, httponly=True, samesite="lax", secure=config.PUBLIC_URL.startswith("https://"),
-                        max_age=max_age, path="/")
-
-
 def purge_expired(conn) -> None:
     conn.execute("DELETE FROM external_logins WHERE expires_at <= ?", (now(),))
 

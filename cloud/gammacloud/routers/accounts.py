@@ -1,11 +1,12 @@
 """The account API under ``/api``: register, sign in and out, the account
-itself (``/me``), the e-mail links, signed-in devices. JSON in, JSON out;
-a browser form cannot post JSON cross-site without a CORS preflight, which
-is the CSRF protection together with the SameSite cookie.
+itself (``/me``), the e-mail links, signed-in devices and browsers. JSON in,
+JSON out; every state change must come from the portal's own pages
+(``app.same_origin``), which is the CSRF protection.
 
 Where an answer would reveal whether an address has an account (register,
 reset request) the response is the same either way and the mail says what
-happened.
+happened. Mail goes out after the commit: a slow mail server must never
+hold cloud.db's write lock.
 """
 
 from contextlib import closing
@@ -15,7 +16,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .. import accounts, captcha, config, db, mail, oidc, ratelimit, sessions
-from ..accounts import Problem
 from ..log import log
 
 router = APIRouter(prefix="/api")
@@ -60,13 +60,11 @@ def send_mail(to: str, subject: str, body: str, html: str = "") -> None:
         raise HTTPException(503, "We could not send the e-mail right now. Try again in a few minutes.") from e
 
 
-def send_verify(conn, account) -> None:
+def verify_message(conn, account) -> tuple[str, str, str, str]:
+    """Issue a verify link; the message to ``send_mail`` once the
+    transaction has committed."""
     token = accounts.issue_email_token(conn, account["id"], "verify", config.VERIFY_TOKEN_TTL)
-    send_mail(account["email"], *accounts.verify_mail(account, token))
-
-
-def _problem(e: Problem):
-    raise HTTPException(e.status, e.detail)
+    return (account["email"], *accounts.verify_mail(account, token))
 
 
 # --- config for the pages -----------------------------------------------------
@@ -96,24 +94,24 @@ def register(body: RegisterBody, request: Request):
     ratelimit.check(f"register:ip:{ip}", 5, 3600)
     if not captcha.verify(body.turnstile, ip):
         raise HTTPException(400, "The anti-bot check failed. Reload and try again.")
-    try:
-        email = accounts.norm_email(body.email)
-        username = accounts.norm_username(body.username)
-        password = accounts.check_password(body.password)
-    except Problem as e:
-        _problem(e)
+    email = accounts.norm_email(body.email)
+    username = accounts.norm_username(body.username)
+    password = accounts.check_password(body.password)
     with closing(db.connect()) as conn:
-        try:
-            plan = accounts.take_invite(conn, body.invite)
-            account = accounts.create(conn, email=email, username=username, password=password, plan=plan,
-                                      display_name=body.display_name)
-        except Problem as e:
-            conn.rollback()
-            _problem(e)
-        send_verify(conn, account)
+        plan = accounts.take_invite(conn, body.invite)
+        account = accounts.create(conn, email=email, username=username, password=password, plan=plan,
+                                  display_name=body.display_name)
+        message = verify_message(conn, account)
         token = sessions.create(conn, account["id"], request)
         conn.commit()
-    resp = JSONResponse({"account": accounts.public(account)}, status_code=201)
+    # The account exists now: a mail that fails is resent from the Overview.
+    try:
+        mail.send(*message)
+        mailed = True
+    except mail.MailError as e:
+        log.warning("mail to %s failed: %s", account["email"], e)
+        mailed = False
+    resp = JSONResponse({"account": accounts.public(account), "mailed": mailed}, status_code=201)
     sessions.set_cookie(resp, token)
     return resp
 
@@ -194,11 +192,7 @@ def change_username(body: UsernameBody, request: Request):
         if not accounts.confirm_ok(account, body.password):
             raise HTTPException(403, "The password is wrong.")
         ratelimit.check(f"username-change:{account['id']}", 5, 86400)
-        try:
-            accounts.set_username(conn, account["id"], body.username)
-        except Problem as e:
-            conn.rollback()
-            _problem(e)
+        accounts.set_username(conn, account["id"], body.username)
         conn.commit()
         return {"account": accounts.public(accounts.by_id(conn, account["id"]))}
 
@@ -214,10 +208,7 @@ def change_password(body: PasswordBody, request: Request):
         account = portal_account(conn, request)
         if not accounts.confirm_ok(account, body.current):
             raise HTTPException(403, "The current password is wrong.")
-        try:
-            accounts.check_password(body.new)
-        except Problem as e:
-            _problem(e)
+        accounts.check_password(body.new)
         accounts.set_password(conn, account["id"], body.new)
         token = sessions.create(conn, account["id"], request)  # this browser stays signed in
         conn.commit()
@@ -270,8 +261,9 @@ def resend_verify(request: Request):
         if account["email_verified_at"]:
             return {"ok": True, "already": True}
         ratelimit.check(f"verify-resend:{account['id']}", 3, 3600)
-        send_verify(conn, account)
+        message = verify_message(conn, account)
         conn.commit()
+    send_mail(*message)
     return {"ok": True}
 
 
@@ -288,18 +280,16 @@ def reset_request(body: ResetRequestBody, request: Request):
     ratelimit.check(f"reset:ip:{ip}", 5, 3600)
     if not captcha.verify(body.turnstile, ip):
         raise HTTPException(400, "The anti-bot check failed. Reload and try again.")
-    try:
-        email = accounts.norm_email(body.email)
-    except Problem as e:
-        _problem(e)
+    email = accounts.norm_email(body.email)
     ratelimit.check(f"reset:email:{email}", 3, 3600)
     with closing(db.connect()) as conn:
         account = accounts.by_email(conn, email)
         if account:
             token = accounts.issue_email_token(conn, account["id"], "reset", config.RESET_TOKEN_TTL)
-            send_mail(email, *accounts.reset_mail(account, token))
             db.audit(conn, "account.reset_request", account["id"], account["id"], ip)
             conn.commit()
+    if account:
+        send_mail(email, *accounts.reset_mail(account, token))
     return {"ok": True}
 
 
@@ -311,10 +301,7 @@ class ResetConfirmBody(BaseModel):
 @router.post("/reset/confirm")
 def reset_confirm(body: ResetConfirmBody, request: Request):
     ratelimit.check(f"reset-confirm:ip:{ratelimit.client_ip(request)}", 20, 600)
-    try:
-        accounts.check_password(body.password)
-    except Problem as e:
-        _problem(e)
+    accounts.check_password(body.password)
     with closing(db.connect()) as conn:
         found = accounts.consume_email_token(conn, body.token, "reset")
         if not found:
@@ -339,10 +326,7 @@ class EmailChangeBody(BaseModel):
 
 @router.post("/email/change")
 def email_change(body: EmailChangeBody, request: Request):
-    try:
-        new_email = accounts.norm_email(body.new_email)
-    except Problem as e:
-        _problem(e)
+    new_email = accounts.norm_email(body.new_email)
     with closing(db.connect()) as conn:
         account = portal_account(conn, request)
         if not accounts.confirm_ok(account, body.password):
@@ -351,8 +335,8 @@ def email_change(body: EmailChangeBody, request: Request):
         if conn.execute("SELECT 1 FROM accounts WHERE email = ?", (new_email,)).fetchone():
             raise HTTPException(409, "There is already an account with that e-mail address.")
         token = accounts.issue_email_token(conn, account["id"], "change-email", config.VERIFY_TOKEN_TTL, new_email)
-        send_mail(new_email, *accounts.change_email_mail(account, new_email, token))
         conn.commit()
+    send_mail(new_email, *accounts.change_email_mail(account, new_email, token))
     return {"ok": True}
 
 
@@ -365,11 +349,7 @@ def email_confirm(body: TokenBody, request: Request):
             raise HTTPException(400, "This link is not valid any more.")
         account, new_email = found
         old_email = account["email"]
-        try:
-            accounts.set_email(conn, account["id"], new_email)
-        except Problem as e:
-            conn.rollback()
-            _problem(e)
+        accounts.set_email(conn, account["id"], new_email)
         conn.commit()
     try:
         mail.send(old_email, *accounts.email_changed_notice(account, new_email))
@@ -382,9 +362,11 @@ def email_confirm(body: TokenBody, request: Request):
 
 @router.get("/devices")
 def list_devices(request: Request):
+    """The signed-in Gamma apps (grants) and browsers (portal sessions)."""
     with closing(db.connect()) as conn:
         account = portal_account(conn, request)
-        return {"devices": oidc.devices(conn, account["id"])}
+        return {"devices": oidc.devices(conn, account["id"]),
+                "browsers": sessions.of_account(conn, account["id"], request)}
 
 
 @router.post("/devices/{grant_id}/revoke")
@@ -395,6 +377,18 @@ def revoke_device(grant_id: str, request: Request):
         if not row:
             raise HTTPException(404, "no such device")
         oidc.revoke_grant(conn, grant_id, actor=account["id"])
+        conn.commit()
+    return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/revoke")
+def end_session(session_id: str, request: Request):
+    """Sign one browser out (the Devices page's Browsers list)."""
+    with closing(db.connect()) as conn:
+        account = portal_account(conn, request)
+        if not sessions.end(conn, account["id"], session_id):
+            raise HTTPException(404, "no such browser")
+        db.audit(conn, "session.end", account["id"], account["id"], session_id)
         conn.commit()
     return {"ok": True}
 

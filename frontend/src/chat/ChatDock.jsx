@@ -8,6 +8,7 @@ import { API, apiJson, copyText, isPdfFile, readNdjson } from "../shared/lib/uti
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "../shared/ui/Widgets";
 import PaperMentionInput from "./PaperMentionInput";
 import { MAX_CHAT_REFERENCES } from "./paperMentions";
+import { READ_TOOLS, WRITE_TOOLS, toolsForKind } from "./chatSettings";
 import { addUsage, cachedPercent, conversationUsage, fmtTokens, liveUsage, usageDetail } from "./tokenUsage";
 import { createTitleScorer } from "../library/librarySearch";
 import { pageAttachment } from "../library/libraryUtils";
@@ -50,26 +51,49 @@ const ACTION_ICONS = { rename: PencilIcon, move: FolderIcon, search: SearchIcon,
 // /api/ai/chat as its first line and saved on the message. Shown only when
 // it matters: the paper was truncated, or the PDF file was requested but the
 // provider refused it (text went instead). A full native attachment or a
-// paper that fit whole stays silent.
+// paper that fit whole stays silent. A selection says where the server
+// placed it ("p. 7 · Methods › Noise model") and whether a picture of it
+// went along (its text layer looked like a formula or table).
+function selectionPlace(selection) {
+  const placed = (selection?.passages || []).filter((p) => p.page);
+  if (!placed.length) return "";
+  const pages = [...new Set(placed.map((p) => p.page))];
+  const section = placed.find((p) => p.section)?.section || "";
+  const short = section.length > 40 ? `${section.slice(0, 40)}…` : section;
+  return `${pages.length > 1 ? "pp." : "p."} ${pages.join(", ")}${short ? ` · ${short}` : ""}`;
+}
+
 function ContextCoverage({ items }) {
-  const notes = items.map((c) => {
+  const notes = items.flatMap((c) => {
+    const out = [];
     const refused = c.native_requested && !c.native;
-    if (!refused && !c.partial) return null;
-    const span = c.pages_shown && c.pages
-      ? `pages 1–${Math.min(c.pages_shown, c.pages)} of ${c.pages}`
-      : c.selection ? "selected passages + head" : `${(c.chars || 0).toLocaleString()} characters`;
+    const place = selectionPlace(c.selection);
     const what = c.title ? `“${c.title.slice(0, 48)}${c.title.length > 48 ? "…" : ""}”` : "the PDF";
-    const short = refused && !c.partial
-      ? `PDF file not accepted — sent as text`
-      : refused
-        ? `PDF file not accepted — text only, ${span}`
-        : `Model saw ${span}`;
-    const long = (refused ? "This provider does not accept PDF files, so the document went as extracted text. " : "")
-      + (c.partial
-        ? `Only ${span} of ${what} fit the context budget — the rest was not visible to the model. Raise the budget in Settings / AI / Advanced AI settings / Context size, or turn on Tools so it can read and search the whole paper.`
-        : `${what} was sent as extracted text.`);
-    return { short, long, refused };
-  }).filter(Boolean);
+    if (refused || c.partial) {
+      const around = c.selection && !c.pages_shown;
+      const span = c.pages_shown && c.pages
+        ? `pages 1–${Math.min(c.pages_shown, c.pages)} of ${c.pages}`
+        : around ? (place ? `text around ${place}` : "selected passages + head") : `${(c.chars || 0).toLocaleString()} characters`;
+      const short = refused && !c.partial
+        ? `PDF file not accepted — sent as text`
+        : refused
+          ? `PDF file not accepted — text only, ${span}`
+          : `Model saw ${span}`;
+      const long = (refused ? "This provider does not accept PDF files, so the document went as extracted text. " : "")
+        + (!c.partial ? `${what} was sent as extracted text.`
+          : around ? `The model got the text around your selection${place ? ` (${place})` : ""} and the start of ${what}, not the whole document. Turn on Tools so it can read and search the rest.`
+          : `Only ${span} of ${what} fit the context budget — the rest was not visible to the model. Raise the budget in Settings / AI / Advanced AI settings / Context size, or turn on Tools so it can read and search the whole paper.`);
+      out.push({ short, long, refused });
+    }
+    if ((c.selection?.passages || []).some((p) => p.crop)) {
+      out.push({
+        short: "Picture of the selection sent",
+        long: "The selected text looked like a formula or table (or wasn't in the extracted text), so the model also got a picture of that region of the page.",
+        refused: false,
+      });
+    }
+    return out;
+  });
   if (!notes.length) return null;
   return (
     <div className="chatMsgPdfs">
@@ -168,7 +192,7 @@ export default function ChatDock({
   const chatMessages = sessionState.replies.get(chatKey)?.messages || loadedMessages;
   // A reply is streaming into THIS conversation. Other buckets stream on
   // their own — asking one paper never waits for another's answer.
-  const busyHere = sessionState.active.has(chatKey);
+  const busyHere = session.isActive(chatKey);
   const folderChat = organizeFolder != null;
   // Which of the three chat kinds this is — each has its own tool permission
   // map in Settings → Assistant (prefs.js CHAT_KINDS): the folder chat, a
@@ -181,9 +205,8 @@ export default function ChatDock({
   const perm = (key) => chatToolPerms?.[key] !== false;
   const toggleTools = () => setAgentEnabled(!agentEnabled);
   // What the agent may do here after applying the shared permissions.
-  const agentReads = perm("list") || perm("read") || perm("block_read") || perm("view") || perm("search")
-    || perm("web_search") || perm("web_read");
-  const agentWrites = perm("rename") || perm("move") || perm("block_edit");
+  const agentReads = READ_TOOLS.some(perm);
+  const agentWrites = WRITE_TOOLS.some(perm);
   // Agent fields riding on /api/ai/chat ({} = plain chat): folder chats reach
   // the folder's pages, page chats get the read + note-block tools for their
   // own page.
@@ -191,8 +214,7 @@ export default function ChatDock({
     if (!toolsEnabled) return {};
     const scope = organizeFolder != null && (agentReads || agentWrites)
       ? { agent_scope: "folder", folder: organizeFolder }
-      : focusedBlockId && (perm("read") || perm("block_read") || perm("view") || perm("search")
-                           || perm("web_search") || perm("web_read") || perm("block_edit"))
+      : focusedBlockId && toolsForKind("pdf").some(perm)
         ? { agent_scope: "page", page_id: focusedBlockId }
         : null;
     return scope
@@ -538,7 +560,8 @@ export default function ChatDock({
     const selectedDocs = referenceMessage ? (referenceMessage.contextPages || []).map((p) => p.id) : chatDocs;
     const includeNotes = referenceMessage ? !!referenceMessage.includeNotes : chatIncludeNotes;
     if (referenceMessage) { setChatDocs(selectedDocs); setChatIncludeNotes(includeNotes); }
-    const selection = pdfSelections.join("\n\n---\n\n");
+    const selections = pdfSelections;
+    const selection = selections.map((s) => s.text).join("\n\n---\n\n");
     setPdfSelections([]);
     // Note chips: attached blocks go as ids (the server serves their current
     // text, id-labelled, so the agent can edit them); selected note text as
@@ -613,7 +636,7 @@ export default function ChatDock({
           page_id: focusedBlockId || "",
           history: prevMessages.filter((m) => !m.error), // failed replies aren't answers
           model: chatModel || "",
-          selection,
+          selections,
           focus_block_id: cursorChip ? cursorChip.id : "",
           context_blocks: contextBlocks,
           note_passages: notePassages,
@@ -1261,9 +1284,9 @@ export default function ChatDock({
               removeTitle="Don't send the cursor block with this message" />
           ) : null}
           {pdfSelections.map((s, i) => (
-            <SelChip key={`p${i}`} text={s}
+            <SelChip key={`p${i}`} text={s.text}
               label={pdfSelections.length > 1 ? `Sel ${i + 1}` : "Selection"}
-              labelTitle="Hold Ctrl while selecting in the PDF to add more passages"
+              labelTitle={`${s.page ? `From PDF page ${s.page}. ` : ""}Hold Ctrl while selecting in the PDF to add more passages`}
               onRemove={() => setPdfSelections((prev) => prev.filter((_, j) => j !== i))}
               removeTitle="Remove this passage" />
           ))}

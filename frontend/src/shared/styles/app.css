@@ -2442,6 +2442,8 @@ mark.merge-del { background: color-mix(in srgb, var(--danger) 16%, transparent);
 .mirrorAvatar.warn { color: #d9822b; }
 .mirrorAvatar.busy svg { animation: mirrorSpin 1.2s linear infinite; }
 .uiTag.warn { color: #d9822b; border-color: color-mix(in srgb, #d9822b 45%, transparent); }
+.uiTag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.uiTag.failed { color: var(--danger); border-color: currentColor; }
 .uiTag.pending { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .mirrorPopLog { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
 /* out-specifies the topbar's popoverItem rule, which centres its content */
@@ -3559,6 +3561,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   vertical-align: 1px;
 }
 .uiTag.admin { color: #4a9eff; border-color: rgba(74, 158, 255, 0.4); }
+/* Text for screen readers only: the sentence behind an icon, a table header without a visible word. */
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* The share view's "as <name>" tag (an editing visitor without an account) and
    its rename field. The tag is a button, so it out-specifies the topbar's
    generic pill and keeps the tag's own size; it never squeezes the title. */

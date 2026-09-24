@@ -15,10 +15,12 @@ import json
 import re
 from datetime import datetime, timezone
 
-from . import config
+from . import accounts, config
 from .providers import NAMES
 
 SITE = "https://gammapdf.com"
+NO_STORE = {"Cache-Control": "no-store"}
+USERNAME_PATTERN = accounts.USERNAME_RE.pattern.strip("^$")   # the <input pattern> of every username field
 
 LOGO = ('<svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
         '<rect width="32" height="32" rx="7" fill="#1e1e1c"/>'
@@ -29,21 +31,20 @@ LOGO = ('<svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http
         '<rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/><rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/></svg>')
 
 CSS = """
-:root{--bg:#f7f6f3;--surface:#fff;--surface-2:#f1efea;--text:#1f1e1b;--text-2:#5f5c55;--muted:#8a877e;--line:#e6e3db;--line-2:#d9d5cb;--accent:#e8a020;--accent-ink:#9a6206;--accent-soft:#faf0d9;--dark:#1e1e1c;--dark-fg:#eeebe4;--danger:#b3261e;--danger-soft:#fbe9e7;--ok:#2f7a3d;--ok-soft:#e3f2e5;--font:Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;color-scheme:light}
-@media(prefers-color-scheme:dark){:root{--bg:#191918;--surface:#202020;--surface-2:#262625;--text:#ecebe6;--text-2:#b5b2a9;--muted:#85827a;--line:#2f2f2c;--line-2:#3b3b37;--accent-ink:#f0b74a;--accent-soft:#3a301d;--danger:#e5766d;--danger-soft:#3a2422;--ok:#7fc98d;--ok-soft:#1e3122;color-scheme:dark}}
+:root{--bg:#f7f6f3;--surface:#fff;--surface-2:#f1efea;--text:#1f1e1b;--text-2:#5f5c55;--muted:#8a877e;--line:#e6e3db;--line-2:#d9d5cb;--accent:#e8a020;--accent-ink:#9a6206;--accent-soft:#faf0d9;--primary:#1e1e1c;--primary-fg:#eeebe4;--primary-hover:#31312e;--danger:#b3261e;--danger-soft:#fbe9e7;--ok:#2f7a3d;--ok-soft:#e3f2e5;--font:Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#191918;--surface:#202020;--surface-2:#262625;--text:#ecebe6;--text-2:#b5b2a9;--muted:#85827a;--line:#2f2f2c;--line-2:#3b3b37;--accent-ink:#f0b74a;--accent-soft:#3a301d;--primary:#e8a020;--primary-fg:#1a1a18;--primary-hover:#f0b03a;--danger:#e5766d;--danger-soft:#3a2422;--ok:#7fc98d;--ok-soft:#1e3122;color-scheme:dark}}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}[hidden]{display:none!important}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--font);-webkit-font-smoothing:antialiased;min-height:100vh}
 a{color:var(--accent-ink);text-decoration:none}a:hover{text-decoration:underline}h1,h2,h3{margin:0;line-height:1.2;letter-spacing:-.01em;font-weight:600}h1{font-size:24px}h2{font-size:15px}p{margin:0}code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;border-radius:6px;font:inherit;font-weight:500;font-size:14px;line-height:1.2;border:1px solid var(--line-2);background:var(--surface);color:var(--text);white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color .1s,border-color .1s}
 .btn:hover{background:var(--surface-2);text-decoration:none}.btn:disabled{opacity:.5;cursor:default}
-.btn--primary{background:var(--dark);color:var(--dark-fg);border-color:var(--dark)}.btn--primary:hover{background:#31312e}
+.btn--primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}.btn--primary:hover{background:var(--primary-hover)}
 .btn--danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,var(--line-2))}.btn--danger:hover{background:var(--danger-soft)}
 .btn--sm{padding:4px 9px;font-size:13px}.btn--block{width:100%;padding:9px 12px}
-@media(prefers-color-scheme:dark){.btn--primary{background:var(--accent);color:#1a1a18;border-color:var(--accent)}.btn--primary:hover{background:#f0b03a}}
 label{display:block;font-size:12.5px;font-weight:500;color:var(--text-2);margin:12px 0 5px}label small{font-weight:400;color:var(--muted)}
 input,select{width:100%;padding:8px 10px;border:1px solid var(--line-2);border-radius:6px;background:var(--surface);color:inherit;font:inherit;font-size:14px}input:focus,select:focus{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:0;border-color:var(--accent)}
-form .btn{margin-top:14px}.msg{min-height:1.3em;font-size:13px;margin-top:8px;color:var(--danger)}.msg.ok{color:var(--ok)}
+form .btn{margin-top:14px}.cf-turnstile{margin-top:14px}.msg{min-height:1.3em;font-size:13px;margin-top:8px;color:var(--danger)}.msg.ok{color:var(--ok)}
 .pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);color:var(--text-2);white-space:nowrap}
-.pill--ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.pill--warn{background:var(--accent-soft);color:var(--accent-ink);border-color:transparent}.pill--plan{text-transform:capitalize}
+.pill--ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.pill--warn{background:var(--accent-soft);color:var(--accent-ink);border-color:transparent}
 /* auth shell */
 .authwrap{min-height:100vh;display:flex;flex-direction:column}.authtop{display:flex;align-items:center;gap:10px;padding:18px 24px;font-weight:600;color:var(--text)}.authtop a{color:inherit}.authtop svg{display:block}.authtop em{font-style:normal;color:var(--accent);font-weight:500;margin-left:3px}
 .auth{margin:6vh auto 40px;width:min(400px,100% - 32px)}.auth h1{font-size:22px;margin-bottom:6px}.auth .lead{color:var(--text-2);margin-bottom:18px;font-size:14px}.auth .links{margin-top:16px;font-size:13px;color:var(--text-2);display:flex;gap:14px;flex-wrap:wrap}
@@ -92,24 +93,36 @@ form .btn{margin-top:14px}.msg{min-height:1.3em;font-size:13px;margin-top:8px;co
 .notice{background:var(--accent-soft);color:var(--accent-ink);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:8px;padding:10px 14px;font-size:13.5px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
 .empty{color:var(--text-2);font-size:13.5px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.actions .btn{margin-top:0}
 .danger{border-color:color-mix(in srgb,var(--danger) 35%,var(--line))}.danger>h2{color:var(--danger)}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:640px){.grid2{grid-template-columns:1fr}}
 form.inline{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}form.inline label{margin:0;flex:1;min-width:120px}form.inline .btn{margin:0}
-table{width:100%;border-collapse:collapse;font-size:13.5px}th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:last-child td{border-bottom:0}td .btn{margin:0}
+.section>.body.tbl{padding:0}table{width:100%;border-collapse:collapse;font-size:13.5px}th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line)}td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}tr:last-child td{border-bottom:0}td .btn{margin:0}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px}.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px;font:inherit;font-weight:500;color:var(--text-2);cursor:pointer;margin-bottom:-1px}.tabs button.on{color:var(--text);border-bottom-color:var(--text)}
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}.toolbar input{max-width:320px}.toolbar .spacer{flex:1}
 select.sm{width:auto;padding:3px 6px;font-size:13px}.mono{font-family:var(--mono);font-size:12px}
 .secretbox{background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:6px;padding:10px 12px;margin-top:10px;font-family:var(--mono);font-size:12.5px;word-break:break-all;white-space:pre-wrap}
 .notice svg{width:16px;height:16px;flex:none;margin-right:8px;vertical-align:-3px}
-@media(max-width:820px){.app{grid-template-columns:1fr;align-content:start}.side{position:sticky;top:0;z-index:5;height:auto;flex-direction:row;align-items:center;gap:2px;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}.side::-webkit-scrollbar{display:none}.side .brand{padding:4px 8px 4px 0}.side .brand .bw,.side .label,.side .me,.side .grow,.side .gl{display:none}.side a.item,.side button.item{width:auto;white-space:nowrap;padding:6px 10px}.main{padding:24px 16px 48px}.cols{grid-template-columns:1fr}.srow{grid-template-columns:1fr;gap:12px;padding:16px}.srow .fields{grid-template-columns:1fr}.hello .avatar{width:44px;height:44px;font-size:18px}.hello h1{font-size:21px}}
+@media(max-width:820px){.app{grid-template-columns:minmax(0,1fr);align-content:start}.dev{flex-wrap:wrap;row-gap:6px}.dev .ico{display:none}.dev .txt{flex-basis:100%}.dev .txt span{white-space:normal}.dev .when{margin-right:auto}.side{position:sticky;top:0;z-index:5;height:auto;flex-direction:row;align-items:center;gap:2px;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}.side::-webkit-scrollbar{display:none}.side .brand{padding:4px 8px 4px 0}.side .brand .bw,.side .label,.side .me,.side .grow,.side .gl{display:none}.side a.item,.side button.item{width:auto;white-space:nowrap;padding:6px 10px}.main{padding:24px 16px 48px}.cols{grid-template-columns:1fr}.srow{grid-template-columns:1fr;gap:12px;padding:16px}.srow .fields{grid-template-columns:1fr}.hello .avatar{width:44px;height:44px;font-size:18px}.hello h1{font-size:21px}}
 """
 
 JS = """
 async function api(path, body, method){
-  const r = await fetch(path, {method: method || 'POST', headers: {'Content-Type': 'application/json'},
-    body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin'});
+  let r;
+  try { r = await fetch(path, {method: method || 'POST', headers: {'Content-Type': 'application/json'},
+    body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin'}); }
+  catch (e) { throw new Error('Cannot reach Gamma Cloud. Check the connection and try again.'); }
   let data = {}; try { data = await r.json(); } catch (e) {}
-  if (!r.ok) throw new Error(data.detail || ('Request failed (' + r.status + ')'));
+  if (!r.ok) { const err = new Error(data.detail || ('Request failed (' + r.status + ')')); err.status = r.status; throw err; }
   return data;
+}
+// A button's action: disabled while it runs; a failure is shown in msg (else an alert) and the
+// button comes back; a lost session goes to the sign-in page and returns here.
+async function act(btn, fn, msg){
+  btn.disabled = true; if (msg) { msg.textContent = ''; msg.classList.remove('ok'); }
+  try { await fn(); }
+  catch (e) {
+    if (e.status === 401) { location.href = '/login?next=' + encodeURIComponent(location.pathname); return; }
+    if (msg) msg.textContent = e.message; else alert(e.message);
+    btn.disabled = false;
+  }
 }
 function bind(formId, fn){
   const f = document.getElementById(formId); if (!f) return;
@@ -141,7 +154,10 @@ function social(o){
   };
   document.head.appendChild(s);
 }
-const out = document.getElementById('signout'); if (out) out.onclick = async (e) => { e.preventDefault(); await api('/api/logout', {}); location.href = '/login'; };
+const out = document.getElementById('signout'); if (out) out.onclick = (e) => { e.preventDefault(); act(out, async () => { await api('/api/logout', {}); location.href = '/login'; }); };
+// Dates and "last active" tooltips in the viewer's own time zone (the server writes UTC).
+document.querySelectorAll('time[datetime]').forEach(t => { const d = new Date(t.dateTime); if (!isNaN(d)) t.textContent = d.toLocaleDateString(undefined, {day: 'numeric', month: 'short', year: 'numeric'}); });
+document.querySelectorAll('[data-at]').forEach(e => { const d = new Date(e.dataset.at); if (!isNaN(d)) e.title = e.dataset.label + ' ' + d.toLocaleString(); });
 """
 
 ICONS = {
@@ -152,7 +168,6 @@ ICONS = {
     "download": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>',
     "docs": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20V2H6.5A2.5 2.5 0 0 0 4 4.5z"/></svg>',
     "desktop": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>',
-    "server": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>',
     "globe": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
     "check": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>',
     "mail": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
@@ -211,7 +226,7 @@ def app(title: str, lead: str, account: dict, active: str, inner: str, script: s
 def turnstile_widget() -> str:
     if not config.TURNSTILE_SITEKEY:
         return ""
-    return f'<div class="cf-turnstile" data-sitekey="{esc(config.TURNSTILE_SITEKEY)}" style="margin-top:14px"></div>'
+    return f'<div class="cf-turnstile" data-sitekey="{esc(config.TURNSTILE_SITEKEY)}"></div>'
 
 
 def error_page(title: str, message: str, back: str = "/") -> str:
@@ -246,6 +261,10 @@ def _terms() -> str:
     return f"<p class=terms>By continuing you agree to the <a href='{SITE}/privacy/'>privacy policy</a>.</p>"
 
 
+def _invite_field() -> str:
+    return "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
+
+
 # --- auth pages ---------------------------------------------------------------
 
 def login_page(social: dict | None = None) -> str:
@@ -260,14 +279,13 @@ def register_page(social: dict | None = None) -> str:
     if config.REGISTRATION == "closed":
         return error_page("Registration is closed", "Gamma Cloud is not taking new accounts right now.")
     tiles, script = _social(social, "sign up", "signup")
-    invite = "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
     inner = ("<form id=f><label>E-mail<input name=email type=email autocomplete=email required autofocus></label>"
              "<label>Username <small>lowercase letters, digits, hyphens</small><input name=username autocomplete=username "
-             "pattern='[a-z0-9][a-z0-9-]{1,30}[a-z0-9]' required></label>"
+             f"pattern='{USERNAME_PATTERN}' required></label>"
              "<label>Password<input name=password type=password autocomplete=new-password minlength=8 required></label>"
-             f"{invite}{turnstile_widget()}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
+             f"{_invite_field()}{turnstile_widget()}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
              f"{tiles}<p class=switch>Already have an account? <a href=/login>Sign in</a></p>{_terms()}")
-    script = "bind('f', async d => { await api('/api/register', d); location.href = '/'; });" + script
+    script = "bind('f', async d => { const r = await api('/api/register', d); location.href = r.mailed === false ? '/?mail=failed' : '/'; });" + script
     return auth("Create your account", "Free. You can change the username and e-mail later.", inner, script)
 
 
@@ -275,29 +293,32 @@ def signup_finish_page(flow: dict, suggestion: str) -> str:
     """After Google/GitHub for a new person: pick the username (and give the
     invite code in ``invite`` mode)."""
     p = flow["provider"]
-    invite = "<label>Invite code<input name=invite required autocomplete=off></label>" if config.REGISTRATION == "invite" else ""
     inner = (f"<div class=via>{ICONS[p]}<span>{NAMES[p]} · <b>{esc(flow['email'])}</b></span></div>"
              "<form id=f><label>Username <small>your name on every Gamma server</small><input name=username "
-             f"value='{esc(suggestion)}' autocomplete=username pattern='[a-z0-9][a-z0-9-]{{1,30}}[a-z0-9]' required autofocus></label>"
-             f"{invite}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
+             f"value='{esc(suggestion)}' autocomplete=username pattern='{USERNAME_PATTERN}' required autofocus></label>"
+             f"{_invite_field()}<button type=submit class='btn btn--primary btn--block'>Create account</button><div class=msg></div></form>"
              f"<p class=switch><a href=/login>Cancel</a></p>{_terms()}")
     script = "bind('f', async d => { const r = await api('/api/oauth/signup', d); location.href = r.redirect; });"
     hello = f"Welcome, {esc(flow['name'])}. " if flow.get("name") else ""
     return auth("Finish creating your account", hello + "Pick a username; you can change it later.", inner, script)
 
 
-def verify_page(token: str) -> str:
-    script = (f"api('/api/verify', {{token: {json.dumps(token)}}}).then(() => {{ document.getElementById('msg').textContent = "
-              f"'Your e-mail address is confirmed. Taking you to your account…'; setTimeout(() => location.href = '/', 1200); }})"
+def _token_page(title: str, api_path: str, token: str, done_js: str) -> str:
+    """A mailed link's landing page: posts the token, shows ``done_js`` (a
+    JS expression over the answer ``d``), then goes to the Overview."""
+    script = (f"api({_js(api_path)}, {{token: {_js(token)}}}).then(d => {{ document.getElementById('msg').textContent = "
+              f"{done_js}; setTimeout(() => location.href = '/', 1200); }})"
               f".catch(e => {{ document.getElementById('msg').textContent = e.message; }});")
-    return auth("Confirming your e-mail", "One moment.", "<p id=msg class=msg></p><p class=links><a href='/'>Overview</a></p>", script)
+    return auth(title, "One moment.", "<p id=msg class=msg></p><p class=links><a href='/'>Overview</a></p>", script)
+
+
+def verify_page(token: str) -> str:
+    return _token_page("Confirming your e-mail", "/api/verify", token,
+                       "'Your e-mail address is confirmed. Taking you to your account…'")
 
 
 def email_confirm_page(token: str) -> str:
-    script = (f"api('/api/email/confirm', {{token: {json.dumps(token)}}}).then(d => {{ document.getElementById('msg').textContent = "
-              f"'Your e-mail address is now ' + d.email + '.'; setTimeout(() => location.href = '/', 1500); }})"
-              f".catch(e => {{ document.getElementById('msg').textContent = e.message; }});")
-    return auth("Changing your e-mail", "One moment.", "<p id=msg class=msg></p><p class=links><a href='/'>Overview</a></p>", script)
+    return _token_page("Changing your e-mail", "/api/email/confirm", token, "'Your e-mail address is now ' + d.email + '.'")
 
 
 def reset_page() -> str:
@@ -325,13 +346,19 @@ def _when(iso: str) -> datetime | None:
         return None
 
 
-def _date(iso: str) -> str:
+def _day(iso: str) -> str:
     t = _when(iso)
-    return f"{t.day} {t:%b %Y}" if t else esc(iso)
+    return f"{t.day} {t:%b %Y}" if t else iso
+
+
+def _date(iso: str) -> str:
+    """A date as HTML; the page's script shows it in the viewer's time zone."""
+    return f"<time datetime='{esc(iso)}'>{esc(_day(iso))}</time>"
 
 
 def _ago(iso: str) -> str:
-    """"Active now", "3 hours ago", "Yesterday", "12 days ago" or the date."""
+    """"Active now", "3 hours ago", "Yesterday", "12 days ago"; "" after a
+    month (the caller shows the date)."""
     t = _when(iso)
     if not t:
         return ""
@@ -346,14 +373,16 @@ def _ago(iso: str) -> str:
     days = int(secs // 86400)
     if days == 1:
         return "Yesterday"
-    return f"{days} days ago" if days < 30 else _date(iso)
+    return f"{days} days ago" if days < 30 else ""
 
 
 def _platform(ua: str) -> str:
-    """A readable "Windows · Gamma 0.9.4" / "macOS · Safari" from a user agent."""
+    """A readable "Windows · Gamma 0.9.4" / "macOS · Safari" from a user
+    agent; a Gamma server names its system as ``Gamma/<version> (<system>; …)``."""
     ua = ua or ""
     os_name = next((n for k, n in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"), ("Windows", "Windows"),
-                                   ("Macintosh", "macOS"), ("CrOS", "ChromeOS"), ("Linux", "Linux")) if k in ua), "")
+                                   ("Macintosh", "macOS"), ("macOS", "macOS"), ("CrOS", "ChromeOS"), ("Linux", "Linux"))
+                    if k in ua), "")
     m = re.search(r"Gamma/([\d.]+)", ua)
     if m:
         client = f"Gamma {m.group(1)}"
@@ -365,18 +394,38 @@ def _platform(ua: str) -> str:
     return " · ".join(x for x in (os_name, client) if x)
 
 
-def _device(d: dict, manage: bool) -> str:
-    """One signed-in app or server; ``manage`` adds the details and the sign-out button."""
-    icon = {"container": "server", "share-host": "globe"}.get(d.get("kind"), "desktop")
-    meta = [_platform(d.get("user_agent"))]
+def _last(iso: str, label: str) -> str:
+    """The relative time at a row's end; its tooltip is the exact time."""
+    ago = _ago(iso)
+    return (f"<span class='when{' live' if ago == 'Active now' else ''}' data-at='{esc(iso)}' data-label='{label}' "
+            f"title='{label} {esc(iso[:16].replace('T', ' '))} UTC'>{esc(ago) if ago else _date(iso)}</span>")
+
+
+def _row(icon: str, title: str, meta: list[str], end: str) -> str:
+    """A Devices row; ``meta`` holds HTML pieces, joined by middots."""
+    return (f"<div class=dev><div class=ico>{ICONS[icon]}</div><div class=txt><b>{esc(title)}</b>"
+            f"<span>{' · '.join(x for x in meta if x) or '&nbsp;'}</span></div>{end}</div>")
+
+
+def _app_row(d: dict, manage: bool) -> str:
+    """One signed-in Gamma app, named after its machine when it said;
+    ``manage`` adds the details and the sign-out button."""
+    title = d.get("device_name") or d["client"]
+    meta = [esc(d["client"]) if d.get("device_name") else "", esc(_platform(d.get("user_agent")))]
+    end = _last(d["last_used_at"], "Last active")
     if manage:
-        meta += [f"signed in {_date(d['created_at'])}", d.get("ip") or ""]
-    ago = _ago(d["last_used_at"])
-    when = (f"<span class='when{' live' if ago == 'Active now' else ''}' "
-            f"title='Last used {esc(d['last_used_at'][:16].replace('T', ' '))} UTC'>{esc(ago)}</span>")
-    btn = f"<button class='btn btn--sm' data-revoke='{esc(d['id'])}'>Sign out</button>" if manage else ""
-    return (f"<div class=dev><div class=ico>{ICONS[icon]}</div><div class=txt><b>{esc(d['client'])}</b>"
-            f"<span>{esc(' · '.join(x for x in meta if x)) or '&nbsp;'}</span></div>{when}{btn}</div>")
+        meta += [f"signed in {_date(d['created_at'])}", f"last seen at {esc(d['ip'])}" if d.get("ip") else ""]
+        end += f"<button class='btn btn--sm' data-revoke='{esc(d['id'])}' aria-label='Sign out {esc(title)}'>Sign out</button>"
+    return _row("desktop", title, meta, end)
+
+
+def _browser_row(b: dict) -> str:
+    title = _platform(b["user_agent"]) or "Unknown browser"
+    meta = [f"signed in {_date(b['created_at'])}", f"last seen at {esc(b['ip'])}" if b["ip"] else ""]
+    end = ("<span class='pill pill--ok'>This browser</span>" if b["current"] else
+           _last(b["last_seen_at"], "Last seen")
+           + f"<button class='btn btn--sm' data-endsession='{esc(b['id'])}' aria-label='Sign out {esc(title)}'>Sign out</button>")
+    return _row("globe", title, meta, end)
 
 
 def _email_pill(account: dict) -> str:
@@ -384,11 +433,13 @@ def _email_pill(account: dict) -> str:
             else "<span class='pill pill--warn'>not confirmed</span>")
 
 
-def _notice(account: dict) -> str:
+def _notice(account: dict, mail_failed: bool = False) -> str:
     if account["email_verified"]:
         return ""
-    return (f"<div class=notice><span>{ICONS['mail']}<b>Your e-mail is not confirmed yet.</b> Gamma servers will not sign you in "
-            "until you open the link we mailed you.</span><button class='btn btn--sm' data-resend>Resend the mail</button></div>")
+    text = ("We could not send the confirmation mail. Try again in a few minutes." if mail_failed else
+            "Gamma servers will not sign you in until you open the link we mailed you.")
+    return (f"<div class=notice><span>{ICONS['mail']}<b>Your e-mail is not confirmed yet.</b> {text}</span>"
+            "<button class='btn btn--sm' data-resend>Resend the mail</button></div>")
 
 
 RESEND_JS = ("document.querySelectorAll('[data-resend]').forEach(r => r.onclick = async () => { r.disabled = true; "
@@ -396,7 +447,7 @@ RESEND_JS = ("document.querySelectorAll('[data-resend]').forEach(r => r.onclick 
              "catch (e) { r.textContent = e.message; r.disabled = false; } });")
 
 
-def overview_page(account: dict, devices: list[dict]) -> str:
+def overview_page(account: dict, devices: list[dict], mail_failed: bool = False) -> str:
     verified = account["email_verified"]
     name = account["display_name"] or account["username"]
     tags = (f"<span>@{esc(account['username'])}</span><span class=pill>{esc(account['plan'].capitalize())} plan</span>"
@@ -408,7 +459,7 @@ def overview_page(account: dict, devices: list[dict]) -> str:
     def step(done, title, sub, action):
         return (f"<li class='step{' done' if done else ''}'><span class=dot>{ICONS['check'] if done else ''}</span>"
                 f"<span class=txt><b>{title}</b><span>{sub}</span></span>{'' if done else action}</li>")
-    signed_in = bool(devices)
+    signed_in = account["app_signed_in"] or bool(devices)
     done = 1 + verified + signed_in
     setup = "" if done == 3 else (
         f"<section class=section><h2>Get started <span class=progress>{done} of 3<i><b style='width:{done * 100 // 3}%'></b></i></span></h2>"
@@ -416,16 +467,16 @@ def overview_page(account: dict, devices: list[dict]) -> str:
         + step(True, "Create your account", f"Member since {_date(account['created_at'])}", "")
         + step(verified, "Confirm your e-mail", "Gamma servers accept this account." if verified
                else f"We sent a link to {esc(account['email'])}.", "<button class='btn btn--sm' data-resend>Resend</button>")
-        + step(signed_in, "Sign in from the Gamma app", "Your library is connected." if signed_in
+        + step(signed_in, "Sign in from the Gamma app", "Done." if signed_in
                else "Install the desktop app and choose <b>Sign in with Gamma Cloud</b>.",
                f"<a class='btn btn--primary btn--sm' href='{SITE}/download'>Download</a>")
         + "</ul></section>")
 
-    recent = "".join(_device(d, False) for d in devices[:4]) or (
-        f"<div class=blank>{ICONS['devices']}Nothing has signed in with this account yet.<div class=actions>"
-        f"<a class='btn btn--sm' href='{SITE}/download'>Get the desktop app</a></div></div>")
-    more = f"<a href='/devices'>Manage{f' all {len(devices)}' if len(devices) > 4 else ''}</a>" if devices else ""
-    signins = f"<section class=section><h2>Signed in <span>{more}</span></h2><div class=list>{recent}</div></section>"
+    recent = "".join(_app_row(d, False) for d in devices[:4]) or (
+        f"<div class=blank>{ICONS['devices']}{'No Gamma app is signed in right now.' if signed_in else 'Nothing has signed in with this account yet.'}"
+        f"<div class=actions><a class='btn btn--sm' href='{SITE}/download'>Get the desktop app</a></div></div>")
+    more = f"<a href='/devices'>Manage{f' all {len(devices)}' if len(devices) > 4 else ''}</a>"
+    signins = f"<section class=section><h2>Gamma apps <span>{more}</span></h2><div class=list>{recent}</div></section>"
     plan = (f"<section class=section><h2>Plan</h2><div class=body><div class=planname>{esc(account['plan'])}</div>"
             "<p class=plantext>The desktop app is your library. A hosted Gamma server of your own comes with the Plus and Pro plans.</p>"
             f"<div class=actions><a class='btn btn--sm' href='{SITE}/#selfhost'>Self-host instead</a></div></div></section>")
@@ -435,27 +486,46 @@ def overview_page(account: dict, devices: list[dict]) -> str:
            f"<dt>Member since</dt><dd>{_date(account['created_at'])}</dd>"
            f"<dt title='What servers key on; never changes'>Account id</dt><dd><span class=mono>{esc(account['id'])}</span>"
            f"<button class=copy data-copy='{esc(account['id'])}'>Copy</button></dd></dl></div></section>")
-    inner = _notice(account) + setup + f"<div class=cols><div>{signins}</div><div>{plan}{who}</div></div>"
+    inner = _notice(account, mail_failed) + setup + f"<div class=cols><div>{signins}</div><div>{plan}{who}</div></div>"
     script = RESEND_JS + ("document.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => { "
                           "await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; "
                           "setTimeout(() => b.textContent = 'Copy', 1200); });")
     return app("Overview", "", account, "home", inner, script, head)
 
 
-def devices_page(account: dict, devices: list[dict]) -> str:
-    rows = "".join(_device(d, True) for d in devices) or (
-        f"<div class=blank>{ICONS['devices']}No app or server holds a key to this account.<br>"
-        "Sign in to the desktop app or a Gamma server and it shows up here.</div>")
-    everywhere = "<button class='btn btn--sm btn--danger' id=revokeall>Sign out everywhere</button>" if devices else ""
-    inner = (f"<section class=section><h2>Apps and servers <span>{len(devices)} signed in</span></h2><div class=list>{rows}</div></section>"
-             f"<div class=formfoot>{everywhere}<span class=empty>Signing a device out revokes its key at once. "
-             "This browser stays signed in.</span></div>")
-    script = ("document.querySelectorAll('[data-revoke]').forEach(b => b.onclick = async () => { b.disabled = true; "
-              "await api('/api/devices/' + b.dataset.revoke + '/revoke', {}); location.reload(); });"
-              "const all = document.getElementById('revokeall'); if (all) all.onclick = async () => { "
-              "if (!confirm('Sign out every app and server? Each will ask you to sign in again.')) return; "
-              "await api('/api/devices/revoke-all', {}); location.reload(); };")
-    return app("Devices", "Everything that can act as this account. Sign out anything you do not recognise.",
+def devices_page(account: dict, devices: list[dict], browsers: list[dict]) -> str:
+    empty = (f"<div class=blank>{ICONS['devices']}No Gamma app is signed in with this account.<br>"
+             "Choose <b>Sign in with Gamma Cloud</b> in the desktop app and it shows up here.</div>")
+    apps = "".join(_app_row(d, True) for d in devices) or empty
+    rows = "".join(_browser_row(b) for b in sorted(browsers, key=lambda b: not b["current"]))
+    others = devices or any(not b["current"] for b in browsers)
+    everywhere = "<button class='btn btn--sm btn--danger' id=revokeall>Sign out everywhere else</button>" if others else ""
+    inner = (f"<section class=section><h2>Gamma apps <span data-count>{len(devices)} signed in</span></h2>"
+             f"<div class=list data-empty='{esc(empty)}'>{apps}</div></section>"
+             f"<section class=section><h2>Browsers <span data-count>{len(browsers)} signed in</span></h2>"
+             f"<div class=list>{rows}</div></section>"
+             f"<div class=formfoot>{everywhere}<span class=empty>Signing an app out revokes its key to this account, so it "
+             "cannot renew its sign-in. Sessions it already opened on its own Gamma server stay open until you sign out "
+             "there.</span></div><div class=msg id=devmsg></div>")
+    script = """
+const msg = document.getElementById('devmsg');
+function gone(row){
+  const list = row.parentElement; row.remove();
+  const n = list.querySelectorAll('.dev').length;
+  list.closest('.section').querySelector('[data-count]').textContent = n + ' signed in';
+  if (!n && list.dataset.empty) list.innerHTML = list.dataset.empty;
+}
+document.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => act(b, async () => {
+  await api('/api/devices/' + b.dataset.revoke + '/revoke', {}); gone(b.closest('.dev')); }, msg));
+document.querySelectorAll('[data-endsession]').forEach(b => b.onclick = () => act(b, async () => {
+  await api('/api/sessions/' + b.dataset.endsession + '/revoke', {}); gone(b.closest('.dev')); }, msg));
+const all = document.getElementById('revokeall');
+if (all) all.onclick = () => {
+  if (!confirm('Sign out every Gamma app and every other browser? Apps keep the sessions they already opened on their own Gamma server.')) return;
+  act(all, async () => { await api('/api/devices/revoke-all', {}); location.reload(); }, msg);
+};
+"""
+    return app("Devices", "Where this account is signed in. Sign out anything you do not recognise.",
                account, "devices", inner, script)
 
 
@@ -491,7 +561,7 @@ def settings_page(account: dict, linked: list[dict] | None = None, enabled: list
             f"placeholder='{esc(account['username'])}'></label>{foot('Save')}</form>")
         + row("Username", "Your name on every Gamma server: lowercase letters, digits and hyphens.",
               f"<form id=user data-gated><label><span class=sr>Username</span><input name=username value='{esc(account['username'])}' "
-              f"pattern='[a-z0-9][a-z0-9-]{{1,30}}[a-z0-9]' required></label><div class=reveal hidden>{pw}</div>"
+              f"pattern='{USERNAME_PATTERN}' required></label><div class=reveal hidden>{pw}</div>"
               f"{foot('Change username')}</form>"))
     email = row("E-mail address", "A confirmation link goes to the new address; the current one stays until you open it.",
                 f"<div class=current>{esc(account['email'])} {_email_pill(account)}</div>"
@@ -542,19 +612,19 @@ def admin_page(account: dict) -> str:
         "<div class=tabs><button class=on data-tab=accounts>Accounts</button><button data-tab=invites>Invites</button>"
         "<button data-tab=clients>Clients</button><button data-tab=audit>Audit log</button></div>"
         "<div id=tab-accounts><div class=toolbar><input id=q placeholder='Search username, e-mail or id' autocomplete=off><span class=spacer></span><span class=empty id=count></span></div>"
-        "<div class=section><div class=body style='padding:0'><table><thead><tr><th>Username</th><th>E-mail</th><th>Plan</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody id=accounts></tbody></table></div></div>"
+        "<div class=section><div class='body tbl'><table><thead><tr><th>Username</th><th>E-mail</th><th>Plan</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody id=accounts></tbody></table></div></div>"
         "<div class=actions><button class='btn btn--sm' id=more>Load more</button></div></div>"
         "<div id=tab-invites hidden><div class=section><h2>New invite</h2><div class=body><form id=inv class=inline>"
         "<label>Uses<input name=uses type=number value=1 min=1 max=10000></label>"
         f"<label>Plan<select name=plan>{plans}</select></label><label>Note<input name=note placeholder='who it is for'></label>"
         "<button type=submit class='btn btn--primary btn--sm'>Create</button><div class=msg></div></form></div></div>"
-        "<div class=section><div class=body style='padding:0'><table><thead><tr><th>Code</th><th>Uses left</th><th>Plan</th><th>Note</th><th>Created</th><th></th></tr></thead><tbody id=invites></tbody></table></div></div></div>"
+        "<div class=section><div class='body tbl'><table><thead><tr><th>Code</th><th>Uses left</th><th>Plan</th><th>Note</th><th>Created</th><th></th></tr></thead><tbody id=invites></tbody></table></div></div></div>"
         "<div id=tab-clients hidden><div class=section><h2>New client <span>a hosted Gamma server or the share host</span></h2><div class=body><form id=cli class=inline>"
         "<label>Name<input name=name required></label><label>Kind<select name=kind><option value=container>container</option><option value=share-host>share-host</option></select></label>"
         "<label>Callback URL<input name=redirect placeholder='https://name.gammapdf.com/api/auth/cloud/callback' required></label>"
         "<button type=submit class='btn btn--primary btn--sm'>Create</button><div class=msg></div></form><div id=secret hidden class=secretbox></div></div></div>"
-        "<div class=section><div class=body style='padding:0'><table><thead><tr><th>Client id</th><th>Name</th><th>Kind</th><th>Callback</th><th></th></tr></thead><tbody id=clients></tbody></table></div></div></div>"
-        "<div id=tab-audit hidden><div class=section><div class=body style='padding:0'><table><thead><tr><th>When</th><th>Event</th><th>Account</th><th>Actor</th><th>Detail</th></tr></thead><tbody id=audit></tbody></table></div></div></div>")
+        "<div class=section><div class='body tbl'><table><thead><tr><th>Client id</th><th>Name</th><th>Kind</th><th>Callback</th><th></th></tr></thead><tbody id=clients></tbody></table></div></div></div>"
+        "<div id=tab-audit hidden><div class=section><div class='body tbl'><table><thead><tr><th>When</th><th>Event</th><th>Account</th><th>Actor</th><th>Detail</th></tr></thead><tbody id=audit></tbody></table></div></div></div>")
     script = """
 const PLANS = %s; let offset = 0, query = '';
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
@@ -587,8 +657,8 @@ function wire(){
       loadAccounts(true);
     } catch (e) { alert(e.message); }
   });
-  document.querySelectorAll('[data-delinv]').forEach(b => b.onclick = async () => { await api('/api/admin/invites/' + b.dataset.delinv, undefined, 'DELETE'); load('invites'); });
-  document.querySelectorAll('[data-delcli]').forEach(b => b.onclick = async () => { if (!confirm('Delete this client? Its servers can no longer sign people in.')) return; await api('/api/admin/clients/' + b.dataset.delcli, undefined, 'DELETE'); load('clients'); });
+  document.querySelectorAll('[data-delinv]').forEach(b => b.onclick = () => act(b, async () => { await api('/api/admin/invites/' + b.dataset.delinv, undefined, 'DELETE'); load('invites'); }));
+  document.querySelectorAll('[data-delcli]').forEach(b => b.onclick = () => { if (!confirm('Delete this client? Its servers can no longer sign people in.')) return; act(b, async () => { await api('/api/admin/clients/' + b.dataset.delcli, undefined, 'DELETE'); load('clients'); }); });
 }
 async function load(tab){
   if (tab === 'invites') { const d = await api('/api/admin/invites', undefined, 'GET'); document.getElementById('invites').innerHTML = d.invites.map(i => '<tr><td class=mono>' + esc(i.code) + '</td><td>' + i.uses_left + '</td><td>' + esc(i.plan) + '</td><td>' + esc(i.note) + '</td><td>' + esc(i.created_at.slice(0,10)) + '</td><td><button class="btn btn--sm" data-delinv="' + esc(i.code) + '">Delete</button></td></tr>').join('') || '<tr><td colspan=6 class=empty>No invites.</td></tr>'; }
@@ -615,11 +685,9 @@ def authorize_page(req: dict, account, verify_needed: bool = False, social: dict
     if account and verify_needed:
         inner = (f"<p class=lead><b>{who}</b> wants to sign you in as <b>{esc(account['username'])}</b>, but your e-mail address is not "
                  "confirmed yet. Open the link we mailed you, then try again from the app.</p>"
-                 "<button class='btn btn--block' id=resend>Resend the mail</button><div class=msg id=err></div>"
+                 "<button class='btn btn--block' data-resend>Resend the mail</button>"
                  "<p class=links><a href=/>Your account</a></p>")
-        script = ("document.getElementById('resend').onclick = async (ev) => { ev.target.disabled = true; try { await api('/api/verify/resend', {}); "
-                  "ev.target.textContent = 'Sent'; } catch (e) { document.getElementById('err').textContent = e.message; } };")
-        return auth("Confirm your e-mail first", "", inner, script)
+        return auth("Confirm your e-mail first", "", inner, RESEND_JS)
     if account:
         inner = (f"<p class=lead>Continue as <b>{esc(account['username'])}</b> ({esc(account['email'])})?</p>"
                  "<button class='btn btn--primary btn--block' id=go>Continue</button>"
@@ -627,9 +695,10 @@ def authorize_page(req: dict, account, verify_needed: bool = False, social: dict
                  "<button class='btn btn--sm' id=cancel>Cancel</button></div><div class=msg id=err></div>")
         script = (f"document.getElementById('go').onclick = async () => {{ try {{ const d = await api('/authorize/continue', {{request_id: {rid}}}); "
                   f"location.href = d.redirect; }} catch (e) {{ document.getElementById('err').textContent = e.message; }} }};"
-                  f"document.getElementById('other').onclick = async () => {{ await api('/api/logout', {{}}); location.reload(); }};"
-                  f"document.getElementById('cancel').onclick = async () => {{ const d = await api('/authorize/cancel', {{request_id: {rid}}}); "
-                  f"if (d.redirect) location.href = d.redirect; }};")
+                  f"const err = document.getElementById('err');"
+                  f"document.getElementById('other').onclick = (e) => act(e.target, async () => {{ await api('/api/logout', {{}}); location.reload(); }}, err);"
+                  f"document.getElementById('cancel').onclick = (e) => act(e.target, async () => {{ const d = await api('/authorize/cancel', {{request_id: {rid}}}); "
+                  f"if (d.redirect) location.href = d.redirect; }}, err);")
         return auth(f"Sign in to {client['name']}", "", inner, script)
     tiles, social_js = _social(social)
     inner = f"<form id=f>{_password_fields()}</form>{tiles}{_to_register()}{_terms()}"

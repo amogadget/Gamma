@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
+import { highlightSpot, rangeSpot } from "../pdf/pdfSelectionSpot";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
 import ImportReviewDialog from "../transfers/ImportReviewDialog";
@@ -688,8 +689,8 @@ function LibraryApp() {
     inp.click();
   }
 
-  // XMLHttpRequest instead of fetch: it reports upload progress, so a large
-  // zip shows a percent while the bytes go up, then an indeterminate
+  // An XHR upload (shared/lib/xhrUpload.js): it reports upload progress, so
+  // a large zip shows a percent while the bytes go up, then an indeterminate
   // "restoring/merging" hint while the server unzips and swaps the databases.
   // after.openPage: reload into that page instead of the home library (a
   // shared page imported by link keeps its block id, so it opens directly).
@@ -700,50 +701,33 @@ function LibraryApp() {
     const tid = addTransfer({ name: `${merging ? "Merge" : "Restore"} ${f.name}`.slice(0, 60), kind: "upload", info: "uploading…" });
     const fd = new FormData();
     fd.append("file", f);
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API}/import-data?mode=${mode}${other ? `&ws=${encodeURIComponent(other)}` : ""}`);
-    xhr.withCredentials = true;
-    // XHR bypasses the window.fetch wrapper, so the tab-identity guard and
-    // the workspace header must be set by hand — this is the most
-    // destructive endpoint in the app.
-    const expected = getExpectedUser();
-    if (expected) xhr.setRequestHeader("X-Gamma-User", expected);
-    if (getCurrentWorkspace()) xhr.setRequestHeader("X-Gamma-Workspace", getCurrentWorkspace());
     let lastPct = -1;
-    xhr.upload.onprogress = (e) => {
-      const pct = e.total ? Math.min(99, Math.floor((e.loaded / e.total) * 100)) : null;
-      if (pct === lastPct) return; // only re-render on a visible change
-      lastPct = pct;
-      postPill("backup", { msg: pct == null ? "Uploading backup…" : `Uploading backup… ${pct}%`, spinner: true });
-      if (e.total) updateTransfer(tid, { info: `${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}` });
-    };
-    xhr.upload.onload = () => {
-      postPill("backup", { msg: merging ? "Merging backup into your library…" : "Restoring backup…", spinner: true });
-      updateTransfer(tid, { info: merging ? "merging…" : "restoring…" });
-    };
-    xhr.onload = () => {
-      let d = {};
-      try { d = JSON.parse(xhr.responseText); } catch {}
+    xhrUpload(`${API}/import-data?mode=${mode}${other ? `&ws=${encodeURIComponent(other)}` : ""}`, fd, {
+      onProgress: (loaded, total) => {
+        const pct = Math.min(99, Math.floor((loaded / total) * 100));
+        if (pct === lastPct) return; // only re-render on a visible change
+        lastPct = pct;
+        postPill("backup", { msg: `Uploading backup… ${pct}%`, spinner: true });
+        updateTransfer(tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)}` });
+      },
+      onProcessing: () => {
+        postPill("backup", { msg: merging ? "Merging backup into your library…" : "Restoring backup…", spinner: true });
+        updateTransfer(tid, { info: merging ? "merging…" : "restoring…" });
+      },
+    }).then((d) => {
       postPill("backup", null);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        updateTransfer(tid, { status: "done", info: merging ? `${d.pages_added ?? 0} pages added` : "restored" });
-        // Another workspace's data changed, not this one's — nothing here
-        // is stale, so stay put instead of throwing the session away.
-        if (other) setStatus(`${merging ? "Merged into" : "Restored"} ${workspaces.find((w) => w.id === other)?.name || "the workspace"}.`);
-        else if (after.openPage) window.location.href = withWorkspace(`${window.location.pathname}?page=${encodeURIComponent(after.openPage)}`);
-        else window.location.href = withWorkspace(window.location.pathname); // fresh state, no stale ?block=
-      } else {
-        const msg = d.detail || xhr.statusText || "failed";
-        updateTransfer(tid, { status: "error", info: String(msg) });
-        setStatus(`Import failed: ${msg}`);
-      }
-    };
-    xhr.onerror = () => {
+      updateTransfer(tid, { status: "done", info: merging ? `${d?.pages_added ?? 0} pages added` : "restored" });
+      // Another workspace's data changed, not this one's — nothing here
+      // is stale, so stay put instead of throwing the session away.
+      if (other) setStatus(`${merging ? "Merged into" : "Restored"} ${workspaces.find((w) => w.id === other)?.name || "the workspace"}.`);
+      else if (after.openPage) window.location.href = withWorkspace(`${window.location.pathname}?page=${encodeURIComponent(after.openPage)}`);
+      else window.location.href = withWorkspace(window.location.pathname); // fresh state, no stale ?block=
+    }, (err) => {
       postPill("backup", null);
-      updateTransfer(tid, { status: "error", info: "network error" });
-      setStatus("Import failed: network error");
-    };
-    xhr.send(fd);
+      const msg = err?.message || "failed";
+      updateTransfer(tid, { status: "error", info: String(msg) });
+      setStatus(`Import failed: ${msg}`);
+    });
   }
 
   async function doLogout() {
@@ -2859,15 +2843,18 @@ function LibraryApp() {
   // User management moved into Settings → Users (settings/SettingsDialog.jsx UsersSettings,
   // admins only) — App just opens that pane and lends it the shared pieces
   // (confirm dialog, status pill, session re-key after a self-rename).
-  // PDF passages the next chat question focuses on. Ctrl (additive) appends
-  // — whether from text selection or highlight clicks; plain replaces.
+  // PDF passages the next chat question focuses on, as {text, page, box}
+  // (pdf/pdfSelectionSpot.js — where it sits, so the server can place it
+  // and picture a formula). Ctrl (additive) appends — whether from text
+  // selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
-  function addPdfSelection(text, additive) {
+  function addPdfSelection(text, additive, spot) {
     const part = (text || "").trim().slice(0, 4000);
     if (!part) return;
+    const item = { text: part, page: spot?.page || 0, box: spot?.box || null };
     setPdfSelections((prev) => additive
-      ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
-      : [part]);
+      ? (prev.some((s) => s.text === part) || prev.length >= 6 ? prev : [...prev, item])
+      : [item]);
   }
   // Note chips for the next chat message — blocks attached with Ctrl+click /
   // the ⋮⋮ menu's "Add to chat" ({kind: "block", id, text}; the server serves
@@ -2915,7 +2902,7 @@ function LibraryApp() {
     if (h.position?.area) {
       pdfCaptureRef.current?.(h).then((img) => { if (img) addChatImage(img); });
     } else {
-      addPdfSelection(h.content?.text, additive);
+      addPdfSelection(h.content?.text, additive, highlightSpot(h.position));
     }
   }
   // Styled in-app dialogs replacing window.confirm / link decisions.
@@ -3411,7 +3398,7 @@ function LibraryApp() {
         const node = sel.anchorNode;
         const el = node?.nodeType === 3 ? node.parentElement : node;
         if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
-        addPdfSelection(text, additive);
+        addPdfSelection(text, additive, rangeSpot(sel.getRangeAt(0)));
       }, 10);
     }
     // Touch has no mouseup after a long-press/handle selection, so iPad picks
@@ -3432,7 +3419,7 @@ function LibraryApp() {
         const node = sel.anchorNode;
         const el = node?.nodeType === 3 ? node.parentElement : node;
         if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
-        addPdfSelection(text, false);
+        addPdfSelection(text, false, rangeSpot(sel.getRangeAt(0)));
       }, 350);
     }
     document.addEventListener("mouseup", onMouseUp);

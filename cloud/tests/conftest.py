@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from gammacloud import config, db, mail, ratelimit  # noqa: E402
 from gammacloud.app import create_app  # noqa: E402
-from gammacloud.routers.admin import make_invite  # noqa: E402
+from gammacloud.accounts import make_invite  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

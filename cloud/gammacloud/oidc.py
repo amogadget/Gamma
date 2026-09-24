@@ -20,7 +20,12 @@ Clients:
 Timing: an authorize request lives AUTHORIZE_REQUEST_TTL while the person
 signs in; a code AUTH_CODE_TTL; an access token ACCESS_TOKEN_TTL; an ID
 token ID_TOKEN_TTL; a refresh token REFRESH_TOKEN_TTL from its last
-rotation.
+rotation, and one it replaced REFRESH_REUSE_GRACE more (a client that lost
+the answer retries); any later reuse revokes the grant.
+
+A code exchange and a refresh take the write lock before they read
+(``db.begin_write``), so a revoke cannot land between the check and the
+new tokens.
 """
 
 import base64
@@ -34,7 +39,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from . import accounts, config
-from .db import after, audit, new_id, new_token, now, parse, token_hash
+from .db import after, audit, begin_write, new_id, new_token, now, parse, token_hash
+from .ratelimit import agent_of, ip_of
 
 SCOPES = ("openid", "email", "profile", "offline_access")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -252,6 +258,7 @@ def finish(conn, req: dict, account) -> str:
                  (token_hash(code), req["client_id"], account["id"], req["redirect_uri"], req["scope"], req["nonce"],
                   req["code_challenge"], now(), after(config.AUTH_CODE_TTL)))
     conn.execute("DELETE FROM oauth_requests WHERE id = ?", (req["id"],))
+    conn.execute("UPDATE accounts SET app_signed_in_at = COALESCE(app_signed_in_at, ?) WHERE id = ?", (now(), account["id"]))
     audit(conn, "oidc.authorize", account["id"], account["id"], req["client_id"])
     return redirect_with(req["redirect_uri"], {"code": code, "state": req["state"]} if req["state"] else {"code": code})
 
@@ -271,17 +278,20 @@ def _pkce_ok(verifier: str, challenge: str) -> bool:
     return _b64url(digest) == challenge
 
 
-def exchange_code(conn, client: dict, code: str, redirect_uri: str, verifier: str, request=None) -> dict:
+def exchange_code(conn, client: dict, code: str, redirect_uri: str, verifier: str, request=None,
+                  device: tuple[str, str] = ("", "")) -> dict:
+    """``device`` is the client's (per-install id, name); a new grant
+    replaces the live grant of the same device."""
+    begin_write(conn)
     row = conn.execute("SELECT * FROM oauth_codes WHERE code_hash = ?", (token_hash(code or ""),)).fetchone()
     if not row or row["client_id"] != client["client_id"]:
         raise OAuthError("invalid_grant", "unknown code")
     if row["used_at"]:
-        # A replayed code: the first exchange's grant is revoked too (RFC 6749 §4.1.2).
-        for g in conn.execute("SELECT id FROM grants WHERE account_id = ? AND client_id = ? AND created_at >= ? "
-                              "AND revoked_at IS NULL", (row["account_id"], client["client_id"], row["auth_time"])).fetchall():
-            revoke_grant(conn, g["id"])
-        conn.execute("DELETE FROM access_tokens WHERE account_id = ? AND client_id = ? AND grant_id = ''",
-                     (row["account_id"], client["client_id"]))
+        # A replayed code: what its first exchange issued is revoked too (RFC 6749 §4.1.2).
+        if row["grant_id"]:
+            revoke_grant(conn, row["grant_id"])
+        if row["access_hash"]:
+            conn.execute("DELETE FROM access_tokens WHERE token_hash = ?", (row["access_hash"],))
         raise OAuthError("invalid_grant", "code already used")
     if row["expires_at"] <= now():
         raise OAuthError("invalid_grant", "code expired")
@@ -289,46 +299,77 @@ def exchange_code(conn, client: dict, code: str, redirect_uri: str, verifier: st
         raise OAuthError("invalid_grant", "redirect_uri mismatch")
     if not _pkce_ok(verifier, row["code_challenge"]):
         raise OAuthError("invalid_grant", "PKCE verification failed")
-    conn.execute("UPDATE oauth_codes SET used_at = ? WHERE code_hash = ?", (now(), row["code_hash"]))
     account = accounts.by_id(conn, row["account_id"])
     if not account:
         raise OAuthError("invalid_grant", "account gone")
     grant_id = ""
     refresh = None
     if "offline_access" in row["scope"].split():
-        grant_id, refresh = _new_grant(conn, account["id"], client["client_id"], row["scope"], request)
-    return _token_response(conn, account, client, row["scope"], grant_id, refresh, nonce=row["nonce"],
-                           auth_time=row["auth_time"])
+        grant_id, refresh = _new_grant(conn, account["id"], client["client_id"], row["scope"], request, device)
+    out = _token_response(conn, account, client, row["scope"], grant_id, refresh, nonce=row["nonce"],
+                          auth_time=row["auth_time"])
+    conn.execute("UPDATE oauth_codes SET used_at = ?, grant_id = ?, access_hash = ? WHERE code_hash = ?",
+                 (now(), grant_id, token_hash(out["access_token"]), row["code_hash"]))
+    return out
 
 
 def refresh_grant(conn, client: dict, refresh_token: str, request=None) -> dict:
-    row = conn.execute("SELECT * FROM grants WHERE refresh_hash = ?", (token_hash(refresh_token or ""),)).fetchone()
+    begin_write(conn)
+    h = token_hash(refresh_token or "")
+    row = conn.execute("SELECT * FROM grants WHERE refresh_hash = ?", (h,)).fetchone() or _retired(conn, client, h)
     if not row or row["client_id"] != client["client_id"] or row["revoked_at"]:
         raise OAuthError("invalid_grant", "unknown refresh token")
     if row["expires_at"] <= now():
-        conn.execute("UPDATE grants SET revoked_at = ?, refresh_hash = NULL WHERE id = ?", (now(), row["id"]))
+        revoke_grant(conn, row["id"])
         raise OAuthError("invalid_grant", "refresh token expired")
     account = accounts.by_id(conn, row["account_id"])
     if not account:
         raise OAuthError("invalid_grant", "account gone")
     refresh = new_token(32)
+    ts = now()
+    conn.execute("INSERT OR REPLACE INTO refresh_history (refresh_hash, grant_id, replaced_at) VALUES (?, ?, ?)",
+                 (row["refresh_hash"], row["id"], ts))
     conn.execute("UPDATE grants SET refresh_hash = ?, rotated_at = ?, last_used_at = ?, expires_at = ?, ip = ?, "
                  "user_agent = ? WHERE id = ?",
-                 (token_hash(refresh), now(), now(), after(config.REFRESH_TOKEN_TTL), _ip(request), _agent(request),
+                 (token_hash(refresh), ts, ts, after(config.REFRESH_TOKEN_TTL), ip_of(request), agent_of(request),
                   row["id"]))
     conn.execute("DELETE FROM access_tokens WHERE grant_id = ?", (row["id"],))
     return _token_response(conn, account, client, row["scope"], row["id"], refresh, nonce="",
                            auth_time=row["created_at"])
 
 
-def _new_grant(conn, account_id: str, client_id: str, scope: str, request) -> tuple[str, str]:
+def _retired(conn, client: dict, h: str):
+    """The live grant a rotated-away refresh token belonged to, when it was
+    replaced within REFRESH_REUSE_GRACE (a client that lost the answer
+    retries), else None. A later use means two parties hold this device's
+    key: the grant is revoked and the request refused."""
+    old = conn.execute("SELECT * FROM refresh_history WHERE refresh_hash = ?", (h,)).fetchone()
+    if not old:
+        return None
+    grant = conn.execute("SELECT * FROM grants WHERE id = ? AND revoked_at IS NULL", (old["grant_id"],)).fetchone()
+    if not grant or grant["client_id"] != client["client_id"]:
+        return None
+    if old["replaced_at"] > after(-config.REFRESH_REUSE_GRACE):
+        return grant
+    revoke_grant(conn, grant["id"])
+    audit(conn, "grant.reuse", grant["account_id"], "system", grant["id"])
+    raise OAuthError("invalid_grant", "this refresh token was already used; the device is signed out")
+
+
+def _new_grant(conn, account_id: str, client_id: str, scope: str, request, device: tuple[str, str]) -> tuple[str, str]:
+    device_id, device_name = device
+    if device_id:
+        for g in conn.execute("SELECT id FROM grants WHERE account_id = ? AND client_id = ? AND device_id = ? "
+                              "AND revoked_at IS NULL", (account_id, client_id, device_id)).fetchall():
+            revoke_grant(conn, g["id"])
     grant_id = new_id()
     refresh = new_token(32)
     ts = now()
     conn.execute("INSERT INTO grants (id, account_id, client_id, scope, refresh_hash, created_at, rotated_at, "
-                 "last_used_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 "last_used_at, expires_at, ip, user_agent, device_id, device_name) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                  (grant_id, account_id, client_id, scope, token_hash(refresh), ts, ts, ts,
-                  after(config.REFRESH_TOKEN_TTL), _ip(request), _agent(request)))
+                  after(config.REFRESH_TOKEN_TTL), ip_of(request), agent_of(request), device_id, device_name))
     return grant_id, refresh
 
 
@@ -381,38 +422,50 @@ def resolve_access_token(conn, token: str):
     account = accounts.by_id(conn, row["account_id"])
     if not account:
         return None
+    if row["grant_id"]:  # the device's last activity, written at most every LAST_ACTIVE_TOUCH
+        conn.execute("UPDATE grants SET last_used_at = ? WHERE id = ? AND last_used_at < ?",
+                     (now(), row["grant_id"], after(-config.LAST_ACTIVE_TOUCH)))
     return account, row
 
 
 def revoke(conn, client: dict, token: str) -> None:
-    """RFC 7009: a refresh token revokes its grant; an access token just
-    itself. Unknown tokens succeed silently."""
+    """RFC 7009: a refresh token (the current one or one it replaced)
+    revokes its grant; an access token just itself. Unknown tokens succeed
+    silently."""
     h = token_hash(token or "")
-    grant = conn.execute("SELECT * FROM grants WHERE refresh_hash = ? AND client_id = ?", (h, client["client_id"])).fetchone()
+    grant = conn.execute("SELECT id FROM grants WHERE client_id = ? AND (refresh_hash = ? OR id = "
+                         "(SELECT grant_id FROM refresh_history WHERE refresh_hash = ?))",
+                         (client["client_id"], h, h)).fetchone()
     if grant:
         revoke_grant(conn, grant["id"])
         return
     conn.execute("DELETE FROM access_tokens WHERE token_hash = ? AND client_id = ?", (h, client["client_id"]))
 
 
-def revoke_grant(conn, grant_id: str, actor: str = "") -> None:
-    conn.execute("UPDATE grants SET revoked_at = ?, refresh_hash = NULL WHERE id = ? AND revoked_at IS NULL",
-                 (now(), grant_id))
+def revoke_grant(conn, grant_id: str, actor: str = "") -> bool:
+    """Revoke a grant with its access tokens; True when it was live. An
+    ``actor`` records it in the account's audit."""
+    row = conn.execute("SELECT account_id FROM grants WHERE id = ? AND revoked_at IS NULL", (grant_id,)).fetchone()
     conn.execute("DELETE FROM access_tokens WHERE grant_id = ?", (grant_id,))
+    if not row:
+        return False
+    conn.execute("UPDATE grants SET revoked_at = ?, refresh_hash = NULL WHERE id = ?", (now(), grant_id))
+    conn.execute("DELETE FROM refresh_history WHERE grant_id = ?", (grant_id,))
     if actor:
-        audit(conn, "grant.revoke", actor=actor, detail=grant_id)
+        audit(conn, "grant.revoke", row["account_id"], actor, grant_id)
+    return True
 
 
 def devices(conn, account_id: str) -> list[dict]:
-    """The live grants of an account — the portal's "signed-in devices"."""
-    rows = conn.execute("SELECT g.*, c.name AS client_name FROM grants g LEFT JOIN oauth_clients c "
-                        "ON c.client_id = g.client_id WHERE g.account_id = ? AND g.revoked_at IS NULL "
-                        "AND g.expires_at > ? ORDER BY g.last_used_at DESC", (account_id, now())).fetchall()
+    """The live grants of an account — the portal's signed-in apps."""
+    rows = conn.execute("SELECT * FROM grants WHERE account_id = ? AND revoked_at IS NULL AND expires_at > ? "
+                        "ORDER BY last_used_at DESC", (account_id, now())).fetchall()
     out = []
     for r in rows:
         client = get_client(conn, r["client_id"]) or {"name": r["client_id"], "kind": "?"}
-        out.append({"id": r["id"], "client": client["name"], "kind": client["kind"], "created_at": r["created_at"],
-                    "last_used_at": r["last_used_at"], "ip": r["ip"], "user_agent": r["user_agent"]})
+        out.append({"id": r["id"], "client": client["name"], "kind": client["kind"], "device_name": r["device_name"],
+                    "created_at": r["created_at"], "last_used_at": r["last_used_at"], "ip": r["ip"],
+                    "user_agent": r["user_agent"]})
     return out
 
 
@@ -424,16 +477,4 @@ def purge_expired(conn) -> None:
     conn.execute("DELETE FROM email_tokens WHERE expires_at <= ?", (ts,))
     conn.execute("UPDATE grants SET revoked_at = ?, refresh_hash = NULL WHERE expires_at <= ? AND revoked_at IS NULL",
                  (ts, ts))
-
-
-def _ip(request) -> str:
-    if request is None:
-        return ""
-    from .ratelimit import client_ip
-    return client_ip(request)[:64]
-
-
-def _agent(request) -> str:
-    if request is None:
-        return ""
-    return request.headers.get("user-agent", "")[:200]
+    conn.execute("DELETE FROM refresh_history WHERE grant_id IN (SELECT id FROM grants WHERE revoked_at IS NOT NULL)")

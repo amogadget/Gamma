@@ -2,7 +2,7 @@ from conftest import invite, last_link, make_admin, register, verify
 
 from fastapi.testclient import TestClient
 
-from gammacloud import config, mail, ratelimit
+from gammacloud import accounts, config, mail, ratelimit
 
 
 def test_register_verify_login_flow(client):
@@ -53,6 +53,9 @@ def test_validation_and_uniqueness(client):
         r = client.post("/api/register", json=body)
         assert r.status_code == 400, override
         assert word.lower() in r.json()["detail"].lower()
+    # a username is 3 to 32 characters: one and two are refused, three accepted
+    assert not accounts.USERNAME_RE.match("a") and not accounts.USERNAME_RE.match("ab")
+    assert accounts.USERNAME_RE.match("abc")
     ratelimit.clear()  # rejected attempts count against the per-IP limit
     register(client, "alice", code=code)
     r = client.post("/api/register", json={"email": "alice@example.org", "username": "other", "password": "correct horse battery",
@@ -172,7 +175,7 @@ def test_pages_render(client):
     assert r.status_code == 200 and "alice" in r.text and "not confirmed" in r.text
     assert client.get("/login", follow_redirects=False).status_code == 302
     assert "Change username" in client.get("/settings").text
-    assert "No app or server holds a key" in client.get("/devices").text  # nothing to sign out yet
+    assert "No Gamma app is signed in" in client.get("/devices").text  # nothing to sign out yet
     assert client.get("/admin").status_code == 404
     make_admin("alice")
     r = client.get("/admin")
@@ -185,15 +188,18 @@ def test_admin_flag_in_me(client):
     assert client.get("/api/me").json()["account"]["is_admin"] is True
 
 
-def test_mail_failure_is_a_503(client, monkeypatch):
+def test_mail_failure(client, monkeypatch):
     def boom(*a, **k):
         raise mail.MailError("domain not verified")
     monkeypatch.setattr(mail, "send", boom)
+    # the account is made anyway (the mail goes out after the commit); the Overview offers the resend
     r = client.post("/api/register", json={"email": "z@example.org", "username": "zed", "password": "correct horse battery",
                                            "invite": invite()})
+    assert r.status_code == 201 and r.json()["mailed"] is False
+    r = client.post("/api/verify/resend")
     assert r.status_code == 503 and "could not send" in r.json()["detail"].lower()
     r = client.post("/api/reset/request", json={"email": "z@example.org"})
-    assert r.status_code in (200, 503)  # no account → nothing to send; the answer never says which
+    assert r.status_code in (200, 503)
 
 
 def test_health_and_config(client):

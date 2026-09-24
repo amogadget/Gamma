@@ -268,7 +268,7 @@ def test_upgrade_adds_external_logins():
         conn.execute("DROP TABLE external_logins")
         conn.execute("PRAGMA user_version = 1")
         conn.commit()
-    assert db.ensure_current() == ["external_logins"]
+    assert db.ensure_current() == ["external_logins", "devices"]
     with closing(sqlite3.connect(str(config.DB_PATH))) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'external_logins'").fetchone()

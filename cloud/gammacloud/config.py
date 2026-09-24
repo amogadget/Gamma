@@ -73,6 +73,8 @@ AUTH_CODE_TTL = 120
 ACCESS_TOKEN_TTL = 3600
 ID_TOKEN_TTL = 600
 REFRESH_TOKEN_TTL = 90 * 86400
+REFRESH_REUSE_GRACE = 60               # a refresh token just rotated away still works once more (a lost answer)
+LAST_ACTIVE_TOUCH = 600                # a grant's last activity is written at most this often
 RETIRED_KEY_GRACE = 7 * 86400          # a rotated-out key stays in the JWKS this long
 
 PLANS = ("free", "plus", "pro")

@@ -1,5 +1,5 @@
 import React from "react";
-import { SubDialog } from "../settings/SettingsKit";
+import { Segmented, SubDialog } from "../settings/SettingsKit";
 import { fmtBytes } from "../shared/lib/utils";
 import ImportTree from "./ImportTree";
 import { commitImport, discardImport, importFormat, requestImport } from "./importApi";
@@ -7,14 +7,14 @@ import { IMPORT_FILTERS, allItemIds, buildImportTree, filterImportPages, importS
   importWarnings, itemSelected, resultPages, selectItems } from "./importReview";
 import "./importReview.css";
 
-const PHASE_STEP = { upload_review: 0, scanning: 0, review: 1, importing: 2, complete: 3 };
-const PHASE_LABEL = { upload_review: "Uploading for review", scanning: "Checking files and library destinations",
+const PHASE_STEP = { upload: 0, scanning: 0, review: 1, importing: 2, complete: 3 };
+const PHASE_LABEL = { upload: "Uploading for review", scanning: "Checking files and library destinations",
   importing: "Importing selected items" };
 
 export default function ImportReviewDialog({ source, file, strip, folder = "", onClose, onComplete }) {
   const format = importFormat(source, file);
   const [plan, setPlan] = React.useState(null);
-  const [phase, setPhase] = React.useState("upload_review");
+  const [phase, setPhase] = React.useState("upload");
   const [progress, setProgress] = React.useState({ loaded: 0, total: null });
   const [selected, setSelected] = React.useState(new Set());
   const [filter, setFilter] = React.useState("all");
@@ -28,11 +28,11 @@ export default function ImportReviewDialog({ source, file, strip, folder = "", o
   React.useEffect(() => {
     const ctl = new AbortController();
     controller.current = ctl;
-    setError(""); setPhase("upload_review");
+    setError(""); setPhase("upload");
     requestImport({ source, file, strip, folder }, {
       signal: ctl.signal, onProgress: update => {
         if (ctl.signal.aborted) return;
-        setPhase(update.phase === "upload" ? "upload_review" : "scanning");
+        setPhase(update.phase === "processing" ? "scanning" : "upload");
         if (update.phase === "upload") setProgress(update);
       },
     }).then(data => {
@@ -57,7 +57,7 @@ export default function ImportReviewDialog({ source, file, strip, folder = "", o
   const destination = buildImportTree(shown, true);
   const warnings = importWarnings(result || plan || {});
   const busy = !["review", "complete"].includes(phase);
-  const uploading = phase === "upload_review";
+  const uploading = phase === "upload";
   const processingImport = phase === "importing";
   const close = () => {
     if (processingImport) return;
@@ -101,10 +101,7 @@ export default function ImportReviewDialog({ source, file, strip, folder = "", o
     </div> : null}
     {plan && !busy ? <>
       {!result ? <div className="importSelectionToolbar">
-        <div role="group" aria-label="Filter import items" className="segGroup">
-          {IMPORT_FILTERS.map(([value, label]) => <button key={value} type="button" className={`uiBtn sm${filter === value ? " on" : ""}`}
-            aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}
-        </div>
+        <Segmented value={filter} onChange={setFilter} options={IMPORT_FILTERS} />
         <div className="importSelectionActions">
           <button className="uiBtn sm" onClick={() => setSelected(new Set(allItemIds(pages)))}>Select all</button>
           <button className="uiBtn sm" onClick={() => setSelected(new Set())}>Deselect all</button>

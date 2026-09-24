@@ -16,6 +16,13 @@ import { ActionMenu } from "../shared/ui/Menus";
 import { PaneHead, Section, Empty } from "./SettingsKit";
 import { DatabaseIcon, DownloadIcon, HardDriveIcon, ImportIcon, PlusIcon, Trash2Icon } from "../shared/ui/Icons";
 
+// The one date format of this pane: "Sep 23, 3:00 AM UTC" — the time zone
+// matters because tasks are scheduled in UTC. `fallback` when there is no
+// date yet (a snapshot named but undated, a task that has not run).
+export function fmtWhen(iso, fallback = "") {
+  return iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : fallback;
+}
+
 export function WorkspaceBackups({ value }) {
   const { workspace, setStatus, confirm, closeSettings, reloadWorkspace } = value;
   const [mine, setMine] = React.useState(null);   // GET /api/workspaces/mine → workspaces
@@ -128,7 +135,7 @@ export function WorkspaceBackups({ value }) {
     });
   }
 
-  const when = (b) => (b.created_at ? new Date(b.created_at).toLocaleString() : b.name);
+  const when = (b) => fmtWhen(b.created_at, b.name);
   const owned = (mine || []).filter((w) => w.role === "owner");
 
   function group(w) {
@@ -204,7 +211,7 @@ export function WorkspaceBackups({ value }) {
 
   return (
     <>
-      <PaneHead icon={DatabaseIcon} title="Backups">Keep your work safe, automatically. Download a snapshot to keep a copy elsewhere.</PaneHead>
+      <PaneHead icon={DatabaseIcon} title="Backups">Server-kept snapshots and the tasks that take them.</PaneHead>
       {!mine && !error ? <Empty icon={DatabaseIcon}>Loading…</Empty> : null}
       {error ? <Empty icon={DatabaseIcon}>Backups unavailable — {error}</Empty> : null}
       {mine ? (
@@ -282,7 +289,7 @@ export function ServerBackups({ setStatus, confirm }) {
     });
   }
 
-  const when = (b) => (b.created_at ? new Date(b.created_at).toLocaleString() : b.name);
+  const when = (b) => fmtWhen(b.created_at, b.name);
 
   return (
     <Section

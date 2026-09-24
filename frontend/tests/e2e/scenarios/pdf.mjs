@@ -275,6 +275,49 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("pdf: a selection goes to the chat with its page and region, and the reply says where it was placed", async () => {
+    await page.reload();
+    await waitForPdf(page, 2);
+    const requests = [];
+    // What the server reports it did with the selection (ai_context.selection_context).
+    const coverage = { context: [{ title: "Rydberg paper", doc_id: docId, native: false, native_requested: false,
+      partial: true, chars: 900, pages: 0, pages_shown: 0,
+      selection: { passages: [{ page: 2, section: "Results", found: false, crop: true }] } }] };
+    await page.route("**/api/ai/chat", async (route) => {
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({ contentType: "application/x-ndjson",
+        body: `${JSON.stringify(coverage)}\n${JSON.stringify({ delta: "It says hello." })}\n` });
+    });
+    try {
+      // The chat takes the selection from a mouseup inside the viewer.
+      await page.evaluate(() => {
+        const span = [...document.querySelectorAll('[data-page="2"] .textLayer span')]
+          .find((s) => s.textContent.includes("says hello"));
+        const off = span.textContent.indexOf("says hello");
+        const range = document.createRange();
+        range.setStart(span.firstChild, off);
+        range.setEnd(span.firstChild, off + "says hello".length);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        span.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      });
+      await page.locator(".chatSelChips").getByText("Selection", { exact: true }).waitFor();
+      await page.locator("textarea.chatInputArea").fill("What does this say?");
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      await until(() => requests.length === 1, { what: "the chat request" });
+      const [sel] = requests[0].selections;
+      assertEq(sel.text, "says hello");
+      assertEq(sel.page, 2, "the page the selection starts on");
+      assert(Array.isArray(sel.box) && sel.box.length === 4 && sel.box[0] < sel.box[2] && sel.box[1] < sel.box[3]
+        && sel.box.every((v) => v >= 0 && v <= 1), `box as page fractions: ${JSON.stringify(sel.box)}`);
+      await page.getByText("Model saw text around p. 2 · Results").waitFor();
+      await page.getByText("Picture of the selection sent").waitFor();
+    } finally {
+      await page.unroute("**/api/ai/chat");
+    }
+    assertNoProblems(page);
+  });
+
   await step("pdf: chat paper recommendations and bare identifiers open clickable source links", async () => {
     const doi = "https://doi.org/10.1103/PhysRevA.69.062320";
     await account.api(`/api/chats/${pageId}`, { method: "PUT", body: { messages: [

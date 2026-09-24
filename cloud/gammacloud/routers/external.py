@@ -26,9 +26,10 @@ from pydantic import BaseModel
 from .. import accounts, config, db, identities, oidc, pages, providers, ratelimit, sessions
 from ..accounts import Problem
 from ..db import new_token
+from ..pages import NO_STORE
+from .accounts import portal_account
 
 router = APIRouter()
-_HTML = {"Cache-Control": "no-store"}
 
 
 def _provider(provider: str) -> str:
@@ -46,14 +47,14 @@ def sign_in_page(request: Request, render, *, next_url: str = "/", request_id: s
     tap = {"client_id": config.GOOGLE_CLIENT_ID, "nonce": identities.derive(seed, "one-tap")} if providers.one_tap() else None
     social = {"providers": providers.enabled(), "tap": tap, "next": identities.safe_next(next_url), "request_id": request_id}
     resp = HTMLResponse(render(social), status_code=status,
-                        headers={**_HTML, "Referrer-Policy": "strict-origin-when-cross-origin"})
+                        headers={**NO_STORE, "Referrer-Policy": "strict-origin-when-cross-origin"})
     if tap and seed != request.cookies.get(identities.TAP_COOKIE):
-        identities.set_cookie(resp, identities.TAP_COOKIE, seed)
+        sessions.set_cookie(resp, seed, name=identities.TAP_COOKIE, max_age=None)
     return resp
 
 
 def _fail(message: str, back: str = "/login", status: int = 400):
-    return HTMLResponse(pages.error_page("Could not sign you in", message, back), status_code=status, headers=_HTML)
+    return HTMLResponse(pages.error_page("Could not sign you in", message, back), status_code=status, headers=NO_STORE)
 
 
 def _back(flow: dict) -> str:
@@ -82,35 +83,31 @@ def _complete(request: Request, flow: dict, ident: providers.Identity) -> tuple[
     """After a verified identity: (redirect, session token, signup token);
     raises Problem."""
     with closing(db.connect()) as conn:
-        try:
-            if flow.get("link_account"):
-                account = sessions.resolve(conn, request)
-                if not account or account["id"] != flow["link_account"]:
-                    raise Problem(401, "Sign in again, then connect the account from Settings.")
-                identities.link(conn, account["id"], ident)
-                conn.commit()
-                return f"/settings?connected={ident.provider}", "", ""
-            account = identities.resolve(conn, ident)
-            if account is None:
-                if config.REGISTRATION == "closed":
-                    raise Problem(403, f"No Gamma Cloud account uses this {providers.NAMES[ident.provider]} account, "
-                                       "and registration is closed.")
-                ext = identities.to_signup(conn, flow, ident)
-                conn.commit()
-                return "/signup/finish", "", ext
-            redirect, token = _sign_in(conn, request, account, flow, ident.provider)
+        if flow.get("link_account"):
+            account = sessions.resolve(conn, request)
+            if not account or account["id"] != flow["link_account"]:
+                raise Problem(401, "Sign in again, then connect the account from Settings.")
+            identities.link(conn, account["id"], ident)
             conn.commit()
-            return redirect, token, ""
-        except Problem:
-            conn.rollback()
-            raise
+            return f"/settings?connected={ident.provider}", "", ""
+        account = identities.resolve(conn, ident)
+        if account is None:
+            if config.REGISTRATION == "closed":
+                raise Problem(403, f"No Gamma Cloud account uses this {providers.NAMES[ident.provider]} account, "
+                                   "and registration is closed.")
+            ext = identities.to_signup(conn, flow, ident)
+            conn.commit()
+            return "/signup/finish", "", ext
+        redirect, token = _sign_in(conn, request, account, flow, ident.provider)
+        conn.commit()
+        return redirect, token, ""
 
 
 def _respond(resp, token: str, ext: str):
     if token:
         sessions.set_cookie(resp, token)
     if ext:
-        identities.set_cookie(resp, identities.COOKIE, ext, config.EXTERNAL_LOGIN_TTL)
+        sessions.set_cookie(resp, ext, name=identities.COOKIE, max_age=config.EXTERNAL_LOGIN_TTL)
     else:
         resp.delete_cookie(identities.COOKIE, path="/")
     return resp
@@ -129,19 +126,14 @@ def start(provider: str, body: StartBody, request: Request):
     _provider(provider)
     ratelimit.check(f"oauth-start:ip:{ratelimit.client_ip(request)}", 30, 600)
     with closing(db.connect()) as conn:
-        link_account = ""
-        if body.link:
-            account = sessions.resolve(conn, request)
-            if not account:
-                raise HTTPException(401, "not signed in")
-            link_account = account["id"]
+        link_account = portal_account(conn, request)["id"] if body.link else ""
         token = identities.start(conn, provider, next_url=body.next, request_id=body.request_id,
                                  link_account=link_account)
         conn.commit()
     url = providers.authorize_url(provider, state=identities.derive(token, "state"),
                                   verifier=identities.derive(token, "pkce"), nonce=identities.derive(token, "nonce"))
     resp = JSONResponse({"url": url})
-    identities.set_cookie(resp, identities.COOKIE, token, config.EXTERNAL_LOGIN_TTL)
+    sessions.set_cookie(resp, token, name=identities.COOKIE, max_age=config.EXTERNAL_LOGIN_TTL)
     return resp
 
 
@@ -183,11 +175,8 @@ def one_tap(body: OneTapBody, request: Request):
     if not seed:
         raise HTTPException(400, "Reload the page and try again.")
     flow = {"next": body.next, "request_id": body.request_id}
-    try:
-        ident = providers.google_identity(body.credential, identities.derive(seed, "one-tap"))
-        redirect, session, ext = _complete(request, flow, ident)
-    except Problem as e:
-        raise HTTPException(e.status, e.detail) from e
+    ident = providers.google_identity(body.credential, identities.derive(seed, "one-tap"))
+    redirect, session, ext = _complete(request, flow, ident)
     return _respond(JSONResponse({"redirect": redirect}), session, ext)
 
 
@@ -200,7 +189,7 @@ def signup_page(request: Request):
         if not flow:
             return RedirectResponse("/login", status_code=302)
         suggestion = identities.suggest_username(conn, flow)
-    return HTMLResponse(pages.signup_finish_page(flow, suggestion), headers=_HTML)
+    return HTMLResponse(pages.signup_finish_page(flow, suggestion), headers=NO_STORE)
 
 
 class SignupBody(BaseModel):
@@ -216,11 +205,7 @@ def signup(body: SignupBody, request: Request):
         flow = identities.load(conn, ext, "signup")
         if not flow:
             raise HTTPException(400, "This sign-up expired. Start again from the sign-in page.")
-        try:
-            account = identities.create_from(conn, flow, body.username, body.invite)
-        except Problem as e:
-            conn.rollback()
-            raise HTTPException(e.status, e.detail) from e
+        account = identities.create_from(conn, flow, body.username, body.invite)
         identities.drop(conn, ext)
         redirect, token = _sign_in(conn, request, account, flow, flow["provider"])
         conn.commit()
@@ -232,12 +217,6 @@ def signup(body: SignupBody, request: Request):
 @router.post("/api/me/identities/{provider}/unlink")
 def unlink(provider: str, request: Request):
     with closing(db.connect()) as conn:
-        account = sessions.resolve(conn, request)
-        if not account:
-            raise HTTPException(401, "not signed in")
-        try:
-            identities.unlink(conn, account, provider)
-        except Problem as e:
-            raise HTTPException(e.status, e.detail) from e
+        identities.unlink(conn, portal_account(conn, request), provider)
         conn.commit()
     return {"ok": True}

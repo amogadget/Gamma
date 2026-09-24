@@ -23,7 +23,7 @@ sites/
 
 1. copies `site/` to `dist/`, expanding the includes in every `.html`;
 2. copies the artwork the page uses from the repository into `dist/media/`:
-   the favicon (`frontend/public/media/icons/`), the hero PNGs and the
+   the favicon (`frontend/public/media/icons/`), the hero PNG and the
    illustration SVGs (`docs/assets/branding/`), the six README demos
    (`docs/assets/demos/`) and the app screenshot (`docs/assets/screenshots/`).
    The site keeps no copies of its own, so regenerating brand assets or
@@ -38,7 +38,7 @@ the extension zip, and for the star count. Every element keeps a working
 fallback link if that call fails. There are no cookies and no analytics, in
 line with the app's privacy policy.
 
-The header's **Sign in** link and the `/login`, `/account` and `/signup`
+The header's **Log in** link and the `/login`, `/account` and `/signup`
 short links go to the Gamma Cloud account server at `account.gammapdf.com`
 ([docs/dev/cloud_accounts.md](../docs/dev/cloud_accounts.md)); the site
 itself has no accounts.
@@ -70,9 +70,14 @@ cd sites
 npm run deploy     # build + wrangler deploy
 ```
 
-From CI: `.github/workflows/site.yml` deploys on every push to `main` that
-touches `sites/`, the assets it copies, or `PRIVACY.md` (and on manual
-dispatch). It needs two repository secrets:
+From CI: `.github/workflows/site.yml` checks a PR that touches `sites/`,
+the assets it copies, or `PRIVACY.md` (build, pages present, includes
+expanded, a wrangler dry run), and checks + deploys on a push to `main`
+touching them or on a manual dispatch from any branch — the `build-site`
+skill (`gh workflow run site.yml --ref dev`), so the site ships without a
+merge. The app's `check.yml` and `docker.yml` skip site-only changes
+([docs/dev/github_actions.md](../docs/dev/github_actions.md)). Deploying
+needs two repository secrets:
 
 | Secret | Value |
 |---|---|
@@ -100,8 +105,8 @@ dispatch). It needs two repository secrets:
 - Section order and tone follow the survey in
   [docs/research/website.md](../docs/research/website.md).
 - The page must work without `site.js` (it does: every link has a static
-  fallback) and in both color schemes (the illustrations have light and
-  dark variants; the screenshot and demos are shown as recorded).
+  fallback) and in both color schemes (the illustrations are light-only;
+  the screenshot and demos are shown as recorded).
 - A new page: add a `.html` under `site/` with the two includes, or a
   Markdown source to the `PAGES` list in `build.mjs`, and a `<url>` to
   `sitemap.xml`.

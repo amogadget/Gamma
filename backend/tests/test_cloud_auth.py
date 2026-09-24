@@ -23,17 +23,21 @@ ISSUER = "https://account.test"
 
 
 class FakeAccountServer:
-    """Answers the three HTTP calls the client makes: discovery, JWKS and
-    the token endpoint. ``person`` is who the next sign-in is."""
+    """Answers the HTTP calls the client makes: discovery, JWKS, the token
+    and the revocation endpoints. ``person`` is who the next sign-in is;
+    ``revoked`` the refresh tokens the client gave back."""
 
     def __init__(self):
         self.key = ed25519.Ed25519PrivateKey.generate()
         self.kid = "k1"
-        self.person = {"sub": "sub-alice", "preferred_username": "alice", "email": "alice@example.org", "email_verified": True,
+        self.person = {"sub": "sub-ca_alice", "preferred_username": "ca_alice", "email": "ca_alice@example.org", "email_verified": True,
                        "name": "Alice", "plan": "free"}
         self.token_calls = []
+        self.token_agents = []
         self.aud = None  # override the audience of the next ID token
         self.refresh = "rt-1"
+        self.revoked = []
+        self.revoke_fails = False
 
     def jwk(self):
         raw = self.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
@@ -49,12 +53,18 @@ class FakeAccountServer:
     def http(self, url, data=None, headers=None):
         if url == ISSUER + "/.well-known/openid-configuration":
             return {"issuer": ISSUER, "authorization_endpoint": ISSUER + "/authorize", "token_endpoint": ISSUER + "/token",
-                    "jwks_uri": ISSUER + "/jwks"}
+                    "jwks_uri": ISSUER + "/jwks", "revocation_endpoint": ISSUER + "/revoke"}
+        if url == ISSUER + "/revoke":
+            if self.revoke_fails:
+                raise cloud_auth.CloudAuthError("cannot reach the account server")
+            self.revoked.append(parse_qs(data.decode())["token"][0])
+            return {}
         if url == ISSUER + "/jwks":
             return {"keys": [self.jwk()]}
         if url == ISSUER + "/token":
             form = {k: v[0] for k, v in parse_qs(data.decode()).items()}
             self.token_calls.append(form)
+            self.token_agents.append((headers or {}).get("User-Agent", ""))
             code = json.loads(base64.urlsafe_b64decode(form["code"] + "==").decode())
             challenge = base64.urlsafe_b64encode(hashlib.sha256(form["code_verifier"].encode()).digest()).rstrip(b"=").decode()
             if challenge != code["challenge"] or form["redirect_uri"] != code["redirect_uri"]:
@@ -70,6 +80,8 @@ class FakeAccountServer:
 def cloud(monkeypatch):
     fake = FakeAccountServer()
     monkeypatch.setattr(cloud_auth, "_http", fake.http)
+    # revocation runs on a thread in the server; here it runs inline so the asserts see it
+    monkeypatch.setattr(cloud_auth, "revoke_later", lambda tokens: [cloud_auth.revoke_refresh(t) for t in tokens if t])
     monkeypatch.setenv("GAMMA_CLOUD_ISSUER", ISSUER)
     monkeypatch.delenv("GAMMA_CLOUD_CLIENT_ID", raising=False)
     monkeypatch.delenv("GAMMA_CLOUD_CLIENT_SECRET", raising=False)
@@ -124,6 +136,8 @@ def test_refuse_policy(cloud):
     r = callback(c, start(c))
     assert "not linked" in error_of(r)
     assert c.get("/api/session").json()["user"] is None
+    # the refused sign-in's refresh token went back: no device is left at the account server
+    assert cloud.revoked == ["rt-1"]
 
 
 def test_provision_policy_creates_account(cloud, monkeypatch):
@@ -132,70 +146,91 @@ def test_provision_policy_creates_account(cloud, monkeypatch):
     r = callback(c, start(c, next="/?page=abc"))
     assert r.status_code == 302 and r.headers["location"] == "/?page=abc"
     s = c.get("/api/session").json()
-    assert s["user"] == "alice" and s["is_admin"] is False and s["default_workspace"]
+    assert s["user"] == "ca_alice" and s["is_admin"] is False and s["default_workspace"]
     status = c.get("/api/auth/cloud/status").json()["identity"]
-    assert status["username"] == "alice" and status["plan"] == "free" and status["offline"] is True
+    assert status["username"] == "ca_alice" and status["plan"] == "free" and status["offline"] is True
     # only the cloud can sign this account in
-    r = c.post("/api/login", json={"username": "alice", "password": ""})
+    r = c.post("/api/login", json={"username": "ca_alice", "password": ""})
     assert r.status_code == 401
     assert c.post("/api/auth/cloud/unlink").status_code == 400  # would lock it out
     # a second sign-in finds the identity, whatever the policy says
     monkeypatch.setenv("GAMMA_CLOUD_POLICY", "refuse")
     c2 = browser()
     assert callback(c2, start(c2)).headers["location"] == "/"
-    assert c2.get("/api/session").json()["user"] == "alice"
-    assert cloud_auth.refresh_token_of("alice") == "rt-1"
+    assert c2.get("/api/session").json()["user"] == "ca_alice"
+    assert cloud_auth.refresh_token_of("ca_alice") == "rt-1" and cloud.revoked == []
+    # a newer sign-in replaces the refresh token and gives the old one back
+    cloud.refresh = "rt-2"
+    c3 = browser()
+    assert callback(c3, start(c3)).headers["location"] == "/"
+    assert cloud_auth.refresh_token_of("ca_alice") == "rt-2" and cloud.revoked == ["rt-1"]
+
+
+def test_sign_in_names_this_install(cloud, monkeypatch):
+    monkeypatch.setenv("GAMMA_CLOUD_POLICY", "provision")
+    cloud.person.update({"sub": "sub-ca_uma", "preferred_username": "ca_uma", "email": "ca_uma@example.org"})
+    for _ in range(2):
+        c = browser()
+        callback(c, start(c))
+    first, second = cloud.token_calls[-2:]
+    assert first["device_id"] == second["device_id"] and len(first["device_id"]) >= 16  # stable per install
+    assert first["device_name"]
+    assert cloud.token_agents[-1].startswith("Gamma/") and "; http://testserver)" in cloud.token_agents[-1]
 
 
 def test_claim_policy_links_existing_username(cloud, monkeypatch):
-    make_user("bob", "pw-bob-123")
-    cloud.person.update({"sub": "sub-bob", "preferred_username": "bob", "email": "bob@example.org"})
+    make_user("ca_bob", "pw-ca_bob-123")
+    cloud.person.update({"sub": "sub-ca_bob", "preferred_username": "ca_bob", "email": "ca_bob@example.org"})
     c = browser()
     assert "not linked" in error_of(callback(c, start(c)))
     monkeypatch.setenv("GAMMA_CLOUD_POLICY", "claim")
     r = callback(c, start(c))
     assert r.headers["location"] == "/"
-    assert c.get("/api/session").json()["user"] == "bob"
-    # bob has a password, so unlinking is allowed and signs the identity off
+    assert c.get("/api/session").json()["user"] == "ca_bob"
+    # ca_bob has a password, so unlinking is allowed and signs the identity off
     assert c.post("/api/auth/cloud/unlink").json()["ok"] is True
     assert c.get("/api/auth/cloud/status").json()["identity"] is None
+    assert cloud.revoked == ["rt-1", "rt-1"]  # the refused first try's token, then the unlinked one's
     # a different cloud account with the same username cannot claim a linked or taken name
     r = callback(c, start(c))
-    assert r.headers["location"] == "/"  # bob re-claims (unlinked, claim policy)
-    cloud.person["sub"] = "sub-other-bob"
+    assert r.headers["location"] == "/"  # ca_bob re-claims (unlinked, claim policy)
+    cloud.person["sub"] = "sub-other-ca_bob"
     assert "belongs to someone else" in error_of(callback(browser(), start(browser())))
 
 
 def test_claim_is_case_insensitive_when_unambiguous(cloud, monkeypatch):
     monkeypatch.setenv("GAMMA_CLOUD_POLICY", "claim")
-    make_user("Hank", "pw-hank-123")
-    cloud.person.update({"sub": "sub-hank", "preferred_username": "hank", "email": "hank@example.org"})
+    make_user("CA_Hank", "pw-ca_hank-123")
+    cloud.person.update({"sub": "sub-ca_hank", "preferred_username": "ca_hank", "email": "ca_hank@example.org"})
     c = browser()
     assert callback(c, start(c)).headers["location"] == "/"
-    assert c.get("/api/session").json()["user"] == "Hank"
+    assert c.get("/api/session").json()["user"] == "CA_Hank"
     # two usernames that only differ in case: nobody is claimed
-    make_user("Ivy", "pw-ivy-123")
-    make_user("ivY", "pw-ivy-123")
-    cloud.person.update({"sub": "sub-ivy", "preferred_username": "ivy", "email": "ivy@example.org"})
+    make_user("CA_Ivy", "pw-ca_ivy-123")
+    make_user("ca_ivY", "pw-ca_ivy-123")
+    cloud.person.update({"sub": "sub-ca_ivy", "preferred_username": "ca_ivy", "email": "ca_ivy@example.org"})
     assert "not linked" in error_of(callback(browser(), start(browser())))
 
 
 def test_link_signed_in_account(cloud):
-    make_user("carol", "pw-carol-123")
-    c = login("carol", "pw-carol-123")
-    cloud.person.update({"sub": "sub-carol", "preferred_username": "carol-cloud", "email": "carol@example.org"})
+    make_user("ca_carol", "pw-ca_carol-123")
+    c = login("ca_carol", "pw-ca_carol-123")
+    cloud.person.update({"sub": "sub-ca_carol", "preferred_username": "ca_carol-cloud", "email": "ca_carol@example.org"})
     auth = start(c, link="1")
     r = callback(c, auth)
     assert r.headers["location"] == "/"
     status = c.get("/api/auth/cloud/status").json()["identity"]
-    assert status["username"] == "carol-cloud"
+    assert status["username"] == "ca_carol-cloud"
     # the same cloud account cannot be linked to a second local account
-    make_user("dave", "pw-dave-123")
-    d = login("dave", "pw-dave-123")
+    make_user("ca_dave", "pw-ca_dave-123")
+    d = login("ca_dave", "pw-ca_dave-123")
     assert "already linked" in error_of(callback(d, start(d, link="1")))
-    # and carol cannot link a second cloud account
-    cloud.person["sub"] = "sub-carol-2"
+    # and ca_carol cannot link a second cloud account
+    cloud.person["sub"] = "sub-ca_carol-2"
     assert "Unlink it first" in error_of(callback(c, start(c, link="1")))
+    # an account server that cannot be reached does not stop an unlink
+    cloud.revoke_fails = True
+    assert c.post("/api/auth/cloud/unlink").json()["ok"] is True
     # linking needs a session
     assert browser().get("/api/auth/cloud/start", params={"link": "1"}, follow_redirects=False).status_code == 401
 
@@ -237,8 +272,8 @@ def test_disabled_without_issuer(monkeypatch):
 
 def test_admin_settings_roundtrip(monkeypatch):
     monkeypatch.delenv("GAMMA_CLOUD_ISSUER", raising=False)
-    make_user("root", "pw-root-123", is_admin=1)
-    c = login("root", "pw-root-123")
+    make_user("ca_root", "pw-ca_root-123", is_admin=1)
+    c = login("ca_root", "pw-ca_root-123")
     r = c.put("/api/admin/settings", json={"cloud_issuer": "https://account.example", "cloud_client_id": "gc_abc",
                                            "cloud_client_secret": "shh", "cloud_policy": "claim"})
     assert r.status_code == 200, r.text
@@ -262,21 +297,22 @@ def test_rename_and_delete_follow_identities(cloud, monkeypatch):
     cloud.person.update({"sub": "sub-ynez", "preferred_username": "ynez", "email": "ynez@example.org"})
     c = browser()
     callback(c, start(c))
-    make_user("root", "pw-root-123", is_admin=1)
-    admin = login("root", "pw-root-123")
+    make_user("ca_root", "pw-ca_root-123", is_admin=1)
+    admin = login("ca_root", "pw-ca_root-123")
     assert admin.post("/api/admin/users/ynez/rename", json={"new_username": "ynez2"}).status_code == 200
     assert cloud_auth.status_of("ynez2")["username"] == "ynez"
     assert admin.delete("/api/admin/users/ynez2").status_code == 200
     with connect_users_db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM identities WHERE username = 'ynez2'").fetchone()[0] == 0
+    assert cloud.revoked == ["rt-1"]
 
 
 def test_cli_link_and_unlink(cloud, capsys):
     import manage
-    make_user("frank", "pw-frank-123")
-    manage.link_identity("frank", "sub-frank", "frank", "frank@example.org")
+    make_user("ca_frank", "pw-ca_frank-123")
+    manage.link_identity("ca_frank", "sub-ca_frank", "ca_frank", "ca_frank@example.org")
     manage.list_identities()
-    assert "frank" in capsys.readouterr().out
-    assert cloud_auth.status_of("frank")["username"] == "frank"
-    manage.unlink_identity("frank")
-    assert cloud_auth.status_of("frank") is None
+    assert "ca_frank" in capsys.readouterr().out
+    assert cloud_auth.status_of("ca_frank")["username"] == "ca_frank"
+    manage.unlink_identity("ca_frank")
+    assert cloud_auth.status_of("ca_frank") is None

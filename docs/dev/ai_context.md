@@ -13,7 +13,9 @@ Context is framed as *pages from the user's knowledge base*
 (`page_report_section`) is: `### title`, a properties line (folders, labels,
 cached metadata, web source, attachment), and the user's notes tree with
 highlights; a page that carries a PDF adds the document's text — for the
-chat, the labelled head excerpt / selection windows below; for `read_page`,
+chat, the labelled head excerpt below, or windows around the passages the
+user selected (placed by page and section, with a picture of a formula —
+"Selected PDF passages" in [ai.md](ai.md)); for `read_page`,
 a `pdf_chars` window. A page without an attachment is its notes, always
 included; `include_notes` only decides whether PDF pages also show theirs.
 Everything below is about the PDF part of a page and applies unchanged.

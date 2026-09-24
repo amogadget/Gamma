@@ -191,13 +191,21 @@ manifest, database snapshots and uploads unless databases-only was selected.
 Exports transfer library content. Passwords, sessions and private AI
 credentials stay with the account.
 
-The Import → Gamma export flow previews library pages and chats and lets users
-select what to merge. Selection includes a page's full block subtree, associated
-chats and referenced uploads. Unselected pages, chats and their files are excluded.
-The review uses an extracted temporary copy; existing destination pages remain
-unchanged. This shares the additive backup merge implementation in `ws_backup.py`
-and keeps the report visible in the common import dialog. Full replacement through
-Settings retains its existing owner-only behavior.
+`restore_zip(mode="merge", selected=)` filters pages, chats and uploads by the
+`page:<id>` / `chat:<id>` ids `_review_import` hands it.
+Replace mode never takes a selection.
+
+**Scheduled tasks** (`gamma/backup_schedule.py`, API in [api.md](api.md)):
+a task belongs to an account, names the owned workspaces it snapshots
+(a fixed selection or "all owned"), a five-field UTC cron and a retention
+rule (keep N snapshots or N days). Tasks are files, `backups/tasks/<id>.json`.
+The app lifespan runs `run_due` every 30 s; each task is processed under an
+OS file lock (`<id>.lock`, `msvcrt`/`fcntl`), so several workers never run
+one task twice. A task whose `next_run` passed while the server was down
+runs once on the next round, then reschedules from the cron.
+A failed run is retried after an hour; "run now" sets `requested` and
+keeps the scheduled `next_run`. Snapshots are pruned per task and workspace
+after every run.
 
 ## Clones (mirrors)
 

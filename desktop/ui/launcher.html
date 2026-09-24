@@ -41,10 +41,11 @@
   .fail .fHead svg { width: 16px; height: 16px; color: var(--danger); flex-shrink: 0; margin-top: 1px; }
   .fail .fTitle { font-size: 13px; font-weight: 600; flex: 1; }
   .fail .fHint { color: var(--text-muted); font-size: 12px; margin-top: 6px; }
-  .fail .fDetail { font: 11.5px/1.5 ui-monospace, Consolas, Menlo, monospace; color: var(--text-secondary); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 6px 8px; margin-top: 8px; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+  .fail .fDetail, .fail details pre { font-family: ui-monospace, Consolas, Menlo, monospace; line-height: 1.5; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-control); -webkit-user-select: text; user-select: text; }
+  .fail .fDetail { font-size: 11.5px; color: var(--text-secondary); padding: 6px 8px; margin-top: 8px; white-space: pre-wrap; }
   .fail .fActs { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
   .fail details { margin: 10px 0 0; }
-  .fail details pre { margin: 6px 0 0; max-height: 220px; overflow: auto; font: 11px/1.5 ui-monospace, Consolas, Menlo, monospace; color: var(--text-muted); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; -webkit-user-select: text; user-select: text; }
+  .fail details pre { margin: 6px 0 0; max-height: 220px; overflow: auto; font-size: 11px; color: var(--text-muted); padding: 8px 10px; }
   .empty { color: var(--text-muted); text-align: center; padding: 30px 16px; border: 1px dashed var(--border-light); border-radius: var(--radius-surface); }
   .empty b { color: var(--text-secondary); }
 
@@ -512,7 +513,6 @@
       b.textContent = label;
       b.onclick = () => onClick(b);
       acts.appendChild(b);
-      return b;
     };
     const server = () => (state ? state.servers.find((s) => s.id === f.server) : null);
     if (f.action === 'update') {
@@ -528,12 +528,7 @@
   $('failClose').onclick = hideFailure;
 
   const err = new URLSearchParams(location.search).get('error');
-  if (err) {
-    let parsed = null;
-    try { parsed = JSON.parse(err); } catch {}
-    if (parsed && parsed.summary) showFailure(parsed);
-    else setStatus(err, true);
-  }
+  if (err) showFailure(JSON.parse(err));
   gammaShell.onState(() => refresh());
   refresh();
 </script>

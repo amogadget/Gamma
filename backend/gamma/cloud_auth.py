@@ -30,13 +30,23 @@ environment overrides for provisioned containers. Discovery and the JWKS
 are fetched from the issuer and cached in memory; an ID token is verified
 locally (issuer, audience, nonce, expiry, ``email_verified``) — the account
 server is never called on a data request.
+
+The desktop client names this install on its sign-in (``device``: a stable
+id kept in the KV, the machine's name, the OS in the user agent), which is
+how the account server's Devices page tells machines apart and keeps one
+row per machine. A refresh token this server stops holding — replaced by a
+newer sign-in, left over from a refused one, dropped by an unlink or a
+deletion — is revoked at the account server (``revoke_later``), so no row
+there outlives what it stands for.
 """
 
-import base64
 import hashlib
 import json
+import platform
 import secrets
+import socket
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -47,16 +57,11 @@ import jwt
 from cryptography.fernet import InvalidToken
 
 from . import config, mcp_oauth
+from .chatgpt_oauth import _b64url
 from .db import connect_users_db, page_now
-
-
-def _conn() -> sqlite3.Connection:
-    conn = connect_users_db()
-    conn.row_factory = sqlite3.Row
-    return conn
 from .logbuf import log
 from .publisher_sessions import cipher
-from .server_settings import _set_raw, validate_public_url
+from .server_settings import _get_raw, _set_raw, public_url_settings, validate_public_url
 
 PROVIDER = "gamma-cloud"
 POLICIES = ("refuse", "claim", "provision")
@@ -82,11 +87,6 @@ def _conn() -> sqlite3.Connection:
 
 # --- settings -----------------------------------------------------------------
 
-def _setting(conn, key: str) -> str:
-    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return row[0] if row else ""
-
-
 def settings() -> dict:
     """The effective configuration: ``issuer``, ``client_id``, ``policy``,
     ``has_secret``, ``enabled``, and ``source`` (``environment`` when
@@ -97,11 +97,10 @@ def settings() -> dict:
         return {"issuer": env["issuer"], "client_id": env["client_id"] or DEFAULT_CLIENT_ID,
                 "policy": env["policy"] if env["policy"] in POLICIES else "refuse",
                 "has_secret": bool(env["client_secret"]), "enabled": True, "source": "environment"}
-    with connect_users_db() as conn:
-        issuer = _setting(conn, "cloud_issuer")
-        client_id = _setting(conn, "cloud_client_id")
-        policy = _setting(conn, "cloud_policy")
-        has_secret = bool(_setting(conn, "cloud_client_secret"))
+    issuer = _get_raw("cloud_issuer")
+    client_id = _get_raw("cloud_client_id")
+    policy = _get_raw("cloud_policy")
+    has_secret = bool(_get_raw("cloud_client_secret"))
     return {"issuer": issuer, "client_id": client_id or DEFAULT_CLIENT_ID,
             "policy": policy if policy in POLICIES else "refuse",
             "has_secret": has_secret, "enabled": bool(issuer), "source": "saved"}
@@ -111,8 +110,7 @@ def client_secret() -> str:
     env = config.cloud_env()
     if env["issuer"]:
         return env["client_secret"]
-    with connect_users_db() as conn:
-        stored = _setting(conn, "cloud_client_secret")
+    stored = _get_raw("cloud_client_secret")
     if not stored:
         return ""
     try:
@@ -223,14 +221,11 @@ def verify_id_token(token: str, *, issuer: str, client_id: str, nonce: str) -> d
 
 # --- the flow -----------------------------------------------------------------
 
-def _b64url(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-
-
-def public_base(request) -> str:
+def callback_base(request) -> str:
     """This server's address for the callback: the admin-confirmed public
     URL, else the request's own origin (a local sidecar on 127.0.0.1)."""
-    from .server_settings import public_url_settings
+    # Unlike mcp_oauth.public_base, no Host checks: a plain-HTTP LAN origin
+    # or a sidecar without a confirmed public URL must still reach the callback.
     configured = public_url_settings()["public_url"]
     return configured or str(request.base_url).rstrip("/")
 
@@ -242,7 +237,7 @@ def begin(request, *, link_user: str | None, next_path: str) -> str:
     if not cfg["enabled"]:
         raise CloudAuthError("Cloud sign-in is not set up on this server.")
     doc = discovery(cfg["issuer"])
-    base = public_base(request)
+    base = callback_base(request)
     state = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
     nonce = secrets.token_urlsafe(16)
@@ -256,11 +251,29 @@ def begin(request, *, link_user: str | None, next_path: str) -> str:
     return doc["authorization_endpoint"] + "?" + urllib.parse.urlencode(params)
 
 
+def device() -> tuple[str, str]:
+    """This install's (stable id, machine name) for the desktop client's
+    sign-in. The id is made on first use and kept in the settings KV."""
+    device_id = _get_raw("cloud_device_id")
+    if not device_id:
+        device_id = secrets.token_urlsafe(16)
+        _set_raw("cloud_device_id", device_id)
+    return device_id, socket.gethostname()[:64]
+
+
+def _user_agent(base: str) -> str:
+    """``Gamma/<version> (<system>; <address>)``: what the Devices page reads."""
+    from . import version
+    system = {"Darwin": "macOS"}.get(platform.system(), platform.system()) or "unknown system"
+    return f"Gamma/{version.label()} ({system}; {base})"
+
+
 def exchange(request, *, code: str, state: str) -> tuple[dict, dict, str]:
     """The callback's first half: (claims, tokens, next path) for a valid
-    code + state, or CloudAuthError."""
+    code + state, or CloudAuthError. A token set whose ID token fails the
+    checks has its refresh token revoked."""
     cfg = settings()
-    base = public_base(request)
+    base = callback_base(request)
     pending = mcp_oauth.load("cloud_login", base, state or "", consume=True) if state else None
     if not pending:
         raise CloudAuthError("This sign-in expired or was already used. Start again.")
@@ -270,14 +283,18 @@ def exchange(request, *, code: str, state: str) -> tuple[dict, dict, str]:
     secret = client_secret()
     if secret:
         form["client_secret"] = secret
-    from . import version
+    if cfg["client_id"] == DEFAULT_CLIENT_ID:
+        form["device_id"], form["device_name"] = device()
     tokens = _http(doc["token_endpoint"], data=urllib.parse.urlencode(form).encode(),
-                   headers={"Content-Type": "application/x-www-form-urlencoded",
-                            "User-Agent": f"Gamma/{version.label()} ({base})"})
-    if not tokens.get("id_token"):
-        raise CloudAuthError("the account server returned no identity token")
-    claims = verify_id_token(tokens["id_token"], issuer=cfg["issuer"], client_id=cfg["client_id"],
-                             nonce=pending["nonce"])
+                   headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": _user_agent(base)})
+    try:
+        if not tokens.get("id_token"):
+            raise CloudAuthError("the account server returned no identity token")
+        claims = verify_id_token(tokens["id_token"], issuer=cfg["issuer"], client_id=cfg["client_id"],
+                                 nonce=pending["nonce"])
+    except CloudAuthError:
+        revoke_later([tokens.get("refresh_token", "")])
+        raise
     claims["_link_user"] = pending["link_user"]
     return claims, tokens, pending["next"] or "/"
 
@@ -298,9 +315,20 @@ def _public_claims(claims: dict) -> dict:
     return out
 
 
-def link(conn, username: str, claims: dict, refresh_token: str = "") -> None:
+def _decrypt(stored: str) -> str:
+    try:
+        return cipher().decrypt(stored.encode("ascii")).decode() if stored else ""
+    except (InvalidToken, ValueError):
+        return ""
+
+
+def link(conn, username: str, claims: dict, refresh_token: str = "") -> str:
     """Insert or refresh the identity row of ``username``. The refresh token
-    (desktop client only) is Fernet-encrypted at rest."""
+    (desktop client only) is Fernet-encrypted at rest. Returns the refresh
+    token a new one replaced, for the caller to revoke once committed."""
+    old = conn.execute("SELECT refresh_token FROM identities WHERE provider = ? AND subject = ?",
+                       (PROVIDER, claims["sub"])).fetchone()  # conn may or may not return Rows
+    replaced = _decrypt(old[0]) if old and refresh_token else ""
     stored_refresh = cipher().encrypt(refresh_token.encode()).decode("ascii") if refresh_token else ""
     now = page_now()
     conn.execute(
@@ -310,6 +338,7 @@ def link(conn, username: str, claims: dict, refresh_token: str = "") -> None:
         "refresh_token = CASE WHEN excluded.refresh_token = '' THEN identities.refresh_token ELSE excluded.refresh_token END",
         (PROVIDER, claims["sub"], username, claims.get("email", ""), json.dumps(_public_claims(claims)),
          stored_refresh, now, now))
+    return replaced if replaced != refresh_token else ""
 
 
 def unlink(conn, username: str) -> bool:
@@ -330,19 +359,51 @@ def status_of(username: str) -> dict | None:
 def refresh_token_of(username: str) -> str:
     with _conn() as conn:
         row = identity_of(conn, username)
-    if not row or not row["refresh_token"]:
-        return ""
+    return _decrypt(row["refresh_token"]) if row else ""
+
+
+def revoke_refresh(token: str) -> None:
+    """Tell the account server this server no longer holds a refresh token
+    (RFC 7009), so its grant leaves the person's Devices page. Best effort:
+    a failure is logged, never raised."""
+    cfg = settings()
+    if not token or not cfg["enabled"]:
+        return
     try:
-        return cipher().decrypt(row["refresh_token"].encode("ascii")).decode()
-    except (InvalidToken, ValueError):
-        return ""
+        endpoint = str(discovery(cfg["issuer"]).get("revocation_endpoint", ""))
+        if not endpoint.startswith(cfg["issuer"] + "/"):
+            return
+        form = {"token": token, "token_type_hint": "refresh_token", "client_id": cfg["client_id"]}
+        secret = client_secret()
+        if secret:
+            form["client_secret"] = secret
+        _http(endpoint, data=urllib.parse.urlencode(form).encode(),
+              headers={"Content-Type": "application/x-www-form-urlencoded"})
+    except CloudAuthError as e:
+        log.warning(f"cloud sign-in: could not revoke a refresh token at the account server: {e}")
+
+
+def revoke_later(tokens) -> None:
+    """``revoke_refresh`` each token on a background thread: a sign-in,
+    unlink or deletion never waits on the account server."""
+    tokens = [t for t in tokens if t]
+    if tokens:
+        threading.Thread(target=lambda: [revoke_refresh(t) for t in tokens], name="cloud-revoke", daemon=True).start()
 
 
 def resolve_account(claims: dict) -> str:
     """The callback's second half: the local username this identity signs
     in as — linking, claiming or provisioning per the rules in the module
-    docstring — or CloudAuthError. Commits."""
-    from . import seed, workspaces
+    docstring — or CloudAuthError. Commits, then revokes the refresh token
+    the new one replaced."""
+    stale: list[str] = []
+    username = _resolve(claims, stale)
+    revoke_later(stale)
+    return username
+
+
+def _resolve(claims: dict, stale: list[str]) -> str:
+    from . import seed
 
     cfg = settings()
     subject = claims["sub"]
@@ -359,12 +420,12 @@ def resolve_account(claims: dict) -> str:
                 raise CloudAuthError(f"\"{link_user}\" is already linked to another Gamma Cloud account. Unlink it first.")
             if conn.execute("SELECT is_guest FROM users WHERE username = ?", (link_user,)).fetchone()[0]:
                 raise CloudAuthError("The guest account cannot be linked.")
-            link(conn, link_user, claims, claims.get("_refresh_token", ""))
+            stale.append(link(conn, link_user, claims, claims.get("_refresh_token", "")))
             conn.commit()
             log.info(f"cloud sign-in: linked {link_user} to cloud username {username}")
             return link_user
         if known:
-            link(conn, known["username"], claims, claims.get("_refresh_token", ""))
+            stale.append(link(conn, known["username"], claims, claims.get("_refresh_token", "")))
             conn.commit()
             return known["username"]
         row = conn.execute("SELECT username, is_guest FROM users WHERE username = ?", (username,)).fetchone()
@@ -385,7 +446,7 @@ def resolve_account(claims: dict) -> str:
             if not (cfg["policy"] == "claim" or is_admin_seed):
                 raise CloudAuthError(f"\"{local}\" exists on this server but is not linked to your Gamma Cloud "
                                      "account. Sign in with its password and link it from Settings → Account.")
-            link(conn, local, claims, claims.get("_refresh_token", ""))
+            stale.append(link(conn, local, claims, claims.get("_refresh_token", "")))
             if is_admin_seed:
                 conn.execute("UPDATE users SET is_admin = 1 WHERE username = ?", (local,))
             conn.commit()
@@ -397,9 +458,8 @@ def resolve_account(claims: dict) -> str:
     # New account: the seed helper makes the row + personal workspace.
     seed.create_cloud_account(username, is_admin=is_admin_seed)
     with connect_users_db() as conn:
-        link(conn, username, claims, claims.get("_refresh_token", ""))
+        stale.append(link(conn, username, claims, claims.get("_refresh_token", "")))
         conn.commit()
-    workspaces.ensure_personal(username)
     log.info(f"cloud sign-in: provisioned account {username}" + (" (admin)" if is_admin_seed else ""))
     return username
 

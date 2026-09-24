@@ -152,9 +152,11 @@ def delete_user(username):
         if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
             print(f"User '{username}' not found.")
             return
+        held = cloud_auth.refresh_token_of(username)
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
         conn.execute("DELETE FROM identities WHERE username = ?", (username,))
         conn.commit()
+    cloud_auth.revoke_refresh(held)
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
@@ -220,8 +222,8 @@ def list_identities():
     if not rows:
         print("No account is linked to Gamma Cloud.")
     for username, subject, email, claims, last in rows:
-        username = json.loads(claims or "{}").get("username", "")
-        print(f"{username:<20} cloud username {username:<20} {email:<30} sub={subject}  last login {last[:10]}")
+        cloud_username = json.loads(claims or "{}").get("username", "")
+        print(f"{username:<20} cloud username {cloud_username:<20} {email:<30} sub={subject}  last login {last[:10]}")
 
 
 def link_identity(username, subject, cloud_username, email=""):
@@ -243,12 +245,14 @@ def link_identity(username, subject, cloud_username, email=""):
 
 def unlink_identity(username):
     """Detach an account's Gamma Cloud identity and sign it out everywhere."""
+    held = cloud_auth.refresh_token_of(username)
     with connect_users_db() as conn:
         if not cloud_auth.unlink(conn, username):
             print(f"'{username}' is not linked to Gamma Cloud.")
             return
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
         conn.commit()
+    cloud_auth.revoke_refresh(held)
     print(f"Unlinked '{username}'. Set a password with set-password if it has none.")
 
 
@@ -271,7 +275,7 @@ def migrate(status_only: bool = False, dry_run: bool = False):
     """Upgrade the data directory to this Gamma's schema version (also done
     at every server start). ``--status`` only reports; ``--dry-run`` reports
     what would run. On Windows stop the server first: an upgrade may move
-    directories that open database usernames would lock."""
+    directories that open database handles would lock."""
     st = migrations.status()
     if st["fresh"]:
         print("No data directory yet — nothing to migrate.")

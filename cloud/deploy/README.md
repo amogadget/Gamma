@@ -21,14 +21,10 @@ file (`cloud.db`, its backups). That folder is the secret: it holds the
 signing keys and every token hash. Moving to another host is copying
 `data/`, `.env` and the compose files and starting them there.
 
-## The current deployment (2026-09-22)
+## The current deployment
 
 `root@69.63.206.178`, folder `/root/Container/gamma-account/`, running
-`compose.yml` with the GHCR image (the `src/` copy there is left from the
-first, built-from-source start). The admin account `tim` and a first
-invite exist. Mail is still `console` (the links show in
-`docker compose logs account`) until the Resend domain is verified — the
-SMTP credential is already in `.env`. Updates go through the
+`compose.yml` with the GHCR image. Updates go through the
 `update-account-server` skill (`.claude/skills/`).
 
 ## First deployment on a VPS
@@ -55,9 +51,6 @@ SMTP credential is already in `.env`. Updates go through the
    docker compose up -d
    ```
 
-   Before the image is on GHCR, copy the repository's `cloud/` folder to
-   `./src` (without `data/`, `tests/`, `__pycache__`) and add
-   `-f compose.yml -f compose.build.yml --build` to the `up`.
 3. **Check** from the host and from outside:
 
    ```bash
@@ -124,6 +117,23 @@ above.
 - **Cache**: nothing to do — the server sets `Cache-Control: no-store` on
   the API and the pages; only `/jwks` is cacheable (5 min).
 - **Access** is NOT used: the portal must be reachable by everyone.
+- **Origin lock-down.** The server takes the client address (rate limits,
+  the address on the Devices page) from Cloudflare's `CF-Connecting-IP`.
+  On the VPS, Caddy also answers direct connections to port 443, so anyone
+  who knows the host's address can bypass Cloudflare, including its rate
+  rules, and set that header themselves. Accept Cloudflare only: allow 443
+  from the ranges at <https://www.cloudflare.com/ips/> in the host's
+  firewall, or in the Caddyfile before `reverse_proxy`:
+
+  ```
+  @direct not remote_ip <the Cloudflare ranges>
+  abort @direct
+  ```
+
+  Before switching it on, check that Caddy sees the real peer address and
+  not Docker's gateway: with access logging on, a request through the
+  hostname must log a Cloudflare address. The tunnel variant opens no port
+  and needs none of this.
 
 ## Sign in with Google and GitHub
 
@@ -170,10 +180,11 @@ cd ~/Container/gamma-account && docker compose pull account && docker compose up
 ```
 
 (`/update-account-server` does this after checking the publish finished,
-and verifies the running commit afterwards.)
+and verifies the running commit afterwards.) To run a patch from source
+instead, copy `cloud/` to `./src` and layer `compose.build.yml` with
+`--build`.
 
-(Or re-copy `src/` and `--build` while running from source.) The server
-upgrades its own `cloud.db` at start with a copy taken first
+The server upgrades its own `cloud.db` at start with a copy taken first
 (`data/backups/*-v<N>.db`) and refuses a database written by a newer
 build, so a rollback is the previous image plus that copy.
 

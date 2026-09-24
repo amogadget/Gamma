@@ -1,8 +1,10 @@
-"""Assembly: the FastAPI app, security headers, the startup upgrade, the
-hourly purge of expired rows."""
+"""Assembly: the FastAPI app, security headers, the same-origin check, the
+startup upgrade, the hourly purge of expired rows."""
 
 import asyncio
+import sqlite3
 from contextlib import asynccontextmanager, closing
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -52,8 +54,35 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
+# The OAuth endpoints a Gamma server calls with its own credentials: no
+# cookie is involved, so they take any origin.
+_CROSS_ORIGIN_OK = {"/token", "/revoke"}
+
+
+def same_origin(request: Request) -> bool:
+    """Whether a state-changing request comes from this site's own pages.
+    The SameSite=Lax cookie alone does not tell account.gammapdf.com from a
+    sibling *.gammapdf.com page (a Gamma container), and a POST without a
+    JSON body needs no CORS preflight. Browsers send ``Sec-Fetch-Site``;
+    older ones an ``Origin``; a request with neither is not from a browser
+    and carries no ambient cookie to abuse."""
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site in ("same-origin", "none")
+    origin = request.headers.get("origin")
+    public = urlsplit(config.PUBLIC_URL)
+    return origin is None or origin == f"{public.scheme}://{public.netloc}"
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Gamma Cloud accounts", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def same_origin_only(request: Request, call_next):
+        if (request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path not in _CROSS_ORIGIN_OK
+                and not same_origin(request)):
+            return JSONResponse({"detail": "This request must come from the Gamma Cloud pages."}, status_code=403)
+        return await call_next(request)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -70,6 +99,16 @@ def create_app() -> FastAPI:
     @app.exception_handler(Problem)
     async def problem_handler(request: Request, e: Problem):
         return JSONResponse({"detail": e.detail}, status_code=e.status)
+
+    @app.exception_handler(sqlite3.OperationalError)
+    async def busy_handler(request: Request, e: sqlite3.OperationalError):
+        """Another request held the write lock past db.BUSY_TIMEOUT: a retry
+        will do, so a 503 rather than a stack trace."""
+        if not db.is_busy(e):
+            raise e
+        log.warning("cloud.db busy: %s %s", request.method, request.url.path)
+        return JSONResponse({"detail": "The server is busy. Try again in a moment."}, status_code=503,
+                            headers={"Retry-After": "5"})
 
     app.include_router(oidc_router.router)
     app.include_router(accounts_router.router)

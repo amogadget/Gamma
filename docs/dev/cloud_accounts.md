@@ -10,13 +10,12 @@ verified locally with the published keys. Code: `cloud/` (package
 `cloud/tests/`. It imports nothing from `backend/`; the two small pieces it
 shares with Gamma (the fixed-window rate limiter, the PKCE rules) are
 copies, so the account server can move to its own repository without a
-change.
+change. The rate limiter has drifted from `backend/`'s: it drops
+`on_first_exceed` and prunes stale keys.
 
-Status: **v0** — accounts, the portal, the OIDC provider, the admin API and
-CLI, and sign-in with Google and GitHub. Plans exist as a column set by an
-admin; Stripe, provisioning and the `servers` list (v1) are not built. The
-consumer side — "Sign in with Gamma Cloud" on every Gamma server — is
-built too and described at the end of this page ("The Gamma side").
+Status: **v0**. Not built: Stripe, provisioning and the `servers` list
+(v1). Plans are a column an admin sets. The consumer side, "Sign in with
+Gamma Cloud" on every Gamma server, is under "The Gamma side" below.
 
 ## What it owns
 
@@ -40,15 +39,24 @@ python -m pytest tests -q
 ```
 
 Configuration is env only, `GAMMA_CLOUD_*` (`cloud/gammacloud/config.py`
-lists every variable): the data directory, the public URL (the OIDC
-issuer; the request's Host is never trusted), the registration mode
-(`open` / `invite` / `closed`, default `invite`), the mail backend
-(`console` logs the links, `smtp` sends them), the Turnstile secret (off
-until set), the desktop client id, the Google and GitHub OAuth clients
-(each provider off until both its id and secret are set; setup in the
-deploy README). The Docker image (`cloud/Dockerfile`)
-runs uvicorn on 9002 with `--proxy-headers`, so the client address comes
-from Cloudflare's `X-Forwarded-For`.
+lists every variable):
+
+- the data directory;
+- the public URL — the OIDC issuer; the request's Host is never trusted;
+- the registration mode: `open` / `invite` / `closed`, default `invite`;
+- the mail backend: `console` logs the links, `smtp` sends them;
+- the Turnstile secret, off until set;
+- the desktop client id;
+- the Google and GitHub OAuth clients — a provider is off until both its
+  id and secret are set; setup in the deploy README.
+
+The Docker image (`cloud/Dockerfile`) runs uvicorn on 9002. The client
+address (rate limits, the address on a device or browser row) is
+Cloudflare's `CF-Connecting-IP`, else the connection's peer
+(`ratelimit.client_ip`); `X-Forwarded-For` is never read, since its first
+hop is whatever the client wrote and behind Caddy it only names
+Cloudflare. The header is only as good as the rule that the origin answers
+Cloudflare alone (the deploy README's origin lock-down).
 
 ## Data
 
@@ -63,7 +71,7 @@ the signing keys and every token hash.
 
 | table | what |
 |---|---|
-| `accounts` | `id` (random, the OIDC `sub`; never changes), `username` (unique; the username on every Gamma server, a paid container's hostname label — `accounts.RESERVED_USERNAMES` keeps the names Gamma and the web use), `email` (unique), `email_verified_at`, `password_hash`, `display_name`, `plan`, `is_admin`, `deleted_at` |
+| `accounts` | `id` (random, the OIDC `sub`; never changes), `username` (unique; the username on every Gamma server, a paid container's hostname label — `accounts.RESERVED_USERNAMES` keeps the names Gamma and the web use), `email` (unique), `email_verified_at`, `password_hash`, `display_name`, `plan`, `is_admin`, `deleted_at`, `app_signed_in_at` (the first sign-in to a Gamma app or server; step 3) |
 | `identities` | an account's Google/GitHub link: (`provider`, `subject`) → account, the provider's address at the last sign-in |
 | `external_logins` | one Google/GitHub sign-in in flight (15 min): `redirect` while at the provider, `signup` while the username form waits; keyed by the hash of the `gc_ext` cookie (step 2) |
 | `portal_sessions` | the portal cookie's hash; sliding 30 days, newest 20 per account |
@@ -71,8 +79,9 @@ the signing keys and every token hash.
 | `invites` | codes with uses left and the plan they grant |
 | `oauth_clients` | confidential OIDC clients (share-host, container) with exact redirect URIs; the desktop client is built in, not a row |
 | `oauth_requests` | a sign-in in progress on the authorize page (10 min) |
-| `oauth_codes` | authorization codes (2 min, single use) |
-| `grants` | one per device: the rotating refresh token's hash, 90 days from the last rotation, `revoked_at` |
+| `oauth_codes` | authorization codes (2 min, single use) and what the exchange issued (`grant_id`, `access_hash`), so a replay revokes exactly that |
+| `grants` | one per device: the rotating refresh token's hash, 90 days from the last rotation, `revoked_at`, the client's `device_id` and `device_name` (a new sign-in with the same `device_id` replaces the grant) |
+| `refresh_history` | every refresh token a live grant rotated away from, with when: the retry window and reuse detection |
 | `access_tokens` | opaque bearer tokens (1 h), tied to their grant |
 | `signing_keys` | Ed25519 private keys; the newest unretired one signs, a retired one stays published a week |
 | `audit` | every account-changing event |
@@ -84,11 +93,12 @@ fixed-width UTC strings with a `Z`, so they compare as strings.
 ## Deploying
 
 [cloud/deploy/README.md](../../cloud/deploy/README.md): the `gamma-cloud`
-image behind a Cloudflare Tunnel on any Docker host (the NAS first, a VPS
-later — the state is the `data/` folder), `compose.yml` with the server
-and the tunnel, `.env.example` for the public URL, SMTP,
-Turnstile and the tunnel token, the first admin and invites, the
-Cloudflare rate rules, updating and rollback. The website links here: the
+image on a VPS, `compose.yml` running it with Caddy for TLS behind
+Cloudflare DNS; `compose.tunnel.yml` swaps Caddy for a Cloudflare Tunnel on
+a host without a public address. The state is the `data/` folder. The
+README covers `.env.example` (public URL, SMTP, Turnstile, hostname), the
+first admin and invites, the Cloudflare rate rules, updating and rollback.
+The website links here: the
 header's **Sign in** and the `/login`, `/account`, `/signup` short links
 ([sites/README.md](../../sites/README.md)).
 
@@ -96,49 +106,83 @@ header's **Sign in** and the `/login`, `/account`, `/signup` short links
 
 `routers/accounts.py` is the JSON API under `/api`; `routers/portal.py`
 serves the pages from `pages.py`: small server-rendered shells whose
-inline script posts JSON to the API — no framework, no build. A browser
-form cannot post JSON cross-site without a CORS preflight, which together
-with the `SameSite=Lax` cookie is the CSRF protection; there is no
-separate token.
+inline script posts JSON to the API — no framework, no build. The CSRF
+protection is `app.same_origin`: a request that changes anything (every
+method but GET/HEAD/OPTIONS, except the OAuth `/token` and `/revoke`) must
+carry `Sec-Fetch-Site: same-origin`, or, from an older browser, an
+`Origin` equal to the public URL; a request with neither is not from a
+browser. `SameSite=Lax` alone would not do: it does not tell
+account.gammapdf.com from a sibling `*.gammapdf.com` page such as a hosted
+container, and a POST without a JSON body needs no CORS preflight. There is
+no separate token. The pages' buttons go through one script helper, `act`:
+a failure is shown next to the button and the button comes back; a lost
+session goes to `/login?next=` and returns to the page.
 
 Two shells in the gammapdf.com palette (`sites/site/styles.css`), light
 and dark, in the quiet bordered look of a workspace tool: the **auth**
 shell (a centred card: sign in, register, verify, reset, the authorize
 page) and the **app** shell (a sidebar and a content column):
 
-- **Overview** (`/`): a greeting with username, plan and admin tags; a
-  *Get started* checklist (account created, e-mail confirmed, signed in
-  from a Gamma app) with a progress bar, hidden once all three are done;
-  then the latest sign-ins beside a plan card (a placeholder until hosted
-  servers exist, pointing at self-hosting) and an account summary
-  (username, e-mail state, member since, the account id with a copy
-  button — what Gamma servers key on; it never changes).
-- **Devices** (`/devices`): every grant with an icon by client kind, a
-  readable platform from the agent (a Gamma server names itself
-  `Gamma/<version> (<its address>)` on the token request), relative last
-  use ("Active now", "2 days ago"), sign-in date and address; sign one out,
-  or all behind a confirm.
-- **Settings** (`/settings`): labelled rows. Display name; **username**
-  (the password field and the button appear only once the name is edited;
-  the same rules as at registration, a taken or reserved name refused —
-  Gamma servers keep their own account rows and pick the new name up as a
-  claim on the next sign-in); e-mail change (confirmed at the new address,
-  password revealed the same way); password; deletion in a danger zone,
-  its form revealed by a first click.
-- **Admin** (`/admin`, `is_admin` only, 404 otherwise): tabs for accounts
-  (search by username, e-mail or id, paged; plan select, verify, resend,
-  admin on/off, rename, delete), invites (create with uses, plan and note;
-  delete), the OIDC clients of hosted servers (create — the secret is shown
-  once as the two env lines a container needs — and delete), and the audit
-  log. All of it is the `/api/admin/*` API below; `manage.py` does the
-  same from the shell.
+- **Overview** (`/`): a greeting with username, plan and admin tags.
+  A *Get started* checklist (account created, e-mail confirmed, signed in
+  from a Gamma app — `app_signed_in_at`, so signing everything out does not
+  undo it) with a progress bar, hidden once all three are done. Then the
+  signed-in Gamma apps beside a plan card (a placeholder pointing at
+  self-hosting until hosted servers exist) and an account summary:
+  username, e-mail state, member since, and the account id with a copy
+  button — what Gamma servers key on; it never changes. `?mail=failed`
+  (registration could not send the mail) changes the verify notice.
+- **Devices** (`/devices`): two lists.
+  - *Gamma apps*: every live grant, titled by the machine's name when the
+    app sent one (`device_name`), else the client's name; then the client,
+    the system and version from the agent (a Gamma server sends
+    `Gamma/<version> (<system>; <its address>)`), the sign-in date and the
+    last address. At the row's end the last activity — the last refresh or
+    the last use of the grant's access token, written at most every 10
+    minutes (`config.LAST_ACTIVE_TOUCH`) — and *Sign out*.
+  - *Browsers*: the portal sessions (`sessions.of_account`), this one
+    marked, the others with *Sign out* (`POST /api/sessions/{id}/revoke`,
+    the id being the head of the token's hash).
+
+  A row signed out leaves in place. *Sign out everywhere else* is
+  `accounts.revoke_everything` behind a confirm. The page says what
+  signing an app out does: its key stops working, but sessions its own
+  Gamma server already opened stay until signed out there (see "Not built
+  yet" below). Dates are UTC on the server and shown in the viewer's time
+  zone by the page's script (`<time datetime>`, `data-at`). On a phone the
+  rows stack: the details take the width, the time and the button go
+  under them.
+- **Settings** (`/settings`): labelled rows.
+  - Display name.
+  - **Username**: the password field and the button appear once the name
+    is edited. The rules are those of registration; a taken or reserved
+    name is refused. Gamma servers keep their own account rows and pick
+    the new name up as a claim on the next sign-in.
+  - E-mail change, confirmed at the new address; the password field is
+    revealed the same way.
+  - Password.
+  - Deletion in a danger zone, its form revealed by a first click.
+- **Admin** (`/admin`, `is_admin` only, 404 otherwise): four tabs.
+  - Accounts: search by username, e-mail or id, paged; plan select,
+    verify, resend, admin on/off, rename, delete.
+  - Invites: create with uses, plan and note; delete.
+  - Clients: the OIDC clients of hosted servers — create (the secret is
+    shown once as the two env lines a container needs) and delete.
+  - The audit log.
+
+  All of it is the `/api/admin/*` API below; `manage.py` does the same
+  from the shell.
 
 - **Register** (`POST /api/register`): e-mail, username, password, an invite
   code in `invite` mode, a Turnstile token when configured. Rejected
   attempts count toward the per-IP limit. The account starts unverified,
   the verify mail goes out, and the browser is signed in so the account page
   can resend the mail. Taken e-mail or username answers 409 with a message —
-  a deleted account keeps both through the grace period.
+  a deleted account keeps both through the grace period. Every mail goes
+  out after the commit, so a slow mail server never holds cloud.db's write
+  lock; a registration whose mail fails still succeeds, answering
+  `mailed: false`, and the page lands on `/?mail=failed`. The other mails
+  (resend, reset, e-mail change) answer 503 when they fail.
 - **Verified e-mail is the gate.** An unverified account can use the
   portal but the authorize page refuses to sign it in to any Gamma server
   and shows the verify notice instead. That is the one abuse control a
@@ -155,8 +199,8 @@ page) and the **app** shell (a sidebar and a content column):
   required, a few times a day): the account id stays, so nothing linked to
   it moves.
 - **Change password** and **sign out everywhere** revoke every portal
-  session and every grant (`accounts.revoke_everything`), keeping only the
-  browser that asked.
+  session, every grant and every code not yet exchanged
+  (`accounts.revoke_everything`), keeping only the browser that asked.
 - **Delete** (`/api/me/delete`, password required): soft — `deleted_at`,
   password cleared, everything revoked; `manage.py purge-deleted --days 30`
   removes the rows later. Tearing down a paid container is the provisioner's
@@ -221,9 +265,10 @@ other page keeps `no-referrer`.
   and confirms the username, e-mail and delete forms with its session alone
   (`accounts.confirm_ok`). Deleting an account drops its links at once.
 
-Rate limits are the in-process fixed windows of `ratelimit.py` (per IP,
-per name, per account); Cloudflare's rate rules in front are the first
-line. Mail (`mail.py`) has three backends; every message is plain text plus
+Rate limits are the in-process fixed windows of `ratelimit.py` (per IP —
+`client_ip`, see "Running" — per name, per account; the `oauth-callback:ip`
+window is shared by `one_tap`); Cloudflare's rate rules in front are the
+first line. Mail (`mail.py`) has three backends; every message is plain text plus
 an HTML alternative from `mail.compose` (portal palette, a button for the
 link with the raw URL under it, inline styles only).
 
@@ -256,17 +301,38 @@ is no consent screen: every client is first party, the page names the
 server that asks.
 
 **Tokens.** `POST /token` with `authorization_code` checks the code's
-client, redirect URI, expiry and PKCE verifier; a replayed code revokes the
-grant it produced. The answer is an opaque access token, an ID token and,
-for the desktop client with `offline_access`, a refresh token.
-`refresh_token` rotates: the old refresh token and the grant's access
-tokens die, a new pair is issued. Revoking a device on the account page,
-changing the password or deleting the account revokes the grant.
+client, redirect URI, expiry and PKCE verifier; a replayed code revokes
+what its first exchange issued — that grant or that access token, nothing
+else of the account. The answer is an opaque access token, an ID token and,
+for the desktop client with `offline_access`, a refresh token. The desktop
+client may send `device_id` (8–64 of `[A-Za-z0-9_-]`, else dropped) and
+`device_name` with the code; a new grant revokes the live grant of the
+same account, client and `device_id`, so a machine that signs in again is
+one row on the Devices page, not two.
+
+`refresh_token` rotates: the refresh token moves to `refresh_history`, the
+grant's access tokens die, a new pair is issued. For
+`config.REFRESH_REUSE_GRACE` (60 s) the replaced token still rotates once
+more, for a client whose answer was lost; used later, it means two parties
+hold the device's key, and the grant is revoked (`grant.reuse` in the
+audit). A client must therefore refresh one request at a time and keep the
+newest token. Revoking a device on the account page, changing the password
+or deleting the account revokes the grant; `/revoke` accepts the current
+refresh token or any one the grant rotated away from.
+
+A code exchange and a refresh take cloud.db's write lock before they read
+(`db.begin_write`), so a revoke cannot land between the check and the new
+tokens. `/token` and `/revoke` parse the form on the event loop and do the
+rest in the threadpool: a request waiting for the lock never holds up the
+server. A lock held past `db.BUSY_TIMEOUT` (10 s) answers 503 — on `/token`
+as `temporarily_unavailable`, elsewhere with `Retry-After` — never a stack
+trace.
 
 **The ID token** is signed EdDSA with the active key (`kid` in the header)
 and carries `iss`, `sub` (the account id), `aud` (the client id), `exp`
-(10 min), `iat`, `auth_time`, `nonce`, and the identity claims: `username`
-and `plan` always (a Gamma server needs the username and the quota),
+(10 min), `iat`, `auth_time`, `nonce`, and the identity claims:
+`preferred_username` and `plan` always (a Gamma server needs the username
+and the quota),
 `email` + `email_verified` for the `email` scope, `name` for `profile`.
 `/userinfo` answers the same claims for an access token. Keys are Ed25519
 in `signing_keys`; `manage.py rotate-key` retires the active one, which
@@ -283,31 +349,43 @@ stays in the JWKS for a week so tokens it signed still verify.
 `migrate` refuses an outdated `cloud.db`. `/api/admin/*`
 (`routers/admin.py`, admins through a portal session only): search and
 patch accounts (plan, admin, verified), resend a verify mail, delete;
-invites; OIDC clients; the audit log. There is no admin page yet; the API
-and the CLI are the admin surface.
+invites; OIDC clients; the audit log. The portal's Admin page, the API and
+`manage.py` are one surface: the page and the CLI call the same functions.
 
 ## Tests
 
-`cloud/tests/`: `test_accounts.py` (the registration, verify, reset,
-e-mail change, deletion and rate-limit flows, the pages), `test_oidc.py`
-(discovery and JWKS, the full desktop PKCE flow with a decoded ID token,
-refresh rotation, code replay, redirect and PKCE checks, the unverified
-gate, sign-in on the authorize page, cancel, a confidential client with
-basic auth and revoke, key rotation), `test_admin.py` (gating, the admin
-flows, that a bearer token never reaches the admin API),
-`test_manage.py` (the CLI, purge, the newer-file refusal),
-`test_external.py` (Google/GitHub with the provider stubbed: signup,
-linking by a trusted address, claiming an unconfirmed account, the
-authorize page's path, state and `next` checks, one tap with a real RS256
-token, connect/disconnect, accounts without a password, the step-2
-upgrade). `conftest.py`
-points the data directory at a temp folder and the mail backend at the
-in-memory outbox before the package is imported. CI runs them in the
-`test` job of `cloud.yml` on a PR that touches `cloud/`; dispatching
-`cloud.yml` from any branch (the `update-account-server` skill) tests and
-publishes `ghcr.io/<owner>/gamma-cloud:latest` — no merge to `main` is
-involved, and the Gamma app's `check.yml` / `docker.yml` skip changes that
-only touch the account server ([github_actions.md](github_actions.md)).
+`cloud/tests/`:
+
+- `test_accounts.py`: the registration, verify, reset, e-mail change,
+  deletion and rate-limit flows, the pages.
+- `test_oidc.py`: discovery and JWKS, the full desktop PKCE flow with a
+  decoded ID token, refresh rotation, code replay, redirect and PKCE
+  checks, the unverified gate, sign-in on the authorize page, cancel, a
+  confidential client with basic auth and revoke, key rotation.
+- `test_admin.py`: gating, the admin flows, that a bearer token never
+  reaches the admin API.
+- `test_manage.py`: the CLI, purge, the newer-file refusal.
+- `test_external.py`: Google/GitHub with the provider stubbed — signup,
+  linking by a trusted address, claiming an unconfirmed account, the
+  authorize page's path, state and `next` checks, one tap with a real
+  RS256 token, connect/disconnect, accounts without a password, the
+  step-2 upgrade.
+- `test_devices.py`: the grants behind the Devices page — a revoke landing
+  while a refresh waits for the lock, `/api/health` answering while a
+  `/token` request waits, code replay touching only its own grant,
+  sign-out-everywhere voiding pending codes, the refresh retry window and
+  reuse detection, one grant per `device_id`, last activity, the page,
+  signing one browser out, the 503, the same-origin check, the client
+  address, the audit, the checklist, `/login?next=`, the step-3 upgrade.
+
+`conftest.py` points the data directory at a temp folder and the mail
+backend at the in-memory outbox before the package is imported. CI runs
+the tests in the `test` job of `cloud.yml` on a PR that touches `cloud/`.
+Dispatching `cloud.yml` from any branch (the `update-account-server`
+skill) tests and publishes `ghcr.io/<owner>/gamma-cloud:latest`; no merge
+to `main` is involved. The Gamma app's `check.yml` / `docker.yml` skip
+changes that only touch the account server
+([github_actions.md](github_actions.md)).
 
 ## The Gamma side: Sign in with Gamma Cloud
 
@@ -323,9 +401,22 @@ the password login does (`routers/auth.py` `new_session`) and sets the
 same cookie; every other module keeps reading `request.state.user`. What
 is new is one table in users.db, `identities` (migration step 14): which
 account server subject is which local account, the last verified claims
-(username, plan, e-mail), and — desktop client only — the refresh token,
+(`preferred_username`, `plan`, `email`), and — desktop client only — the
+refresh token,
 Fernet-encrypted with the data directory's key, kept for the desktop's
 later use (`cloud_auth.refresh_token_of`).
+
+**The device.** The desktop client names this install on the code
+exchange (`cloud_auth.device`): `device_id`, made once and kept in the
+`settings` KV as `cloud_device_id`, and `device_name`, the machine's host
+name; the user agent is `Gamma/<version> (<system>; <address>)`. A refresh
+token this server stops holding is revoked at the account server
+(`revoke_later`, RFC 7009, on a background thread, failures logged as
+warnings): the one a newer sign-in replaced (`link` returns it), the one a
+refused sign-in or a failed ID-token check leaves behind, and the one an
+unlink (`/api/auth/cloud/unlink`, `manage.py unlink-identity`) or an
+account deletion (Settings → Users, `manage.py delete-user`) drops. So a
+row on the Devices page always stands for a key this server holds.
 
 **Configuration.** Settings → Server → Sign-in, stored in the `settings`
 KV: the account server's address (`cloud_issuer`; empty = off), the client
@@ -373,4 +464,8 @@ equivalents; renaming and deleting an account carry or drop its identity.
 **Not built yet** (steps 5–6 of the plan): the desktop shell's first-run
 sign-in, the offline grace on the sidecar (today the year-long session
 cookie is what keeps a laptop signed in), and using the stored refresh
-token to read `/api/me` for the person's servers.
+token to read `/api/me` for the person's servers. Until the sidecar checks
+its grant, signing an app out on the Devices page stops its key but not
+the sessions it already opened; the page says so. The check (at start,
+hourly, one refresh at a time, the new token saved before use) would end
+those sessions on `invalid_grant` and keep working offline.

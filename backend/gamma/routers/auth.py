@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from .. import ratelimit, workspaces, ws_backup
-from ..auth import require_user, requested_ws, set_session_cookie
+from ..auth import is_guest_workspace, require_user, requested_ws, set_session_cookie
 from ..ratelimit import client_ip
 from ..db import connect_users_db, page_now, ws_dir
 from ..seed import ensure_guest_user
@@ -56,10 +56,6 @@ def _target_ws(request: Request, ws: str | None, user: str | None, needed: str) 
     if not workspaces.at_least(role, needed):
         raise HTTPException(status_code=403, detail=f"only a workspace {needed} can do that")
     return target
-
-
-def _is_guest_workspace(ws: str) -> bool:
-    return ws == workspaces.default_workspace("guest")
 
 
 @router.get("/export-progress")
@@ -144,7 +140,7 @@ def import_data(request: Request, file: UploadFile = File(...), mode: str = "rep
     if mode not in ("replace", "merge"):
         raise HTTPException(status_code=400, detail="mode must be 'replace' or 'merge'")
     target = _target_ws(request, ws, user, "owner" if mode == "replace" else "editor")
-    if _is_guest_workspace(target):
+    if is_guest_workspace(target):
         raise HTTPException(status_code=403, detail="the guest workspace cannot import backups")
     with tempfile.TemporaryDirectory(prefix="gamma-import-") as td:
         zpath = Path(td) / "backup.zip"

@@ -15,6 +15,7 @@ import { CloudSignInSettings } from "./SettingsCloudSignIn";
 import { ActivityIcon, AlertCircleIcon, CloudDownloadIcon, ImportIcon, ServerIcon } from "../shared/ui/Icons";
 
 export function ServerSettings({ value }) {
+  const [signInAction, setSignInAction] = React.useState(null);
   return (
     <>
       <PaneHead icon={ServerIcon} title="Server" />
@@ -24,8 +25,8 @@ export function ServerSettings({ value }) {
       <Section title="Assistant connections">
         <PublicUrlSettings setStatus={value.setStatus} />
       </Section>
-      <Section title="Sign-in">
-        <CloudSignInSettings setStatus={value.setStatus} />
+      <Section title="Sign-in" action={signInAction}>
+        <CloudSignInSettings setStatus={value.setStatus} action={setSignInAction} />
       </Section>
       <Section title="Storage defaults">
         <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} />

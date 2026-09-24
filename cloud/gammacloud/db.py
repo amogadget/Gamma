@@ -20,21 +20,22 @@ from datetime import datetime, timezone
 
 from . import config
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+BUSY_TIMEOUT = 10  # seconds a connection waits for another writer
 
 
 class NewerDataError(RuntimeError):
     """cloud.db was written by a newer build."""
 
 
-def now() -> str:
-    """UTC, fixed width, ``Z`` suffix — so timestamps compare as strings."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-
 def after(seconds: float) -> str:
+    """UTC, fixed width, ``Z`` suffix — so timestamps compare as strings."""
     t = datetime.now(timezone.utc).timestamp() + seconds
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def now() -> str:
+    return after(0)
 
 
 def parse(ts: str) -> datetime:
@@ -76,6 +77,15 @@ EXTERNAL_LOGINS = """CREATE TABLE IF NOT EXISTS external_logins (
         expires_at TEXT NOT NULL
     )"""
 
+# Every refresh token a live grant has rotated away from: a retry of the
+# newest within REFRESH_REUSE_GRACE rotates again, any other reuse revokes
+# the grant (``oidc.refresh_grant``).
+REFRESH_HISTORY = """CREATE TABLE IF NOT EXISTS refresh_history (
+        refresh_hash TEXT PRIMARY KEY,
+        grant_id TEXT NOT NULL,
+        replaced_at TEXT NOT NULL
+    )"""
+
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS accounts (
         id TEXT PRIMARY KEY,
@@ -87,7 +97,8 @@ SCHEMA = [
         plan TEXT NOT NULL DEFAULT 'free',
         is_admin INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        deleted_at TEXT
+        deleted_at TEXT,
+        app_signed_in_at TEXT
     )""",
     # An account's sign-in through an outside provider (google, github):
     # ``identities.py``. ``email`` is the provider's address at the last
@@ -163,10 +174,14 @@ SCHEMA = [
         code_challenge TEXT NOT NULL,
         auth_time TEXT NOT NULL,
         expires_at TEXT NOT NULL,
-        used_at TEXT
+        used_at TEXT,
+        grant_id TEXT NOT NULL DEFAULT '',
+        access_hash TEXT NOT NULL DEFAULT ''
     )""",
     # One grant per (account, client, device): the refresh token, rotated on
-    # every use. Revoking it kills its access tokens too.
+    # every use. Revoking it kills its access tokens too. ``device_id`` is a
+    # client's stable per-install id: a new sign-in with the same one
+    # replaces the old grant.
     """CREATE TABLE IF NOT EXISTS grants (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id),
@@ -179,9 +194,13 @@ SCHEMA = [
         expires_at TEXT NOT NULL,
         revoked_at TEXT,
         ip TEXT NOT NULL DEFAULT '',
-        user_agent TEXT NOT NULL DEFAULT ''
+        user_agent TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        device_name TEXT NOT NULL DEFAULT ''
     )""",
     """CREATE INDEX IF NOT EXISTS grants_account ON grants(account_id)""",
+    REFRESH_HISTORY,
+    """CREATE INDEX IF NOT EXISTS refresh_history_grant ON refresh_history(grant_id)""",
     """CREATE TABLE IF NOT EXISTS access_tokens (
         token_hash TEXT PRIMARY KEY,
         account_id TEXT NOT NULL,
@@ -210,12 +229,12 @@ SCHEMA = [
 
 
 def connect() -> sqlite3.Connection:
-    """A connection to cloud.db (WAL, 10 s busy timeout). Use as
+    """A connection to cloud.db (WAL, ``BUSY_TIMEOUT``). Use as
     ``with closing(connect()) as conn``. The schema is applied on every
     connect, which is what makes a fresh file complete; an old file must
     have been upgraded by ``ensure_current()`` first."""
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(config.DB_PATH), timeout=10)
+    conn = sqlite3.connect(str(config.DB_PATH), timeout=BUSY_TIMEOUT)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -226,6 +245,19 @@ def connect() -> sqlite3.Connection:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
     return conn
+
+
+def begin_write(conn) -> None:
+    """Take the write lock before reading what a write depends on, so no
+    other request can change it in between (a refresh racing a revoke).
+    A no-op inside a transaction that already wrote."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def is_busy(e: Exception) -> bool:
+    """A write lock another request held past ``BUSY_TIMEOUT``."""
+    return isinstance(e, sqlite3.OperationalError) and ("locked" in str(e) or "busy" in str(e))
 
 
 def audit(conn, event: str, account_id: str = "", actor: str = "", detail: str = "") -> None:
@@ -239,9 +271,29 @@ def _step_external_logins(conn) -> None:
     conn.execute(EXTERNAL_LOGINS)
 
 
+def _add_column(conn, table: str, column: str, decl: str) -> None:
+    if column not in [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _step_devices(conn) -> None:
+    """Per-device grants, exact code replay, the refresh history, and when
+    an account first signed in to a Gamma app."""
+    _add_column(conn, "grants", "device_id", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "grants", "device_name", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "oauth_codes", "grant_id", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "oauth_codes", "access_hash", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "accounts", "app_signed_in_at", "TEXT")
+    conn.execute(REFRESH_HISTORY)
+    conn.execute("CREATE INDEX IF NOT EXISTS refresh_history_grant ON refresh_history(grant_id)")
+    conn.execute("UPDATE accounts SET app_signed_in_at = (SELECT MIN(at) FROM audit WHERE audit.account_id = accounts.id "
+                 "AND audit.event = 'oidc.authorize') WHERE app_signed_in_at IS NULL")
+
+
 STEPS: list = [
     # (version, name, fn(conn)) — append only; see docs/dev/cloud_accounts.md.
     (2, "external_logins", _step_external_logins),
+    (3, "devices", _step_devices),
 ]
 
 
@@ -265,17 +317,12 @@ def ensure_current() -> list[str]:
     pending = [(v, name, fn) for v, name, fn in STEPS if v > version]
     if not pending:
         return []
-    backups = config.DATA_DIR / "backups"
-    backups.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    with closing(sqlite3.connect(str(config.DB_PATH))) as src, \
-            closing(sqlite3.connect(str(backups / f"{stamp}-v{version}.db"))) as dst:
-        src.backup(dst)
-    for older in sorted(backups.glob("*-v*.db"))[:-3]:
+    snapshot(f"v{version}")
+    for older in sorted((config.DATA_DIR / "backups").glob("*-v*.db"))[:-3]:
         older.unlink()
     done = []
     for v, name, fn in pending:
-        with closing(sqlite3.connect(str(config.DB_PATH), timeout=10)) as conn:
+        with closing(sqlite3.connect(str(config.DB_PATH), timeout=BUSY_TIMEOUT)) as conn:
             conn.row_factory = sqlite3.Row
             fn(conn)
             conn.execute(f"PRAGMA user_version = {v}")

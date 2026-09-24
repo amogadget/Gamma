@@ -355,9 +355,11 @@ async def delete_user(username: str, request: Request):
             raise HTTPException(status_code=400, detail="the guest account resets itself daily; it cannot be deleted")
         if row[2] and _admin_count(conn) <= 1:
             raise HTTPException(status_code=400, detail="cannot delete the last admin")
+        held = cloud_auth.refresh_token_of(username)
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
         conn.execute("DELETE FROM identities WHERE username = ?", (username,))
         conn.commit()
+    cloud_auth.revoke_later([held])
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))

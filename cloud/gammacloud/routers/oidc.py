@@ -5,19 +5,28 @@ userinfo, revoke. The logic is in ``oidc.py``; this is the wire.
 An account whose e-mail is not verified cannot sign in to a Gamma server:
 the authorize page shows the verify notice instead of issuing a code. That
 is the one gate a hosted Gamma relies on.
+
+``/token`` and ``/revoke`` read the form on the event loop and do the rest
+in the threadpool: a request waiting for cloud.db's write lock must never
+hold up the whole server.
 """
 
+import base64
+import re
+import sqlite3
 from contextlib import closing
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from .. import accounts, db, oidc, pages, ratelimit, sessions
 from ..oidc import OAuthError
 from .external import sign_in_page
 
 router = APIRouter()
+EXPIRED = "This sign-in request expired. Start again from the app."
 
 
 def _no_store(payload, status=200):
@@ -65,10 +74,9 @@ def authorize(request: Request):
 
 
 def _authorize_page(request: Request, req: dict, account):
-    if account and not account["email_verified_at"]:
-        return HTMLResponse(pages.authorize_page(req, account, verify_needed=True), headers={"Cache-Control": "no-store"})
     if account:
-        return HTMLResponse(pages.authorize_page(req, account), headers={"Cache-Control": "no-store"})
+        return HTMLResponse(pages.authorize_page(req, account, verify_needed=not account["email_verified_at"]),
+                            headers=pages.NO_STORE)
     return sign_in_page(request, lambda social: pages.authorize_page(req, None, social=social), request_id=req["id"])
 
 
@@ -82,8 +90,7 @@ def authorize_resume(request: Request, request_id: str = ""):
         account = sessions.resolve(conn, request)
         conn.commit()
     if not req:
-        return HTMLResponse(pages.error_page("Cannot sign in", "This sign-in request expired. Start again from the app."),
-                            status_code=400)
+        return HTMLResponse(pages.error_page("Cannot sign in", EXPIRED), status_code=400)
     return _authorize_page(request, req, account)
 
 
@@ -105,7 +112,7 @@ def authorize_login(body: AuthorizeLogin, request: Request):
     with closing(db.connect()) as conn:
         req = oidc.pending(conn, body.request_id)
         if not req:
-            raise HTTPException(400, "This sign-in request expired. Start again from the app.")
+            raise HTTPException(400, EXPIRED)
         account = accounts.by_login(conn, who)
         if not accounts.password_ok(account, body.password):
             raise HTTPException(401, "Wrong e-mail, username or password.")
@@ -134,7 +141,7 @@ def authorize_continue(body: AuthorizeContinue, request: Request):
     with closing(db.connect()) as conn:
         req = oidc.pending(conn, body.request_id)
         if not req:
-            raise HTTPException(400, "This sign-in request expired. Start again from the app.")
+            raise HTTPException(400, EXPIRED)
         account = sessions.resolve(conn, request)
         if not account:
             raise HTTPException(401, "not signed in")
@@ -161,12 +168,14 @@ def authorize_cancel(body: AuthorizeContinue):
 
 # --- token / userinfo / revoke ------------------------------------------------
 
-async def _client_from(request: Request, form) -> tuple[str, str | None]:
+DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def _client_from(request: Request, form) -> tuple[str, str | None]:
     """client_id + secret from the body (client_secret_post) or the
     Authorization header (client_secret_basic)."""
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("basic "):
-        import base64
         try:
             raw = base64.b64decode(auth[6:]).decode()
             client_id, _, secret = raw.partition(":")
@@ -176,29 +185,49 @@ async def _client_from(request: Request, form) -> tuple[str, str | None]:
     return str(form.get("client_id", "")), (str(form["client_secret"]) if form.get("client_secret") else None)
 
 
+def _device(form) -> tuple[str, str]:
+    """The (per-install id, name) a client sends with its code; anything
+    malformed is dropped rather than refused."""
+    device_id = str(form.get("device_id", ""))
+    name = " ".join("".join(c for c in str(form.get("device_name", "")) if c.isprintable()).split())[:64]
+    return (device_id if DEVICE_ID_RE.match(device_id) else "", name)
+
+
+def _busy():
+    return _no_store({"error": "temporarily_unavailable", "error_description": "The server is busy. Try again."}, 503)
+
+
+def _token(request: Request, form):
+    grant_type = str(form.get("grant_type", ""))
+    with closing(db.connect()) as conn:
+        try:
+            client_id, secret = _client_from(request, form)
+            client = oidc.authenticate_client(conn, client_id, secret)
+            if grant_type == "authorization_code":
+                out = oidc.exchange_code(conn, client, str(form.get("code", "")), str(form.get("redirect_uri", "")),
+                                         str(form.get("code_verifier", "")), request, _device(form))
+            elif grant_type == "refresh_token":
+                out = oidc.refresh_grant(conn, client, str(form.get("refresh_token", "")), request)
+            else:
+                raise OAuthError("unsupported_grant_type")
+        except OAuthError as e:
+            conn.commit()  # a replayed code's or a reused token's revocation must land
+            return _oauth_error(e)
+        except sqlite3.OperationalError as e:
+            if db.is_busy(e):
+                return _busy()
+            raise
+        conn.commit()
+    return _no_store(out)
+
+
 @router.post("/token")
 async def token(request: Request):
     ratelimit.check(f"token:ip:{ratelimit.client_ip(request)}", 120, 600)
     if int(request.headers.get("content-length", "0") or 0) > 16384:
         raise HTTPException(413)
     form = await request.form()
-    grant_type = str(form.get("grant_type", ""))
-    with closing(db.connect()) as conn:
-        try:
-            client_id, secret = await _client_from(request, form)
-            client = oidc.authenticate_client(conn, client_id, secret)
-            if grant_type == "authorization_code":
-                out = oidc.exchange_code(conn, client, str(form.get("code", "")), str(form.get("redirect_uri", "")),
-                                         str(form.get("code_verifier", "")), request)
-            elif grant_type == "refresh_token":
-                out = oidc.refresh_grant(conn, client, str(form.get("refresh_token", "")), request)
-            else:
-                raise OAuthError("unsupported_grant_type")
-        except OAuthError as e:
-            conn.commit()  # a replayed code's revocation must land
-            return _oauth_error(e)
-        conn.commit()
-    return _no_store(out)
+    return await run_in_threadpool(_token, request, form)
 
 
 @router.get("/userinfo")
@@ -215,15 +244,26 @@ def userinfo(request: Request):
         return _no_store({"sub": account["id"], **oidc.claims_for(account, row["scope"])})
 
 
-@router.post("/revoke")
-async def revoke(request: Request):
-    form = await request.form()
+def _revoke(request: Request, form):
     with closing(db.connect()) as conn:
         try:
-            client_id, secret = await _client_from(request, form)
+            client_id, secret = _client_from(request, form)
             client = oidc.authenticate_client(conn, client_id, secret)
         except OAuthError as e:
             return _oauth_error(e)
-        oidc.revoke(conn, client, str(form.get("token", "")))
-        conn.commit()
+        try:
+            oidc.revoke(conn, client, str(form.get("token", "")))
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            if db.is_busy(e):
+                return _busy()
+            raise
     return _no_store({})
+
+
+@router.post("/revoke")
+async def revoke(request: Request):
+    if int(request.headers.get("content-length", "0") or 0) > 16384:
+        raise HTTPException(413)
+    form = await request.form()
+    return await run_in_threadpool(_revoke, request, form)

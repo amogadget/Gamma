@@ -18,9 +18,9 @@ through barrel files. `main.jsx` remains the Vite entry point.
 | `search/` | Workspace search (`SearchPanel.jsx`) |
 | `settings/` | `SettingsDialog.jsx`, individual settings panes, shared pane controls (`SettingsKit.jsx`), navigation, integration setup, and `settings.css` |
 | `sharing/` | The page Share popover (`SharePopover.jsx`): link, access, invited people, stop sharing |
-| `transfers/` | Import/export dialogs (`ImportExport.jsx`), format rules, and upload/file chips (`FileChip.jsx`) |
+| `transfers/` | Import/export dialogs (`ImportExport.jsx`), the import review (`ImportReviewDialog.jsx`, `ImportTree.jsx`, `importApi.js`, `importReview.js`), format rules, and upload/file chips (`FileChip.jsx`) |
 | `shared/model/` | Block tree helpers (`blockModel.js`), block operations (`blockOps.js`), and highlight colors |
-| `shared/lib/` | API transport and helpers (`utils.js`), search text normalization, and canvas sizing |
+| `shared/lib/` | API transport and helpers (`utils.js`), the multipart upload (`xhrUpload.js`), search text normalization, and canvas sizing |
 | `shared/ui/` | Reused widgets, menus, icons, and menu hover intent |
 | `shared/illustrations/` | Decorative settings/import previews and their local image assets |
 | `shared/styles/` | `app.css`: theme, base controls, and cross-application styles |

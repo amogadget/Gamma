@@ -131,4 +131,4 @@ function startupError(reason, logPath, from) {
   return err;
 }
 
-module.exports = { logTail, diagnose, diagnoseOpen, startupError };
+module.exports = { diagnose, diagnoseOpen, startupError };
