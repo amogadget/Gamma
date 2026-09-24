@@ -84,7 +84,7 @@ struct GammaRecordingPanel: View {
                                 Button { Task { await workspace.playRecording(block.id) } } label: { Label("Replay", systemImage: "play.fill").font(.caption) }
                                     .disabled(workspace.busy || recorder.recording || (block.properties.segments ?? []).isEmpty)
                             }
-                            if workspace.page?.outbox.contains(where: { $0.blockID == block.id && $0.conflict }) == true {
+                            if !workspace.isLocal, workspace.page?.outbox.contains(where: { $0.blockID == block.id && $0.conflict }) == true {
                                 Text("Audio sync conflict").font(.caption).foregroundStyle(.orange)
                                 HStack {
                                     Button("Keep local") { Task { await workspace.resolveConflict(blockID: block.id, keepLocal: true) } }
@@ -106,7 +106,8 @@ struct GammaRecordingPanel: View {
             }
             Text("Audio is linked to this Gamma page. Pausing or leaving the app finalizes the current segment; resume is always explicit.")
                 .font(.caption2).foregroundStyle(.secondary)
-            Text(workspace.status).font(.caption2).foregroundStyle(.secondary)
+            Text(workspace.isLocal ? (recorder.hasPendingSave ? "Local save needs attention" : "On This iPad") : workspace.status)
+                .font(.caption2).foregroundStyle(.secondary)
         }.padding(18)
         .confirmationDialog("Exclude the incomplete segment?", isPresented: Binding(get: { discardID != nil }, set: { if !$0 { discardID = nil } })) {
             Button("Keep only finalized audio", role: .destructive) {
@@ -114,7 +115,11 @@ struct GammaRecordingPanel: View {
                 discardID = nil
             }
             Button("Cancel", role: .cancel) { discardID = nil }
-        } message: { Text("Earlier audio will stay intact. The incomplete file is retained locally but will not be played or uploaded.") }
+        } message: {
+            Text(workspace.isLocal
+                 ? "Earlier audio will stay intact. The incomplete file is retained on this iPad but will not be played."
+                 : "Earlier audio will stay intact. The incomplete file is retained locally but will not be played or uploaded.")
+        }
     }
 }
 

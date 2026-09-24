@@ -1,0 +1,6 @@
+{
+  "cryptography": {"version": "50.0.1", "url": "https://files.pythonhosted.org/packages/bb/ad/5d6702db60b1e40b41ef513b6967ff5848f307d50f8449baf1634f5908f1/cryptography-50.0.1.tar.gz", "sha256": "5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20"},
+  "cffi": {"version": "2.1.1", "url": "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", "sha256": "dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be"},
+  "openssl": {"version": "3.0.22", "url": "https://www.openssl.org/source/openssl-3.0.22.tar.gz", "sha256": "67ebca7e50d17383028045486653492195b83db95f8558709701bb47b5c1ef81"},
+  "libffi": {"version": "3.4.7", "url": "https://github.com/libffi/libffi/releases/download/v3.4.7/libffi-3.4.7.tar.gz", "sha256": "138607dee268bdecf374adf9144c00e839e38541f75f24a1fcf18b78fda48b2d"}
+}

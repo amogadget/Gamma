@@ -127,12 +127,26 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
       : p)));
   }
 
+  // Rejected writes remain exportable even after the ordinary resync drops
+  // their queue. Never call a disconnect clean merely because a 403 emptied it.
+  const rejectedRecovery = [];
+  let recoveryOverflow = false;
+  function recoverySnapshot() {
+    const pages = [...st.sessions].filter(s => s.queue.length || s.sending).map(s => ({
+      pageID: s.pageId, ops: [...(s.outgoingOps || []), ...s.queue], tree: s.base,
+    }));
+    const text = JSON.stringify({ complete: !recoveryOverflow, pages, rejected: rejectedRecovery });
+    if (text.length > 8 * 1024 * 1024) return { complete: false, reason: "recovery-too-large", pages: [], rejected: [] };
+    return JSON.parse(text);
+  }
+
   // --- outgoing ops ----------------------------------------------------------
 
   function send(s = st.session) {
     if (s.sending || !s.queue.length) return s.sending;
     const page = s.pageId;
     const ops = s.queue;
+    s.outgoingOps = ops;
     s.queue = [];
     if (s.timer) { cancel(s.timer); s.timer = null; }
     // Our caret in the text this batch produces, for the page it belongs to.
@@ -201,6 +215,10 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
           // structural op was computed against the tree this reload replaces, so
           // it is reported instead of replayed blind. (Silent loss is the one
           // outcome a refusal must not produce.)
+          const rejected = { pageID: page, ops: [...ops, ...s.queue], tree: s.base };
+          const size = JSON.stringify([...rejectedRecovery, rejected]).length;
+          if (size <= 8 * 1024 * 1024) rejectedRecovery.push(JSON.parse(JSON.stringify(rejected)));
+          else recoveryOverflow = true;
           const later = s.queue;
           const kept = later.filter((op) => op.op === "set");
           const dropped = later.length - kept.length;
@@ -225,6 +243,7 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
         }
       } finally {
         s.sending = null;
+        s.outgoingOps = null;
         if (!s.queue.length) st.sessions.delete(s);
       }
       if (s.queue.length && !s.timer) send(s);
@@ -478,7 +497,7 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
   }
 
   return {
-    commit, flush, hasPending, sendCursor, pagehide, connect, disconnect,
+    commit, flush, hasPending, recoverySnapshot, sendCursor, pagehide, connect, disconnect,
     get peers() { return peers; },
     get me() { return me; },
   };

@@ -12,7 +12,11 @@ extension GammaWorkspace {
     /// from before workspaces existed cannot prove one offline, so it is listed but
     /// not opened until a verified sign-in attaches it to the default workspace.
     func enterOffline(_ account: GammaOfflineIdentity) {
-        guard !busy, !syncing, recorder.pauseBeforeLeaving(), let server = URL(string: account.server) else { return }
+        guard canChangeLibrary, recorder.pauseBeforeLeaving(), let server = URL(string: account.server) else { return }
+        if isLocal {
+            do { try validateLocalLibraryBeforeLeaving() }
+            catch { errorMessage = error.localizedDescription; return }
+        }
         guard !account.isLegacy else {
             errorMessage = "These local files were saved before Gamma libraries existed. Sign in online once to attach them to your default workspace; nothing was changed."
             return
@@ -28,7 +32,8 @@ extension GammaWorkspace {
             }
             stopOfflineWorker(); api?.close(); api = nil; webSession = nil; closeReader()
             accountGeneration = UUID(); cache = storage; accountServer = account.server
-            username = account.username; isOffline = true
+            username = account.username; isOffline = true; isLocal = false
+            libraryDefaults.set("server", forKey: "gamma.libraryMode")
             requiresLogin = requiresLogin || savedSession == nil
             workspaceID = account.workspace; workspaceName = account.workspaceName
             workspaceOptions = []
@@ -42,7 +47,7 @@ extension GammaWorkspace {
 
     /// A single persisted manifest is both queue and readiness record.
     func enqueueDownloads(_ selected: [GammaPaper]) {
-        guard !isOffline, let cache, api != nil else {
+        guard !isLocal, !isOffline, let cache, api != nil else {
             errorMessage = "Sign in to the same Gamma account to download missing files."; return
         }
         do {
@@ -86,7 +91,7 @@ extension GammaWorkspace {
         } catch { errorMessage = error.localizedDescription }
     }
     func startOfflineWorker() {
-        guard offlineWorker == nil, !isOffline, let api, let cache else { return }
+        guard !isLocal, offlineWorker == nil, !isOffline, let api, let cache, !cache.isLocal else { return }
         let generation = accountGeneration, workerID = UUID(); offlineWorkerID = workerID
         // One document at a time bounds network work; MainActor serializes all file commits with edits.
         offlineWorker = Task { [weak self] in
@@ -225,6 +230,7 @@ extension GammaWorkspace {
         }
     }
     func removeDownloadedFiles(_ paper: GammaPaper) {
+        guard !isLocal else { errorMessage = "Local library files are originals, not removable downloads."; return }
         guard let cache, !busy, !syncing, !recorder.recording, !recorder.preparing,
               self.paper?.properties.docID != paper.properties.docID,
               !offlineEntries.values.contains(where: { $0.paper.properties.docID == paper.properties.docID && ($0.state == .downloading || $0.state == .queued) }),

@@ -9,6 +9,13 @@ struct GammaWebSession: Identifiable {
     let serverURL: URL
     let workspace: String
     let cookies: [HTTPCookie]
+    let localServerAccess: GammaLocalServerAccess?
+
+    init(id: UUID, serverURL: URL, workspace: String, cookies: [HTTPCookie],
+         localServerAccess: GammaLocalServerAccess? = nil) {
+        self.id = id; self.serverURL = serverURL; self.workspace = workspace
+        self.cookies = cookies; self.localServerAccess = localServerAccess
+    }
 
     /// The URL the Web view loads: the server root plus the library, so the
     /// frontend's own `chooseWorkspace` picks the SAME one the native side holds.

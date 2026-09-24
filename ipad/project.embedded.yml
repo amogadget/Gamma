@@ -1,0 +1,52 @@
+# Opt-in: xcodegen generate --spec project.embedded.yml
+# Export BOTH paths before generation. No downloaded/fake runtime fallback.
+include:
+  - project.yml
+settings:
+  base:
+    GAMMA_PYTHON_XCFRAMEWORK: ${GAMMA_PYTHON_XCFRAMEWORK}
+    GAMMA_EMBEDDED_BUNDLE_SCRIPT: ${GAMMA_EMBEDDED_BUNDLE_SCRIPT}
+targets:
+  GammaIPad:
+    sources:
+      - path: EmbeddedBackend/GammaEmbeddedRuntimeController.swift
+      - path: EmbeddedBackend/native/GammaEmbeddedRuntime.h
+      - path: EmbeddedBackend/native/GammaEmbeddedRuntime.m
+      - path: EmbeddedBackend/native/GammaEmbeddedPDF.h
+      - path: EmbeddedBackend/native/GammaEmbeddedPDF.m
+    settings:
+      base:
+        SWIFT_OBJC_BRIDGING_HEADER: EmbeddedBackend/native/GammaEmbeddedRuntime.h
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) GAMMA_EMBEDDED_BACKEND"
+        CLANG_ENABLE_OBJC_ARC: YES
+        HEADER_SEARCH_PATHS: '$(inherited) "$(BUILT_PRODUCTS_DIR)/XCFrameworkIntermediates/Python/Python.framework/Headers" "$(BUILT_PRODUCTS_DIR)/Python.framework/Headers"'
+        GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) GAMMA_EMBEDDED_PDF=1"
+        # The packaging script reads the signed CPython/dependency inputs and
+        # writes target resources/frameworks; it must not fetch code at runtime.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    dependencies:
+      - framework: ${GAMMA_PYTHON_XCFRAMEWORK}
+        embed: true
+        codeSign: true
+    preBuildScripts:
+      - name: Package actual embedded Gamma runtime
+        basedOnDependencyAnalysis: false
+        script: |
+          set -eu
+          test -d "${GAMMA_PYTHON_XCFRAMEWORK:?Provide the actual CPython 3.13 XCFramework}"
+          test -f "${GAMMA_EMBEDDED_BUNDLE_SCRIPT:?Provide the official runtime packaging script}"
+          export GAMMA_EMBEDDED_RESOURCE_ROOT="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/EmbeddedGamma"
+          export GAMMA_EMBEDDED_SOURCE_ROOT="${SRCROOT}/EmbeddedBackend"
+          /bin/bash "${GAMMA_EMBEDDED_BUNDLE_SCRIPT}"
+          test -f "${GAMMA_EMBEDDED_RESOURCE_ROOT}/frontend/index.html"
+          test -f "${GAMMA_EMBEDDED_RESOURCE_ROOT}/app/gamma_ios_runtime.py"
+          test -f "${GAMMA_EMBEDDED_RESOURCE_ROOT}/app/gamma/app.py"
+          test -d "${GAMMA_EMBEDDED_RESOURCE_ROOT}/python/lib/python3.13/encodings"
+          test -d "${GAMMA_EMBEDDED_RESOURCE_ROOT}/python/lib/python3.13/lib-dynload"
+          test -d "${GAMMA_EMBEDDED_RESOURCE_ROOT}/app_packages"
+  GammaIPadTests:
+    settings:
+      base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) GAMMA_EMBEDDED_BACKEND"
+    sources:
+      - path: EmbeddedBackend/tests/GammaEmbeddedRuntimeContractTests.swift

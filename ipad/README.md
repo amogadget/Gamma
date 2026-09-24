@@ -1,12 +1,23 @@
 # Gamma for iPad
 
-Native Gamma client for iPadOS 17+, Swift 5.9 / Xcode 15+, and XcodeGen 2.38+. **Sign in → the same Gamma library → the existing PDF page and Notes tree.** There is no Files-import library, local UUID document copy, or import sheet.
+Native Gamma client for iPadOS 17+, Swift 5.9 / Xcode 15+, and XcodeGen 2.38+.
+Use **On this iPad** without an account or server: import PDFs, write with Pencil,
+record audio and replay locally. Connecting a Gamma server is a separate optional
+mode, with its existing workspace identities and synchronization preserved.
 
 **[统一设计总纲](../docs/design/handwriting-recording-ipad.md)**：手写、录音、双端 Replay、混合工作区、持久化与安全的完整设计；历史讨论中的未实现设想与现状分别标注。
 
-## Use
+## Use locally — no server
 
-1. Enter your HTTPS Gamma server and account. The authenticated session stays alive while moving between library and reader. Only server URL and authenticated username are remembered; passwords/cookies are not persisted. Relaunch offers **Open files on this iPad** for existing local accounts without a network connection or additional local authentication. This is not a server session; sign in to the same server/account to sync pending edits.
+Fresh installations open **On this iPad**. Choose **Import PDF** from Files, open
+the imported document, then use **New Ink**, **Notes** and the recording/replay
+controls. Everything is stored in the app's local library. Close the reader
+before changing library modes. See [LOCAL_LIBRARY.md](LOCAL_LIBRARY.md) for
+persistence, isolation and current validation boundaries.
+
+## Use with a server — optional
+
+1. Choose **Connect a Gamma server…** and enter your HTTPS server and account. A verified session is stored securely in Keychain, never the password. Relaunch restores the selected mode; existing installations with a saved server session retain their server mode on upgrade. Existing downloaded server libraries remain available without a connection. This is separate from the standalone local library, and switching modes does not upload local PDFs.
 2. After sign-in, **Full Gamma** opens the actual Web workspace inside the app: the existing Markdown/math editor, block tree, search, AI, settings and import/export UI. Open a PDF there and choose **Pencil & Audio** to switch that same document to PDFKit/PencilKit; the original cached PDF is downloaded without changing its Gamma identity. **Full Gamma** returns after pending native changes sync and reloads the Web tree. See `WEB_PARITY.md` for the feature matrix and platform limits.
 3. In the native workspace, **Select text** enables PDFKit selection; long-press a passage, adjust the handles and choose a highlight color. It creates an ordinary Gamma highlight/note block. For handwriting, navigate to a PDF page and press **New Ink**. Multiple Pencil strokes belong to that one `pdf_ink` unified block, directly under the existing Gamma PDF page. New Ink is explicit; writing does not create one note per stroke.
 4. The **Notes** tree stays next to the PDF. Select an Ink block to edit its strokes; all other ink is read-only background. Edit the annotation’s own content in **Annotation note**, and add ordinary child notes with **Add Child Note**. Selecting an annotation navigates to its PDF page.
@@ -18,7 +29,7 @@ Choose **Downloads** from Full Gamma, then **Select → Download selected**. Thi
 
 Intentional downloads remain until you remove them. **No cache budget or automatic eviction** is imposed. Removing local files never deletes server documents, pending edits or recording recovery sources. See [OFFLINE.md](OFFLINE.md) for behavior and verification boundaries.
 
-## Identity, storage, and synchronization
+## Server identity, storage, and synchronization
 
 `GammaWorkspace` is the main-actor coordinator. Reader callbacks capture the configured annotation ID, not mutable selection; synchronous local snapshots persist before networking. Reader page indexes are zero-based; server `pdf_page` is one-based. A selection changes `contentRevision`, so the reader flushes old callbacks before reloading the selected annotation canvas.
 
@@ -58,7 +69,7 @@ target already exists or if re-stamping the identity fails. See
 
 ## Deployment
 
-### 1. Run a matching Gamma server
+### 1. Run a matching Gamma server (server mode only)
 
 Use the backend from **the same checkout** as this client. The native routes
 (`/api/assets`, `/api/blocks/{id}/{ink,audio,note,highlight,replay-preview}`) come

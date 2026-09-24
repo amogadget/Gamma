@@ -55,10 +55,13 @@ final class GammaCache {
     let server: String
     let username: String
     let workspace: String
+    /// Standalone device storage is not an account cache or an offline session.
+    let isLocal: Bool
     let writeOverride: ((Data, URL) throws -> Void)?
     init(rootURL: URL, server: URL, username: String, workspace: String,
          writeOverride: ((Data, URL) throws -> Void)? = nil) throws {
         self.writeOverride = writeOverride
+        self.isLocal = false
         let canonical = Self.canonicalServer(server.absoluteString)
         let workspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
         guard GammaAPI.isValidWorkspace(workspace) else {
@@ -76,6 +79,35 @@ final class GammaCache {
         // This metadata is intentionally non-secret and permits safe offline identity discovery.
         try ensureAccountIdentity(GammaOfflineIdentity(server: canonical, username: username, workspace: workspace))
     }
+    static let localWorkspaceID = "local-library"
+
+    /// An independent Application Support sibling, never scanned as an account.
+    static func localApplicationSupportRoot() throws -> URL {
+        try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                    appropriateFor: nil, create: true)
+            .appendingPathComponent("GammaLocalLibrary", isDirectory: true)
+    }
+
+    static func local(rootURL: URL? = nil,
+                      writeOverride: ((Data, URL) throws -> Void)? = nil) throws -> GammaCache {
+        try GammaCache(localRootURL: rootURL ?? localApplicationSupportRoot(), writeOverride: writeOverride)
+    }
+
+    private init(localRootURL: URL, writeOverride: ((Data, URL) throws -> Void)?) throws {
+        guard localRootURL.isFileURL else { throw CocoaError(.fileReadUnsupportedScheme) }
+        self.rootURL = localRootURL
+        self.server = ""
+        self.username = ""
+        self.workspace = Self.localWorkspaceID
+        self.isLocal = true
+        self.writeOverride = writeOverride
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        // No account identity file: this directory cannot establish a server session.
+        guard !FileManager.default.fileExists(atPath: rootURL.appendingPathComponent("identity.json").path) else {
+            throw GammaAPI.APIError.message("An account cache cannot be opened as a standalone library.")
+        }
+    }
+
     static func canonicalServer(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
@@ -160,13 +192,33 @@ final class GammaCache {
         guard !FileManager.default.fileExists(atPath: destination.path) else { return }
         try Data(contentsOf: temporaryURL).write(to: destination, options: .atomic)
     }
+    /// Local imports verify deduplicated bytes rather than trusting a truncated ID.
+    /// A failed import may leave an unreferenced immutable source; never remove a
+    /// source that a previous import (or an interrupted transaction) could reference.
+    func preserveLocalSource(_ data: Data, docID: String) throws {
+        guard isLocal else { throw CocoaError(.fileWriteNoPermission) }
+        let destination = sourceURL(docID: docID)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            guard try Data(contentsOf: destination) == data else {
+                throw GammaAPI.APIError.message("The stored PDF does not match this import; existing bytes were preserved.")
+            }
+            return
+        }
+        try writeData(data, to: destination)
+    }
+    func writeLocalMetadata<T: Encodable>(_ value: T) throws {
+        guard isLocal else { throw CocoaError(.fileWriteNoPermission) }
+        try write(value, to: rootURL.appendingPathComponent("local-records.json"))
+    }
     private func pageURL(_ id: String) -> URL { rootURL.appendingPathComponent("page-\(Self.key(id)).json") }
     private func read<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
         do { return try JSONDecoder().decode(type, from: Data(contentsOf: url)) }
         catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
     }
     private func write<T: Encodable>(_ value: T, to url: URL) throws {
-        let data = try JSONEncoder().encode(value)
+        try writeData(JSONEncoder().encode(value), to: url)
+    }
+    private func writeData(_ data: Data, to url: URL) throws {
         if let writeOverride { try writeOverride(data, url) }
         else { try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
     }

@@ -7,6 +7,24 @@ import UIKit
 /// unrotated y-flip or whole-document percentage is involved.
 @MainActor
 enum GammaPDFReadingPosition {
+    static func capture(view: PDFView) -> GammaReadingPosition? {
+        guard let document = view.document, view.bounds.width > 0, view.bounds.height > 0 else { return nil }
+        // currentPage is the center/majority page, not the top visible page.
+        let candidates = view.visiblePages.compactMap { page -> (Int, CGRect)? in
+            let rect = view.convert(page.bounds(for: .cropBox), from: page).standardized
+            let intersection = rect.intersection(view.bounds)
+            guard !intersection.isNull, intersection.width > 0, intersection.height > 0,
+                  [rect.minX, rect.minY, rect.width, rect.height].allSatisfy({ $0.isFinite }),
+                  rect.width > 0, rect.height > 0 else { return nil }
+            let index = document.index(for: page)
+            return index == NSNotFound ? nil : (index, rect)
+        }.sorted { $0.1.minY == $1.1.minY ? $0.0 < $1.0 : $0.1.minY < $1.1.minY }
+        guard let (index, rect) = candidates.first else { return nil }
+        return GammaReadingPosition(pageIndex: index,
+            anchorX: Double(min(1, max(0, (view.bounds.minX - rect.minX) / rect.width))),
+            anchorY: Double(min(1, max(0, (view.bounds.minY - rect.minY) / rect.height))))
+    }
+
     static func point(_ position: GammaReadingPosition, page: PDFPage, view: PDFView) -> CGPoint? {
         let rect = view.convert(page.bounds(for: .cropBox), from: page).standardized
         guard [rect.minX, rect.minY, rect.width, rect.height].allSatisfy({ $0.isFinite }),
@@ -15,6 +33,18 @@ enum GammaPDFReadingPosition {
                              y: rect.minY + rect.height * CGFloat(position.anchorY))
         let point = view.convert(anchor, to: page)
         return point.x.isFinite && point.y.isFinite ? point : nil
+    }
+}
+
+/// Root-owned synchronous capture handle. Never caches a center-page notification.
+@MainActor
+final class GammaPDFViewportController: ObservableObject {
+    fileprivate weak var document: PDFDocument?
+    fileprivate var read: (() -> GammaReadingPosition?)?
+    fileprivate weak var owner: AnyObject?
+    func capture(document: PDFDocument) -> GammaReadingPosition? {
+        guard self.document === document else { return nil }
+        return read?()
     }
 }
 
@@ -37,6 +67,8 @@ struct PDFInkView: UIViewRepresentable {
     var onPageChanged: (Int) -> Void = { _ in }
     var requestedPage: Int? = nil
     var requestedViewport: GammaReadingPosition? = nil
+    var viewportController: GammaPDFViewportController? = nil
+    var onViewportChanged: (GammaReadingPosition) -> Void = { _ in }
     var highlights: (Int) -> [GammaPDFHighlight] = { _ in [] }
     var timInk: (Int) -> [GammaTimInk] = { _ in [] }
     var inkHitTest: (Int, CGPoint, CGFloat) -> String? = { _, _, _ in nil }
@@ -118,6 +150,41 @@ struct PDFInkView: UIViewRepresentable {
         private var retryTimer: Timer?
         private var pendingViewport: GammaReadingPosition?
         private var viewportRestoreScheduled = false
+        private var viewportReportScheduled = false
+        private weak var observedScrollView: UIScrollView?
+        private var scrollObservation: NSKeyValueObservation?
+
+        private func captureViewport() -> GammaReadingPosition? {
+            guard alive, pendingViewport == nil, let view else { return nil }
+            view.layoutIfNeeded()
+            return GammaPDFReadingPosition.capture(view: view)
+        }
+
+        private func observeViewport() {
+            func scroll(in node: UIView) -> UIScrollView? {
+                if let value = node as? UIScrollView { return value }
+                return node.subviews.lazy.compactMap { scroll(in: $0) }.first
+            }
+            if let view, let target = scroll(in: view), target !== observedScrollView {
+                observedScrollView = target
+                scrollObservation = target.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
+                    MainActor.assumeIsolated { self?.scheduleViewportReport() }
+                }
+            }
+            scheduleViewportReport()
+        }
+
+        private func scheduleViewportReport() {
+            guard alive, pendingViewport == nil, !viewportReportScheduled else { return }
+            viewportReportScheduled = true
+            let document = configuration?.document
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.viewportReportScheduled = false
+                guard self.configuration?.document === document, let position = self.captureViewport() else { return }
+                self.configuration?.onViewportChanged(position)
+            }
+        }
         private var selectionTarget: String?
         private var replaySeekTarget: Double?
         private lazy var pencilSelectionTap: UITapGestureRecognizer = {
@@ -141,6 +208,7 @@ struct PDFInkView: UIViewRepresentable {
             view.onLayout = { [weak self] in
                 self?.updateGeometry()
                 self?.scheduleViewportRestore()
+                self?.observeViewport()
             }
             NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged),
                                                   name: .PDFViewScaleChanged, object: view)
@@ -170,6 +238,13 @@ struct PDFInkView: UIViewRepresentable {
                     return
                 }
             }
+            if configuration?.viewportController !== value.viewportController,
+               configuration?.viewportController?.owner === self {
+                configuration?.viewportController?.read = nil
+            }
+            value.viewportController?.document = value.document
+            value.viewportController?.owner = self
+            value.viewportController?.read = { [weak self] in self?.captureViewport() }
             if snapshotsChanged {
                 // Compile once per immutable snapshot, before PDFKit can ask
                 // for overlays during document assignment or prepare(). Foreign
@@ -220,6 +295,7 @@ struct PDFInkView: UIViewRepresentable {
             }
             updateGeometry()
             scheduleViewportRestore()
+            observeViewport()
         }
 
         private func scheduleViewportRestore() {
@@ -488,18 +564,21 @@ struct PDFInkView: UIViewRepresentable {
         }
 
         @objc private func pageChanged() {
+            scheduleViewportReport()
             guard pendingViewport == nil, let configuration, let page = view?.currentPage else { return }
             let index = configuration.document.index(for: page)
             guard index != NSNotFound else { return }
             let document = configuration.document
             let handler = configuration.onPageChanged
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.alive, self.configuration?.document === document else { return }
+                guard let self, self.alive, self.pendingViewport == nil,
+                      self.configuration?.document === document else { return }
                 handler(index)
             }
         }
 
         @objc private func scaleChanged() {
+            scheduleViewportReport()
             updateGeometry()
             DispatchQueue.main.async { [weak self] in self?.updateGeometry() }
         }
@@ -572,6 +651,11 @@ struct PDFInkView: UIViewRepresentable {
         }
 
         func dismantle() {
+            if configuration?.viewportController?.owner === self {
+                configuration?.viewportController?.read = nil
+                configuration?.viewportController?.document = nil
+            }
+            scrollObservation = nil
             alive = false
             retryTimer?.invalidate()
             retryTimer = nil

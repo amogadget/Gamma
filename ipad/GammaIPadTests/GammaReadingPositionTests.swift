@@ -26,6 +26,67 @@ final class GammaReadingPositionTests: XCTestCase {
     }
 
     @MainActor
+    func testCaptureTopPageAndLateRestoreDoesNotPublishInitialPosition() async throws {
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let document = try XCTUnwrap(PDFDocument(data: renderer.pdfData { ctx in
+            for _ in 0..<4 { ctx.beginPage() }
+        }))
+        let handle = GammaPDFViewportController()
+        let view = InkPDFView(frame: CGRect(x: 0, y: 0, width: 400, height: 500))
+        view.displayMode = .singlePageContinuous; view.displayBox = .cropBox
+        let coordinator = PDFInkView.Coordinator()
+        coordinator.attach(view)
+        var reports: [GammaReadingPosition] = []
+        let requested = try XCTUnwrap(GammaReadingPosition(pageIndex: 2, anchorX: 0, anchorY: 0.4))
+        let config = PDFInkView(document: document, loadDrawing: { _ in .init() }, saveDrawing: { _, _ in },
+            onError: { XCTFail($0) }, isDrawing: false, requestedViewport: requested,
+            viewportController: handle, onViewportChanged: { reports.append($0) })
+        coordinator.update(from: config)
+        XCTAssertNil(handle.capture(document: document), "Pending restore must not expose initial page zero")
+        XCTAssertNil(handle.capture(document: PDFDocument()), "Handle must reject a stale document")
+        await Task.yield()
+        XCTAssertTrue(reports.isEmpty)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 500))
+        let host = UIViewController(); window.rootViewController = host
+        host.view.addSubview(view); window.makeKeyAndVisible()
+        coordinator.update(from: config)
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            MainActor.assumeIsolated { handle.capture(document: document)?.pageIndex == 2 }
+        }, object: nil)
+        await fulfillment(of: [restored], timeout: 3)
+        XCTAssertEqual(handle.capture(document: document)?.pageIndex, 2)
+        coordinator.dismantle()
+        XCTAssertNil(handle.capture(document: document))
+        window.isHidden = true
+    }
+
+    @MainActor
+    func testCapturedDisplayedCropAnchorRoundTripsAllRotations() throws {
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let document = try XCTUnwrap(PDFDocument(data: renderer.pdfData { ctx in
+            for _ in 0..<3 { ctx.beginPage() }
+        }))
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 400, height: 500))
+        view.displayMode = .singlePageContinuous; view.displayBox = .cropBox
+        view.document = document; view.scaleFactor = 1.3
+        for rotation in [0, 90, 180, 270] {
+            let page = try XCTUnwrap(document.page(at: 1))
+            page.setBounds(CGRect(x: 40, y: 60, width: 500, height: 650), for: .cropBox)
+            page.rotation = rotation; view.layoutDocumentView()
+            let desired = try XCTUnwrap(GammaReadingPosition(pageIndex: 1, anchorX: 0.1, anchorY: 0.35))
+            let point = try XCTUnwrap(GammaPDFReadingPosition.point(desired, page: page, view: view))
+            view.go(to: PDFDestination(page: page, at: point)); view.layoutIfNeeded()
+            let captured = try XCTUnwrap(GammaPDFReadingPosition.capture(view: view))
+            let capturedPage = try XCTUnwrap(document.page(at: captured.pageIndex))
+            let rect = view.convert(capturedPage.bounds(for: .cropBox), from: capturedPage).standardized
+            XCTAssertEqual(captured.anchorY, Double(max(0, min(1, (view.bounds.minY - rect.minY) / rect.height))), accuracy: 0.001)
+            let topIndex = view.visiblePages.filter { view.convert($0.bounds(for: .cropBox), from: $0).maxY > view.bounds.minY }
+                .map { document.index(for: $0) }.min()
+            XCTAssertEqual(captured.pageIndex, topIndex)
+        }
+    }
+
+    @MainActor
     func testDisplayedAnchorUsesPDFKitCropAndRotationConversion() throws {
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 800))
         let document = try XCTUnwrap(PDFDocument(data: renderer.pdfData { ctx in ctx.beginPage() }))

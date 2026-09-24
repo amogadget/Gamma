@@ -4,6 +4,13 @@ import PencilKit
 
 @MainActor
 final class GammaWorkspace: ObservableObject {
+    @Published var isLocal = false
+    @Published var isEmbeddedLocal = false
+    var usesLocalOnlySnapshots: Bool { isLocal && !isEmbeddedLocal }
+    /// Native reader holds this across a canvas flush / mode transition.
+    @Published var nativeWriteInProgress = false
+    @Published private(set) var hasFailedNativeSave = false
+    private var failedNativeSave: (cache: GammaCache, snapshot: GammaPageCache)?
     @Published var username: String?
     @Published var papers: [GammaPaper] = []
     @Published var recentPageIDs: [String] = []
@@ -26,6 +33,8 @@ final class GammaWorkspace: ObservableObject {
     private var strokeBegins: [String: GammaAudioStamp] = [:]
     private var replaySources: [String: (Data, PKDrawing)] = [:]
     private var pendingInkTiming: [String: (data: Data, recordingID: String, events: [GammaReplayEvent])] = [:]
+    private var activeInkBlocks = Set<String>()
+    var hasPendingLocalInk: Bool { !activeInkBlocks.isEmpty || !pendingInkTiming.isEmpty }
     // A selected local cache never grants server permissions.
     @Published var isOffline = false
     @Published var accountServer = ""
@@ -52,13 +61,18 @@ final class GammaWorkspace: ObservableObject {
     let sessionCacheRoot: URL?
     var savedSession: GammaSavedSession?
     var didRestoreSession = false
+    var didRestoreInitialLibrary = false
+    let libraryDefaults: UserDefaults
+    let localLibraryRoot: URL?
 
     private let recordingClock: (() -> GammaAudioStamp?)?
     private var audioStamp: GammaAudioStamp? { recordingClock?() ?? recorder.recordingStamp }
     init(cache: GammaCache? = nil, api: GammaAPI? = nil, recordingClock: (() -> GammaAudioStamp?)? = nil,
          sessionStore: GammaSessionPersistence = GammaKeychainSessionStore(), sessionCacheRoot: URL? = nil,
+         localLibraryRoot: URL? = nil, libraryDefaults: UserDefaults = .standard,
          sessionAPIFactory: @escaping (String) throws -> GammaAPI = { try GammaAPI(server: $0) }) {
         self.sessionStore = sessionStore; self.sessionCacheRoot = sessionCacheRoot
+        self.localLibraryRoot = localLibraryRoot; self.libraryDefaults = libraryDefaults
         self.sessionAPIFactory = sessionAPIFactory
         self.recordingClock = recordingClock
         self.cache = cache
@@ -71,10 +85,15 @@ final class GammaWorkspace: ObservableObject {
             self.workspaceID = identity.workspace; self.workspaceName = identity.workspaceName
         }
         if let api, let cache, let identity = try? cache.accountIdentity(),
-           api.authenticatedUsername != identity.username || GammaCache.canonicalServer(api.baseURL) != identity.server
+           api.authenticatedUsername != identity.username || api.cacheServerIdentity != identity.server
             || api.workspace != identity.workspace {
             self.api = nil; self.isOffline = true
             self.errorMessage = "Authenticated session does not match this local workspace. Files remain isolated."
+        }
+        if cache?.isLocal == true {
+            self.api?.close(); self.api = nil; self.isLocal = true
+            self.username = nil; self.accountServer = ""; self.isOffline = false
+            self.workspaceName = "On this iPad"
         }
         reloadOfflineAccounts(); refreshOfflineStatus()
         recorder.canRollSegment = { [weak self] in self?.strokeBegins.isEmpty ?? true }
@@ -98,7 +117,7 @@ final class GammaWorkspace: ObservableObject {
     /// A workspace switch changes which library receives uploads, so it is refused
     /// while anything is queued, conflicted or recording.
     var canSwitchWorkspace: Bool {
-        guard !isOffline, !requiresLogin, !busy, !syncing, !recorder.recording, !recorder.preparing, api != nil,
+        guard !isLocal, !isOffline, !requiresLogin, canChangeLibrary, api != nil,
               writableWorkspaces.count > 1 else { return false }
         return (try? pendingOutbox().isEmpty) ?? false
     }
@@ -144,7 +163,12 @@ final class GammaWorkspace: ObservableObject {
     }
 
     func login(server: String, username: String, password: String, reconnect: Bool = false) async {
-        guard !busy, !syncing, recorder.pauseBeforeLeaving() else { return }
+        guard canChangeLibrary, recorder.pauseBeforeLeaving() else { return }
+        if isLocal {
+            guard !reconnect else { errorMessage = "Local files cannot be bound to a server account."; return }
+            do { try validateLocalLibraryBeforeLeaving() }
+            catch { errorMessage = error.localizedDescription; return }
+        }
         sessionLifecycle.cancel(); accountGeneration = UUID()
         let loginGeneration = accountGeneration
         busy = true
@@ -202,6 +226,7 @@ final class GammaWorkspace: ObservableObject {
             stopOfflineWorker(); api?.close(); if !reconnect { closeReader() }
             api = client; cache = storage; self.username = authenticatedUser
             workspaceID = chosen.id; workspaceName = chosen.name; workspaceOptions = info.workspaces
+            isLocal = false; isEmbeddedLocal = false; libraryDefaults.set("server", forKey: "gamma.libraryMode")
             isOffline = false; accountServer = client.baseURL.absoluteString
             accountGeneration = UUID(); papers = library; errorMessage = migrationNote; syncUnavailable = false
             reloadOfflineAccounts(); restoreOfflineQueue()
@@ -222,7 +247,7 @@ final class GammaWorkspace: ObservableObject {
     /// role may write, and nothing is queued: a queued change carries the workspace
     /// it was written in, and retargeting it would upload into the wrong library.
     func switchWorkspace(to id: String) async {
-        guard !isOffline, !requiresLogin, !busy, !syncing, !recorder.recording, !recorder.preparing, recorder.pauseBeforeLeaving(), let api else {
+        guard !isLocal, !isOffline, !requiresLogin, canChangeLibrary, recorder.pauseBeforeLeaving(), let api else {
             errorMessage = "Finish the current operation before switching workspaces."; return
         }
         guard id != workspaceID else { return }
@@ -275,7 +300,7 @@ final class GammaWorkspace: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
     }
     func signOut() async {
-        guard !syncing, !busy, recorder.pauseBeforeLeaving() else { return }
+        guard !isLocal, canChangeLibrary, recorder.pauseBeforeLeaving() else { return }
         busy = true; defer { busy = false }
         do { try sessionStore.clear() }
         catch { errorMessage = error.localizedDescription; return }
@@ -288,7 +313,7 @@ final class GammaWorkspace: ObservableObject {
         closeReader(); status = "Signed out. Cached data and pending changes are preserved for this account."
     }
     func prepareWebWorkspace() async -> Bool {
-        guard !isOffline, !requiresLogin, !busy, !syncing, recorder.pauseBeforeLeaving(), let api, let cache else { return false }
+        guard !usesLocalOnlySnapshots, !isOffline, !requiresLogin, canChangeLibrary, recorder.pauseBeforeLeaving(), let api, let cache else { return false }
         await retrySync()
         guard !requiresLogin, !isOffline, self.api === api else { return false }
         do {
@@ -297,6 +322,9 @@ final class GammaWorkspace: ObservableObject {
                 return false
             }
             closeReader()
+            #if GAMMA_EMBEDDED_BACKEND
+            if isEmbeddedLocal { webSession = embeddedWebSession(api); return true }
+            #endif
             if webSession == nil {
                 webSession = GammaWebSession(id: UUID(), serverURL: api.baseURL, workspace: api.workspace,
                                              cookies: api.sessionCookies())
@@ -305,7 +333,10 @@ final class GammaWorkspace: ObservableObject {
         } catch { errorMessage = error.localizedDescription; return false }
     }
     func openFromWeb(_ request: GammaWebOpenRequest, cookies: [HTTPCookie]) async -> Bool {
-        guard !busy, !syncing, recorder.pauseBeforeLeaving(), let session = webSession else { return false }
+        #if GAMMA_EMBEDDED_BACKEND
+        if isEmbeddedLocal { return await openFromEmbeddedWeb(request, cookies: cookies) }
+        #endif
+        guard !isLocal, canChangeLibrary, recorder.pauseBeforeLeaving(), let session = webSession else { return false }
         let server = session.serverURL
         busy = true
         var candidate: GammaAPI?
@@ -417,7 +448,7 @@ final class GammaWorkspace: ObservableObject {
     func playRecording(_ id: String) async {
         guard !busy, !recorder.recording, let cache,
               let block = page?.blocks.first(where: { $0.id == id && $0.isAudio }) else { return }
-        let activeAPI = isOffline || requiresLogin ? nil : api
+        let activeAPI = usesLocalOnlySnapshots || isOffline || requiresLogin ? nil : api
         let generation = accountGeneration
         busy = true; defer { busy = false }
         do {
@@ -485,9 +516,12 @@ final class GammaWorkspace: ObservableObject {
     }
     func inkBegan(blockID: String?) {
         guard let id = blockID else { return }
+        activeInkBlocks.insert(id)
         strokeBegins[id] = audioStamp
     }
-    func inkEnded(blockID: String?) { if let id = blockID { strokeBegins.removeValue(forKey: id) } }
+    func inkEnded(blockID: String?) {
+        if let id = blockID { strokeBegins.removeValue(forKey: id); activeInkBlocks.remove(id) }
+    }
     func pageNavigated(_ number: Int) {
         currentPDFPage = max(1, number)
         guard let stamp = recorder.recordingStamp, var snapshot = page,
@@ -509,7 +543,7 @@ final class GammaWorkspace: ObservableObject {
     }
 
     func refreshLibrary() async {
-        guard !isOffline, !requiresLogin, let api, let cache else { return }
+        guard !usesLocalOnlySnapshots, !isOffline, !requiresLogin, let api, let cache else { return }
         let generation = accountGeneration
         do {
             let remote = try await api.papers()
@@ -524,13 +558,19 @@ final class GammaWorkspace: ObservableObject {
         }
     }
     func open(_ paper: GammaPaper) async {
-        guard !busy, recorder.pauseBeforeLeaving(), let cache, let docID = paper.properties.docID else { return }
-        let activeAPI = isOffline || requiresLogin ? nil : api
+        guard !busy, !nativeWriteInProgress, !hasPendingLocalInk, !hasFailedNativeSave,
+              recorder.pauseBeforeLeaving(), let cache, let docID = paper.properties.docID else { return }
+        let activeAPI = usesLocalOnlySnapshots || isOffline || requiresLogin ? nil : api
         let generation = accountGeneration
         busy = true; defer { busy = false }
         do {
             var snapshot = try cache.loadPage(pageID: paper.id, docID: docID)
-            let source = cache.sourceURL(docID: docID)
+            if usesLocalOnlySnapshots {
+                guard snapshot.blocks.contains(where: { $0.id == paper.id && $0.properties.docID == docID }) else {
+                    throw GammaAPI.APIError.message("This local document's primary notes are missing or damaged. Files were preserved; restore the local library from a backup before editing.")
+                }
+            }
+            let source = usesLocalOnlySnapshots ? try GammaLocalLibrary(cache: cache).pdfURL(for: paper) : cache.sourceURL(docID: docID)
             if !FileManager.default.fileExists(atPath: source.path) {
                 guard let activeAPI else { throw GammaAPI.APIError.message("This document is not prepared for offline use.") }
                 let temporary = try await activeAPI.download(paper)
@@ -557,7 +597,7 @@ final class GammaWorkspace: ObservableObject {
                     }
                 }
             } else {
-                status = "Offline Gamma workspace"
+                status = isLocal ? "On this iPad · saved locally" : "Offline Gamma workspace"
                 errorMessage = snapshot.blocks.contains(where: { $0.id == paper.id }) ? nil : "PDF is available, but notes have not been prepared. Sign in to download the current notes and recordings."
             }
             reportTimInkErrors(snapshot)
@@ -569,6 +609,9 @@ final class GammaWorkspace: ObservableObject {
         }
     }
     func closeReader() {
+        guard !nativeWriteInProgress, !hasPendingLocalInk, !hasFailedNativeSave else {
+            errorMessage = "Finish writing and retry the failed save before leaving."; return
+        }
         guard recorder.pauseBeforeLeaving() else { errorMessage = "Save the current recording before leaving."; return }
         paper = nil; document = nil; page = nil; selectedID = nil; contentRevision += 1
         strokeBegins = [:]; replaySources = [:]; currentPDFPage = 1
@@ -717,16 +760,65 @@ final class GammaWorkspace: ObservableObject {
         snapshot.outbox.append(next)
     }
     private func persist(_ snapshot: GammaPageCache) throws {
-        guard let cache else { throw GammaAPI.APIError.message("Sign in before editing.") }
-        try cache.savePage(snapshot)
-        if page?.pageID == snapshot.pageID { page = snapshot }
-        status = snapshot.outbox.isEmpty ? "Synced with Gamma" : "Saved on iPad · \(snapshot.outbox.count) pending for Gamma"
+        guard let cache else { throw GammaAPI.APIError.message("Open a library before editing.") }
+        if let failed = failedNativeSave {
+            // Only an exact payload retry may pass in either mode (canvas callbacks can
+            // mint different operation ids). Never replace a failed note/audio/
+            // new-ink snapshot with an unrelated edit reloaded from older disk.
+            guard failed.cache === cache,
+                  snapshot.pageID == failed.snapshot.pageID, snapshot.docID == failed.snapshot.docID,
+                  snapshot.blocks == failed.snapshot.blocks, snapshot.drawings == failed.snapshot.drawings,
+                  snapshot.recordings == failed.snapshot.recordings else {
+                throw GammaAPI.APIError.message("Retry the pending save before making another change.")
+            }
+            try commitNativeSnapshot(failed.snapshot, cache: cache)
+        } else {
+            try commitNativeSnapshot(snapshot, cache: cache)
+        }
+    }
+
+    /// One bounded in-memory failed transaction, always tied to its original
+    /// library. Retry even when the operation created a block not yet on disk.
+    @discardableResult
+    func retryNativeSave() -> Bool {
+        guard !busy, !syncing, let failed = failedNativeSave, cache === failed.cache else { return false }
+        do {
+            try commitNativeSnapshot(failed.snapshot, cache: failed.cache)
+            for mutation in failed.snapshot.outbox where mutation.kind == .ink {
+                if pendingInkTiming[mutation.blockID]?.data == mutation.drawing {
+                    pendingInkTiming.removeValue(forKey: mutation.blockID)
+                }
+            }
+            contentRevision += 1
+            errorMessage = nil
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
+    private func commitNativeSnapshot(_ snapshot: GammaPageCache, cache: GammaCache) throws {
+        do {
+            guard self.cache === cache, cache.isLocal == usesLocalOnlySnapshots else { throw CocoaError(.fileWriteNoPermission) }
+            let saved = usesLocalOnlySnapshots ? try localSnapshot(snapshot) : snapshot
+            try cache.savePage(saved)
+            if page?.pageID == saved.pageID { page = saved }
+            failedNativeSave = nil; hasFailedNativeSave = false
+            status = isLocal ? "Saved on this iPad" : (saved.outbox.isEmpty ? "Synced with Gamma" : "Saved on iPad · \(saved.outbox.count) pending for Gamma")
+        } catch {
+            // Local primary transactions (including the embedded engine's
+            // durable native outbox) must block teardown/recovery after failure.
+            // Remote caches retain their existing merge-on-retry behavior.
+            if usesLocalOnlySnapshots || isEmbeddedLocal {
+                if failedNativeSave == nil { failedNativeSave = (cache, snapshot) }
+                hasFailedNativeSave = true
+            }
+            throw error
+        }
     }
     private func latest(_ original: GammaPageCache, cache: GammaCache) throws -> GammaPageCache {
         try cache.loadPage(pageID: original.pageID, docID: original.docID)
     }
     func hydrated(_ original: GammaPageCache, api: GammaAPI) async throws -> GammaPageCache {
-        guard let cache else { throw GammaAPI.APIError.message("Cache unavailable.") }
+        guard !usesLocalOnlySnapshots, let cache, !cache.isLocal else { throw GammaAPI.APIError.message("Server cache unavailable.") }
         let generation = accountGeneration
         while syncing || hydratingPages.contains(original.pageID) {
             try await Task.sleep(for: .milliseconds(50))
@@ -843,14 +935,24 @@ final class GammaWorkspace: ObservableObject {
     /// Serialized, retryable outbox. The immutable operation sent over the network
     /// is acknowledged only by its own id; edits made during await remain pending.
     func retrySync() async {
+        #if GAMMA_EMBEDDED_BACKEND
+        if isEmbeddedLocal, isOffline, let client = api {
+            do {
+                let info = try await client.session()
+                guard self.api === client, info.user == username,
+                      info.option(workspaceID)?.canWrite == true else { return }
+                isOffline = false
+            } catch { _ = handleSessionFailure(error); return }
+        }
+        #endif
         syncUnavailable = false
         await sync()
     }
 
     func sync() async {
-        guard !syncing, !busy, !syncUnavailable, !isOffline, hydratingPages.isEmpty, let api, let cache else { return }
+        guard !usesLocalOnlySnapshots, !hasFailedNativeSave, !syncing, !busy, !syncUnavailable, !isOffline, hydratingPages.isEmpty, let api, let cache, !cache.isLocal else { return }
         guard let identity = try? cache.accountIdentity(), identity.username == api.authenticatedUsername,
-              identity.server == GammaCache.canonicalServer(api.baseURL), identity.workspace == api.workspace,
+              identity.server == api.cacheServerIdentity, identity.workspace == api.workspace,
               cache.workspace == api.workspace else {
             errorMessage = "Sign in to the same account and workspace before syncing its saved edits."; return
         }

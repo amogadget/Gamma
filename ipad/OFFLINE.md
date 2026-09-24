@@ -1,5 +1,10 @@
 # Offline files on iPad
 
+**Two separate modes:** the standalone **On this iPad** library needs no server
+or login; see [LOCAL_LIBRARY.md](LOCAL_LIBRARY.md). This document describes
+cached **server** libraries, whose identity and synchronization rules still
+apply. A local PDF is not silently uploaded when connecting a server.
+
 ## Product behavior
 
 - Local files belong to one Gamma **library** (workspace) as well as one server and
@@ -33,7 +38,7 @@ Switching libraries in the native header is refused while anything is pending
 
 An **in-place app update** with the unchanged app identity retains the app container and Keychain session. The older ephemeral-only release cannot recover a cookie it never persisted, so its first upgrade may require one sign-in. **Deleting the app is different**: cached documents can be deleted by iOS, Keychain survival is not a backup guarantee, and no client can guarantee an indefinitely valid cookie. Server expiration/revocation and password changes still apply (`SESSION_MAX_AGE` is currently 365 days); this feature does not change server policy. Device migration does not transfer this `ThisDeviceOnly` credential.
 
-Coordinator entry points: root calls `restoreSession()` once, then `sessionDidBecomeActive()` / `sessionDidEnterBackground()` for lifecycle. `requiresLogin` is an explicit authentication/access failure, not connectivity. `restoringSession` lets the root avoid flashing an empty login form. `isOffline` selects the cached presentation without discarding Web state. A resumed native reader must not be switched to Web just because a background probe succeeds.
+Coordinator entry points: root calls `restoreInitialLibrary()` to select local or server mode; only the server path calls `restoreSession()`. It then calls `sessionDidBecomeActive()` / `sessionDidEnterBackground()` for lifecycle; local mode does not start a session monitor or reconnect loop. `requiresLogin` is an explicit authentication/access failure, not connectivity. `restoringSession` lets the root avoid flashing an empty login form. `isOffline` selects the cached presentation without discarding Web state. A resumed native reader must not be switched to Web just because a background probe succeeds.
 
 Tests inject `GammaSessionPersistence`, a temporary cache root and URLProtocol-backed API factory; they never access a real Keychain or server. `GammaSessionPersistenceTests` covers restoration, cookie isolation, exact-workspace role validation, 401/null-user, wrong account, viewer downgrade, timeout recovery, grace, logout retention, failed login atomicity and stale-generation responses. Swift tests require the parent's simulator build; source-contract checks do not substitute for device flight-mode validation.
 

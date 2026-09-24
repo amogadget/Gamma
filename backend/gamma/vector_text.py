@@ -263,6 +263,9 @@ def math(tex: str, size: float = 8.0):
 # system CJK fonts (msyh.ttc, simsun.ttc, NotoSansCJK.ttc). The Docker image
 # installs fonts-droid-fallback for the first entry.
 _CJK_FONTS = (
+    # Optional signed app-bundle resource for the embedded iOS backend. Desktop
+    # installations keep the existing system-font search unchanged.
+    str(Path(__file__).parent / "resources" / "fonts" / "DroidSansFallbackFull.ttf"),
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
     "/usr/share/fonts/truetype/droid/DroidSansFallback.ttf",
     "/usr/share/fonts/truetype/arphic/uming.ttf",

@@ -140,6 +140,15 @@ struct GammaSessionInfo: Decodable, Equatable, Sendable {
 /// building a new client.
 final class GammaAPI: NSObject, URLSessionTaskDelegate {
     let baseURL: URL
+    private(set) var localServerAccess: GammaLocalServerAccess?
+    /// Stable identity for cache construction AND workspace/cache binding checks.
+    /// The transport's ephemeral local port must never key a durable outbox.
+    var cacheServerIdentity: String {
+        (localServerAccess?.cacheIdentity ?? baseURL.absoluteString)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+    var cacheIdentity: String { cacheServerIdentity }
     /// The workspace this client speaks for. `""` is the short-lived *unbound*
     /// state used only to log in and read `/api/session`; see `bind(workspace:)`.
     private(set) var workspace: String
@@ -176,6 +185,23 @@ final class GammaAPI: NSObject, URLSessionTaskDelegate {
         config.urlCache = nil
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
+    /// Only the trusted host can supply local authority. No remote initializer
+    /// accepts HTTP, and no local credentials are exported to session persistence.
+    init(localServer access: GammaLocalServerAccess, configuration: URLSessionConfiguration? = nil) {
+        baseURL = access.baseURL
+        workspace = access.workspace
+        localServerAccess = access
+        authenticatedUsername = access.account
+        super.init()
+        let config = (configuration?.copy() as? URLSessionConfiguration) ?? .ephemeral
+        config.urlCache = nil
+        // Cookies are applied explicitly per request: Foundation cookies do not
+        // have reliable port isolation, and must never enter a shared cookie jar.
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.urlCredentialStorage = nil
+        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
     /// Exactly the server's own rule for the id that names `workspaces/<id>/`
     /// (`backend/gamma/db.py`: `_WS_ID_RE = ^[A-Za-z0-9_-]{1,64}$`), because this
     /// value is worn as the `X-Gamma-Workspace` header. A stricter charset than
@@ -205,7 +231,9 @@ final class GammaAPI: NSObject, URLSessionTaskDelegate {
                     completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, url.scheme == baseURL.scheme, url.host == baseURL.host,
               url.port == baseURL.port else { completionHandler(nil); return }
-        completionHandler(request)
+        guard url.user == nil, url.password == nil else { completionHandler(nil); return }
+        if let access = localServerAccess { completionHandler(access.authorize(request)) }
+        else { completionHandler(request) }
     }
     @discardableResult
     func login(username: String, password: String) async throws -> String {
@@ -216,12 +244,13 @@ final class GammaAPI: NSObject, URLSessionTaskDelegate {
         return actual
     }
     func sessionCookies() -> [HTTPCookie] {
-        (session.configuration.httpCookieStorage?.cookies(for: baseURL.appendingPathComponent("api/session")) ?? [])
+        guard localServerAccess == nil else { return [] }
+        return (session.configuration.httpCookieStorage?.cookies(for: baseURL.appendingPathComponent("api/session")) ?? [])
             .filter { $0.name == "session" }
     }
     /// Restoring cookies grants no workspace access; /api/session must validate first.
     func installSessionCookies(_ cookies: [HTTPCookie]) {
-        guard let host = baseURL.host?.lowercased() else { return }
+        guard localServerAccess == nil, let host = baseURL.host?.lowercased() else { return }
         let storage = session.configuration.httpCookieStorage
         for old in storage?.cookies ?? [] { storage?.deleteCookie(old) }
         for cookie in cookies where cookie.name == "session" {
@@ -239,6 +268,9 @@ final class GammaAPI: NSObject, URLSessionTaskDelegate {
     /// open. Identity comes from the cookie, never from a bridge message.
     func session() async throws -> GammaSessionInfo {
         let info = try JSONDecoder().decode(GammaSessionInfo.self, from: await get("api/session"))
+        if let access = localServerAccess {
+            guard info.user == access.account, info.option(access.workspace) != nil else { throw APIError.accountChanged }
+        }
         authenticatedUsername = info.user
         return info
     }
@@ -372,6 +404,10 @@ final class GammaAPI: NSObject, URLSessionTaskDelegate {
     /// client therefore cannot make a workspace-scoped request at all.
     func makeRequest(_ path: String) throws -> URLRequest {
         var request = URLRequest(url: endpoint(path))
+        if let access = localServerAccess {
+            guard let authorized = access.authorize(request) else { throw APIError.message("Invalid local server destination.") }
+            request = authorized
+        }
         if Self.sessionPaths.contains(path) { return request }
         guard !workspace.isEmpty else { throw APIError.workspaceUnbound }
         if let authenticatedUsername { request.setValue(authenticatedUsername, forHTTPHeaderField: "X-Gamma-User") }

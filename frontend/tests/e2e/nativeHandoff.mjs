@@ -495,6 +495,152 @@ try {
     } finally { await context.close(); }
   });
 
+  await check("native return restores page-local offset and repeated request never jumps again", async () => {
+    const { context, page } = await handoffPage({ session: { ids: [WS], role: "owner" } });
+    try {
+      const payload = { server: base, user: USER, workspace: WS, pageID: PAPER.id, docID: "fixture", requestID: "return-1", viewport: { pageIndex: 2, anchorX: 0, anchorY: 0.375 } };
+      const result = await page.evaluate(p => window.__GAMMA_NATIVE_CONTROL__.restorePosition(p), payload);
+      assert.equal(result.ok, true, JSON.stringify(result));
+      const anchor = await page.evaluate(() => {
+        const s = document.querySelector('.pdfViewer'), p = s.querySelector('[data-page="3"]');
+        return (s.getBoundingClientRect().top + s.clientTop - p.getBoundingClientRect().top) / p.getBoundingClientRect().height;
+      });
+      assert(Math.abs(anchor - .375) < .003, `actual page anchor ${anchor}`);
+      const before = await page.evaluate(() => { const s = document.querySelector('.pdfViewer'); s.scrollTop += 80; return s.scrollTop; });
+      assert.equal((await page.evaluate(p => window.__GAMMA_NATIVE_CONTROL__.restorePosition(p), payload)).ok, true);
+      assert.equal(await page.locator('.pdfViewer').evaluate(s => s.scrollTop), before);
+      assert.equal((await page.evaluate(p => window.__GAMMA_NATIVE_CONTROL__.restorePosition({...p,user:'wrong',requestID:'bad'}), payload)).reason, 'identity-mismatch');
+      assert.equal((await page.evaluate(() => window.__GAMMA_NATIVE_CONTROL__.prepareDisconnect({}))).ok, true);
+      assert.equal(await page.locator('#root').evaluate(r => r.inert), true);
+      await page.evaluate(() => window.__GAMMA_NATIVE_CONTROL__.cancelDisconnect());
+      assert.equal(await page.locator('#root').evaluate(r => r.inert), false);
+      await page.addInitScript(p => { window.__GAMMA_NATIVE_RETURN__ = p; }, { ...payload, requestID: 'boot-return', viewport: {...payload.viewport,anchorY:.625} });
+      await page.reload();
+      await page.waitForFunction(() => window.__GAMMA_NATIVE_CONTROL__ && !window.__GAMMA_NATIVE_RETURN__);
+      const bootAnchor = await page.evaluate(() => {
+        const s = document.querySelector('.pdfViewer'), p = s.querySelector('[data-page="3"]');
+        return (s.getBoundingClientRect().top + s.clientTop - p.getBoundingClientRect().top) / p.getBoundingClientRect().height;
+      });
+      assert(Math.abs(bootAnchor - .625) < .003, `boot anchor ${bootAnchor}`);
+    } finally { await context.close(); }
+  });
+
+  await check("cancelled delayed native subtree cannot navigate or jump after a newer return", async () => {
+    // Hold both await boundaries independently: identity verification, then
+    // openBlock's own fetch. The cancelled page differs so stale navigation is visible.
+    for (const delayedRequest of [1, 2]) {
+      const { context, page } = await handoffPage({ session: { ids: [WS], role: "owner" } });
+      let release;
+      const gate = new Promise(resolve => { release = resolve; });
+      let entered;
+      const delayed = new Promise(resolve => { entered = resolve; });
+      try {
+        let requests = 0;
+        await page.route('**/api/blocks/cancelled-paper/subtree', async route => {
+          if (++requests === delayedRequest) { entered(); await gate; }
+          await route.fulfill({contentType:'application/json',body:JSON.stringify({block:{...PAPER,id:'cancelled-paper',content:'Must not open late'},seq:1})});
+        });
+        const payload = {server:base,user:USER,workspace:WS,pageID:'cancelled-paper',docID:'fixture',requestID:`cancel-${delayedRequest}`,viewport:{pageIndex:0,anchorX:0,anchorY:0}};
+        await page.evaluate(p => { window.__cancelledRestore = window.__GAMMA_NATIVE_CONTROL__.restorePosition(p); }, payload);
+        await delayed;
+        await page.evaluate(id => { window.__GAMMA_NATIVE_CANCELLED_REQUEST__ = id; }, payload.requestID);
+        const newer = {...payload,pageID:PAPER.id,requestID:`new-${delayedRequest}`,viewport:{pageIndex:2,anchorX:0,anchorY:.375}};
+        const result = await page.evaluate(p => window.__GAMMA_NATIVE_CONTROL__.restorePosition(p), newer);
+        assert.equal(result.ok,true,JSON.stringify(result));
+        const before = await page.locator('.pdfViewer').evaluate(s => s.scrollTop);
+        release();
+        const cancelled = await page.evaluate(() => window.__cancelledRestore);
+        assert.equal(cancelled.ok,false); assert.equal(cancelled.reason,'cancelled');
+        assert.equal(new URL(page.url()).searchParams.get('block'),PAPER.id);
+        assert.equal(await page.locator('.titleText').textContent(),'Native paper');
+        assert.equal(await page.locator('.pdfViewer').evaluate(s => s.scrollTop),before);
+      } finally { release(); await context.close(); }
+    }
+  });
+
+  await check("disconnect refuses failed title save and exports scoped page mutation", async () => {
+    const { context, page } = await handoffPage({ session: { ids: [WS], role: "owner" } });
+    try {
+      await page.route('**/api/blocks/paper-native', route => route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({detail:'offline'})}));
+      await page.locator('.titleText.editable').click();
+      await page.locator('.titleEdit').fill('Recover this unsaved title');
+      const result = await page.evaluate(() => window.__GAMMA_NATIVE_CONTROL__.prepareDisconnect({}));
+      assert.equal(result.ok,false);
+      assert.equal(result.recovery.complete,true);
+      const write=result.recovery.pageWrites.find(e=>e.path.endsWith('/blocks/paper-native'));
+      assert.equal(write.workspace,WS); assert.equal(write.user,USER);
+      assert.equal(JSON.parse(write.body).content,'Recover this unsaved title');
+      assert.equal(await page.locator('#root').evaluate(r=>r.inert),true);
+      await page.evaluate(() => window.__GAMMA_NATIVE_CONTROL__.cancelDisconnect());
+      assert.equal(await page.locator('#root').evaluate(r=>r.inert),false);
+    } finally { await context.close(); }
+  });
+
+  await check("disconnect control stays available without a PDF and on signed-out Login", async () => {
+    for (const signedIn of [true, false]) {
+      const context = await browser.newContext();
+      try {
+        const p = await context.newPage();
+        await p.route('**/api/**', route => {
+          const pathname = new URL(route.request().url()).pathname;
+          const body = pathname === '/api/session' ? signedIn ? {user:USER,default_workspace:WS,workspaces:[{id:WS,name:'Personal',role:'owner',kind:'personal'}]} : {user:null} : {};
+          return route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+        });
+        await p.goto(`${base}/`);
+        await p.waitForFunction(() => !!window.__GAMMA_NATIVE_CONTROL__);
+        assert.equal((await p.evaluate(() => window.__GAMMA_NATIVE_CONTROL__.prepareDisconnect({}))).ok,true);
+        await p.evaluate(() => window.__GAMMA_NATIVE_CONTROL__.cancelDisconnect());
+        assert.equal(await p.locator('#root').evaluate(r=>r.inert),false);
+      } finally { await context.close(); }
+    }
+  });
+
+  await check("embedded local account is presentation-only; remote logout still revokes the session", async () => {
+    for (const local of [true, false]) {
+      const context = await browser.newContext();
+      try {
+        await context.addInitScript(local => {
+          window.__GAMMA_IPAD__ = true;
+          if (local) window.__GAMMA_LOCAL_ORIGIN__ = location.origin;
+        }, local);
+        const p = await context.newPage();
+        let signedIn = true;
+        const mutations = [], errors = [];
+        p.on('pageerror', error => errors.push(error.message));
+        await p.route('**/api/**', route => {
+          const pathname = new URL(route.request().url()).pathname;
+          if (route.request().method() === 'DELETE' || pathname === '/api/logout') mutations.push(pathname);
+          if (pathname === '/api/logout') signedIn = false;
+          const body = pathname === '/api/session' ? signedIn ? {user:'gamma-local-random',is_admin:true,is_guest:false,default_workspace:WS,workspaces:[{id:WS,name:'Personal',role:'owner',kind:'personal'}]} : {user:null} : {};
+          return route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+        });
+        await p.goto(`${base}/`);
+        await p.getByRole('button', {name:'Account & settings', exact:true}).click();
+        assert.equal(await p.locator('.userCardName').textContent(), local ? 'On this iPad' : 'gamma-local-random');
+        const logout = p.getByRole('button', {name:'Log out', exact:true});
+        assert.equal(await logout.count(), local ? 0 : 1);
+        if (local) {
+          assert.match(await p.locator('.userPopover').textContent(), /Use Server in the app toolbar/);
+          await p.getByRole('button', {name:'Settings…', exact:true}).click();
+          await p.waitForSelector('.settingsModal');
+          assert.deepEqual(mutations, [], 'opening account/settings must never delete owner or revoke local session');
+          signedIn = false;
+          await p.reload();
+          await p.getByText('The local session is unavailable.', {exact:false}).waitFor();
+          assert.equal(await p.locator('input[type=password]').count(), 0);
+          assert.equal(await p.getByRole('button', {name:'Continue as guest'}).count(), 0);
+          assert.deepEqual(mutations, []);
+        } else {
+          await logout.click();
+          await p.getByRole('button', {name:'Log in', exact:true}).waitFor();
+          assert.deepEqual(mutations, ['/api/logout']);
+          assert.equal(await p.locator('input[type=password]').count(), 1);
+        }
+        assert.deepEqual(errors, []);
+      } finally { await context.close(); }
+    }
+  });
+
   await check("a plain browser is offered no native handoff", async () => {
     const plain = await browser.newContext({ viewport: { width: 1200, height: 900 } });
     const p2 = await plain.newPage();

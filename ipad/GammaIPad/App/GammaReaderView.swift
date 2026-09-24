@@ -7,12 +7,16 @@ struct GammaReaderView: View {
     let paper: GammaPaper
     let document: PDFDocument
     let initialViewport: GammaReadingPosition?
+    let viewportController: GammaPDFViewportController?
+    let onViewportChanged: (GammaReadingPosition) -> Void
     @State private var currentPage = 0
     @State private var requestedPage: Int?
     @State private var pencil = true
     @State private var notesVisible = true
     @State private var notesSheet = false
     @State private var localSaveError: String?
+    @State private var activeInkPages = Set<Int>()
+    @State private var failedInkPages = Set<Int>()
     @State private var confirmingLeave = false
     @State private var showStatus = false
     @State private var collapsed = Set<String>()
@@ -22,7 +26,11 @@ struct GammaReaderView: View {
     @State private var selectionReset = 0
     @ObservedObject private var recorder: GammaRecordingController
     init(workspace: GammaWorkspace, paper: GammaPaper, document: PDFDocument,
-         initialViewport: GammaReadingPosition? = nil) {
+         initialViewport: GammaReadingPosition? = nil,
+         viewportController: GammaPDFViewportController? = nil,
+         onViewportChanged: @escaping (GammaReadingPosition) -> Void = { _ in }) {
+        self.viewportController = viewportController
+        self.onViewportChanged = onViewportChanged
         self.workspace = workspace; self.paper = paper; self.document = document
         self.initialViewport = initialViewport
         self._requestedPage = State(initialValue: initialViewport?.pageIndex)
@@ -36,7 +44,30 @@ struct GammaReaderView: View {
             let wide = geometry.size.width >= 900
             VStack(spacing: 0) {
                 header(wide: wide)
-                if let message = workspace.page?.timInkErrors?.sorted(by: { $0.key < $1.key }).first?.value {
+                if workspace.hasFailedNativeSave {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(localSaveError ?? workspace.errorMessage ?? "A local change has not been saved. Keep this document open.")
+                            .font(.caption)
+                        Spacer()
+                        Button("Retry save") {
+                            if workspace.retryNativeSave() { localSaveError = nil }
+                        }.font(.caption).disabled(workspace.busy)
+                    }.foregroundStyle(.orange).padding(.horizontal, 14).padding(.vertical, 8)
+                        .accessibilityIdentifier("retry-local-primary-save")
+                }
+                if !failedInkPages.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Handwriting is not saved. Keep this reader open.")
+                            Text("Restore storage access; saving retries automatically.")
+                        }.font(.caption)
+                        Spacer()
+                    }.foregroundStyle(.orange).padding(.horizontal, 14).padding(.vertical, 8)
+                        .accessibilityIdentifier("unsaved-handwriting-warning")
+                }
+                if !workspace.isLocal, let message = workspace.page?.timInkErrors?.sorted(by: { $0.key < $1.key }).first?.value {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle")
                         Text("Browser handwriting unavailable: \(message)").font(.caption).lineLimit(3)
@@ -66,7 +97,10 @@ struct GammaReaderView: View {
         .onChange(of: recorder.playbackRecordingID) { _, _ in followReplayPage() }
         .confirmationDialog("Leave despite a local storage error?", isPresented: $confirmingLeave) {
             Button("Stay in Reader", role: .cancel) {}
-            Button("Leave — unsaved strokes may be lost", role: .destructive) { workspace.closeReader() }
+            Button("Leave — unsaved strokes may be lost", role: .destructive) {
+                guard !workspace.nativeWriteInProgress else { showStatus = true; return }
+                workspace.closeReader()
+            }.disabled(workspace.nativeWriteInProgress)
         }
     }
 
@@ -115,7 +149,7 @@ struct GammaReaderView: View {
                     do {
                         try workspace.createHighlights(textSelection, color: color)
                         textSelection = []; selectionReset += 1
-                        Task { await workspace.sync() }
+                        if !workspace.isLocal { Task { await workspace.sync() } }
                     } catch { localSaveError = error.localizedDescription }
                 } label: {
                     Circle().fill(Color(uiColor: GammaPDFHighlight.uiColor(color).withAlphaComponent(1)))
@@ -130,12 +164,27 @@ struct GammaReaderView: View {
     private func header(wide: Bool) -> some View {
         HStack(spacing: 12) {
             iconButton("Library", symbol: "house") {
+                guard !workspace.nativeWriteInProgress else { showStatus = true; return }
                 if localSaveError != nil { confirmingLeave = true } else { workspace.closeReader() }
             }.disabled(workspace.busy)
             Rectangle().fill(GammaTheme.line).frame(width: 1, height: 20)
             Text(paper.content.isEmpty ? "Untitled PDF" : paper.content)
                 .font(.system(size: 14, weight: .medium)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             Text("\(currentPage + 1) / \(document.pageCount)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+            if workspace.isLocal {
+                Button { showStatus.toggle() } label: {
+                    Image(systemName: localSaveError != nil || workspace.errorMessage != nil || recorder.hasPendingSave ? "exclamationmark.circle" : "ipad")
+                        .foregroundStyle(localSaveError != nil || workspace.errorMessage != nil || recorder.hasPendingSave ? Color.orange : Color.secondary)
+                        .frame(width: 32, height: 34)
+                }.buttonStyle(.plain).accessibilityLabel("On This iPad")
+                    .popover(isPresented: $showStatus) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("On This iPad").font(.headline)
+                            Text(localSaveError ?? workspace.errorMessage ?? (recorder.hasPendingSave ? "Recording metadata is not saved. Keep this page open." : workspace.nativeWriteInProgress ? "Saving handwriting. Keep this reader open." : "Saved on This iPad"))
+                                .font(.subheadline)
+                        }.padding(20).frame(width: 320).presentationCompactAdaptation(.popover)
+                    }
+            } else {
             Button { showStatus.toggle() } label: {
                 Image(systemName: workspace.syncing ? "arrow.triangle.2.circlepath" : workspace.syncUnavailable || workspace.errorMessage != nil || localSaveError != nil ? "exclamationmark.circle" : workspace.pendingCount > 0 ? "icloud.and.arrow.up" : "checkmark.icloud")
                     .foregroundStyle(workspace.syncUnavailable || localSaveError != nil ? Color.orange : Color.secondary)
@@ -148,6 +197,7 @@ struct GammaReaderView: View {
                         Button("Retry sync") { Task { await workspace.retrySync() } }.disabled(workspace.syncing)
                     }.padding(20).frame(width: 320).presentationCompactAdaptation(.popover)
                 }
+            }
             iconButton("Select text", symbol: "text.cursor", active: selectingText) {
                 selectingText.toggle(); textSelection = []; selectionReset += 1
             }.disabled(replaying || workspace.busy)
@@ -176,14 +226,27 @@ struct GammaReaderView: View {
                 do {
                     try workspace.saveDrawing(blockID: inkID, pdfPage: page, drawing: drawing,
                                               pageID: paper.id, docID: paper.properties.docID)
-                    localSaveError = nil
-                } catch { localSaveError = error.localizedDescription; throw error }
-            }, onError: { localSaveError = $0 },
+                    failedInkPages.remove(page)
+                    if failedInkPages.isEmpty { localSaveError = nil }
+                    workspace.nativeWriteInProgress = !activeInkPages.isEmpty || !failedInkPages.isEmpty
+                } catch {
+                    failedInkPages.insert(page)
+                    workspace.nativeWriteInProgress = true
+                    localSaveError = error.localizedDescription
+                    throw error
+                }
+            }, onError: {
+                // PDFInkView defers error presentation. The synchronous save
+                // closure owns the failure latch, so a stale notification after
+                // a successful retry must not re-latch a now-clean canvas.
+                localSaveError = $0
+            },
             isDrawing: pencil && inkID != nil && !workspace.busy && !replaying && !selectingText,
             backgroundDrawing: { try workspace.background(excluding: inkID, pdfPage: $0) },
             editablePage: workspace.selectedInkPage, contentRevision: workspace.contentRevision,
             onPageChanged: { currentPage = $0; workspace.pageNavigated($0 + 1) }, requestedPage: requestedPage,
             requestedViewport: initialViewport,
+            viewportController: viewportController, onViewportChanged: onViewportChanged,
             highlights: { index in
                 (workspace.page?.blocks ?? []).compactMap { block in
                     guard block.isHighlight, let position = block.properties.pdfPosition,
@@ -203,8 +266,17 @@ struct GammaReaderView: View {
                 workspace.select(id)
                 pencil = true
                 notesVisible = true
-            }, onInkBegan: { _ in workspace.inkBegan(blockID: inkID) },
-            onInkEnded: { _ in workspace.inkEnded(blockID: inkID) },
+            }, onInkBegan: { page in
+                activeInkPages.insert(page)
+                workspace.nativeWriteInProgress = true
+                workspace.inkBegan(blockID: inkID)
+            }, onInkEnded: { page in
+                // End is called even when the preceding persist failed (and
+                // when a clean overlay is released); never clear that failure.
+                activeInkPages.remove(page)
+                workspace.nativeWriteInProgress = !activeInkPages.isEmpty || !failedInkPages.isEmpty
+                workspace.inkEnded(blockID: inkID)
+            },
             replayActive: replaying,
             replayDrawing: { workspace.replayDrawing(pdfPage: $0) },
             replayHitTest: { workspace.replaySeek(at: $1, pdfPage: $0, tolerance: $2) },
@@ -319,7 +391,7 @@ struct GammaReaderView: View {
                 .font(.system(size: 14)).scrollContentBackground(.hidden)
                 .frame(height: 110).padding(.horizontal, 10).disabled(workspace.busy || replaying || selected.isTimInk)
                 .accessibilityIdentifier("block-content-editor")
-            if workspace.page?.outbox.contains(where: { $0.blockID == selected.id && $0.conflict }) == true {
+            if !workspace.isLocal, workspace.page?.outbox.contains(where: { $0.blockID == selected.id && $0.conflict }) == true {
                 HStack {
                     Text("Conflict").foregroundStyle(.orange)
                     Button("Keep local") { Task { await workspace.resolveConflict(blockID: selected.id, keepLocal: true) } }

@@ -5,7 +5,7 @@ import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
 import ImportReviewDialog from "../transfers/ImportReviewDialog";
 import { parsePdfCitation } from "../pdf/pdfCitation.js";
-import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
+import { API, apiJson as baseApiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -73,7 +73,17 @@ import * as inkStore from "../ink/inkStore";
 import { usePageCollab } from "../collaboration/usePageCollab";
 import { blocksToPdfInk } from "../native/inkBlock.js";
 import { isNativeClaim, nativeClaimKind } from "../native/nativeClaim.js";
-import { nativePDFRequest } from "../native/nativeBridge.js";
+import { isEmbeddedLocalRuntime } from "../native/localRuntime.js";
+
+function LocalRuntimeRecovery() {
+  return <div className="app"><div className="loginPage"><div className="loginCard">
+    <div className="loginTitle">Gamma</div>
+    <p className="loginSubtitle">On this iPad</p>
+    <p className="loginConflictText">The local session is unavailable. Use Server in the app toolbar to reopen On this iPad. No local password is needed.</p>
+    <p className="loginConflictHint">To connect to a remote server, use Server in the app toolbar.</p>
+  </div></div></div>;
+}
+import { nativePDFRequest, nativeReturnRequest, applyNativeViewport, prepareNativeDisconnect } from "../native/nativeBridge.js";
 import NoteReplayPlayer, { useReplayAssets } from "../native/NoteReplayPlayer.jsx";
 import { applyOps, applyPatch, keepUiFlags } from "../shared/model/blockOps";
 import { PresenceBar } from "../collaboration/Presence";
@@ -335,6 +345,23 @@ function TransferRow({ status, icon, name, info, progress, onStop }) {
   );
 }
 
+// Direct page mutations (title, tags, metadata, cross-page edits) do not use
+// the collaboration queue. Retain only their JSON body, never request headers.
+const nativePageWrites = new Map();
+function apiJson(path, init) {
+  if (!/\/api\/(blocks|pages)\//.test(path) || !["POST", "PUT", "PATCH", "DELETE"].includes(init?.method)) return baseApiJson(path, init);
+  const key = Symbol(path);
+  const entry = { server: location.origin, user: getExpectedUser(), workspace: getCurrentWorkspace(), path,
+    method: init.method, body: typeof init.body === "string" ? init.body : null, complete: init.body == null || typeof init.body === "string" };
+  nativePageWrites.set(key, entry);
+  const promise = baseApiJson(path, init).then(result => {
+    if (nativePageWrites.get(key) === entry) nativePageWrites.delete(key);
+    return result;
+  }).finally(() => { entry.promise = null; });
+  entry.promise = promise;
+  return promise;
+}
+
 export default function App() {
   // Authorization must never mount library effects (saved-page restore,
   // autosave, navigation hotkeys). They can otherwise replace its URL.
@@ -370,6 +397,8 @@ function LibraryApp() {
   const [wsReady, setWsReady] = useState(shareMode);
   const [workspaceUnavailable, setWorkspaceUnavailable] = useState(false);
   const wsId = workspace?.id || "";
+
+  const embeddedLocal = isEmbeddedLocalRuntime();
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
   const [authUser, setAuthUser] = useState(shareMode ? {user:"_public"} : null);
@@ -741,9 +770,16 @@ function LibraryApp() {
   }
 
   async function doLogout() {
+    if (embeddedLocal) return; // The native host owns local-session recovery.
     // Flush pending edits while the session is still valid. Setting authUser
     // false after the cookie is removed performs a local-only workspace
     // teardown, without starting reads that race logout.
+    const saved = await nativeControlHandlersRef.current.prepareDisconnect();
+    await nativeControlHandlersRef.current.cancelDisconnect();
+    if (!saved.ok) {
+      setStatus("Notes could not be saved. Retry, or use Disconnect to preserve recovery data before leaving.");
+      return;
+    }
     leaveCurrentPage();
     await fetch(`${API}/logout`, { method: "POST", credentials: "include" });
     // Logout kills the browser-wide session: tell other tabs of this account
@@ -3787,8 +3823,14 @@ function LibraryApp() {
   // workspace owns the document until it returns through a reload.
   const nativeViewportRef = useRef(null);
   const nativeIdentityRef = useRef(null);
-  nativeIdentityRef.current = { pageID: focusedBlockId, docID: docId, workspaceID: getCurrentWorkspace() || workspace?.id || "" };
+  nativeIdentityRef.current = { user: sessionUser, pageID: focusedBlockId, docID: docId, workspaceID: getCurrentWorkspace() || workspace?.id || "" };
   const nativeHandoffPendingRef = useRef(false);
+  const nativeReturnPendingRef = useRef(null);
+  const nativeControlHandlersRef = useRef(null);
+  const nativeDisconnectRef = useRef(null);
+  const nativeRecoveryScopeRef = useRef(null);
+  if (sessionUser && wsReady) nativeRecoveryScopeRef.current = { server: location.origin, user: sessionUser, workspace: getCurrentWorkspace() };
+  const inkDraftScopesRef = useRef({});
   async function openInNativeReader() {
     const bridge = window.webkit?.messageHandlers?.gammaNative;
     const workspaceID = getCurrentWorkspace() || workspace?.id || "";
@@ -4780,7 +4822,7 @@ function LibraryApp() {
   }
 
   async function openBlock(blockId, opts) {
-    if (!blockId || shareMode) return;
+    if (!blockId || shareMode || (opts?.canApply && !opts.canApply())) return;
     // Back records LINK jumps only — callers opt in via {pushNav: true}.
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
@@ -4790,6 +4832,7 @@ function LibraryApp() {
     setStatus("Opening...");
     try {
       const subtreeData = await apiJson(`${API}/blocks/${blockId}/subtree`);
+      if (opts?.canApply && !opts.canApply()) return;
       const block = subtreeData.block;
       if (!block) throw new Error("Block not found");
       const props = block.properties || {};
@@ -5704,7 +5747,10 @@ function LibraryApp() {
     setNativeInkJumpRequest(null);
   }, [focusedBlockId, sessionUser, workspace?.id]);
 
+  const inkFlushInFlightRef = useRef(null);
   const flushInk = useCallback(async () => {
+    if (inkFlushInFlightRef.current) await inkFlushInFlightRef.current;
+    const run = (async () => {
     clearTimeout(inkTimerRef.current);
     inkTimerRef.current = 0;
     const json = { "Content-Type": "application/json" };
@@ -5728,7 +5774,139 @@ function LibraryApp() {
         if (!inkTimerRef.current) inkTimerRef.current = setTimeout(flushInk, 2000);
       }
     }
+    })();
+    inkFlushInFlightRef.current = run;
+    try { await run; } finally { if (inkFlushInFlightRef.current === run) inkFlushInFlightRef.current = null; }
   }, []);
+
+  // Installed even on the login/home screens. Native owns the confirmation UI;
+  // failure keeps all browser state alive until cancel or explicit recovery/export.
+  nativeControlHandlersRef.current = {
+    async prepareDisconnect() {
+      if (nativeDisconnectRef.current) return nativeDisconnectRef.current;
+      const root = document.getElementById("root");
+      document.activeElement?.blur?.();
+      if (root) root.inert = true;
+      const scope = { ...nativeRecoveryScopeRef.current, pageID: focusedBlockId, docID: docId };
+      const snapshot = () => {
+        const collab = collabRef.current.recoverySnapshot();
+        const pageWrites = [...nativePageWrites.values()].map(({ promise, ...entry }) => entry);
+        const data = { version: 1, ...scope, complete: collab.complete && pageWrites.every(e => e.complete), collaboration: collab, pageWrites,
+          inkDrafts: inkStore.dirtyDrafts().map(d => ({ ...d, ...inkDraftScopesRef.current[d.id] })) };
+        const text = JSON.stringify(data);
+        return text.length <= 12 * 1024 * 1024 ? JSON.parse(text)
+          : { version: 1, ...scope, complete: false, reason: "recovery-too-large" };
+      };
+      const run = prepareNativeDisconnect({
+        settle: () => new Promise(resolve => setTimeout(resolve, 0)),
+        flush: async () => {
+          await Promise.allSettled([...nativePageWrites.values()].map(e => e.promise).filter(Boolean));
+          await collabRef.current.flush();
+        }, flushInk,
+        hasPending: () => {
+          const recovery = collabRef.current.recoverySnapshot();
+          return nativePageWrites.size > 0 || collabRef.current.hasPending() || !recovery.complete || recovery.rejected.length > 0;
+        }, dirtyInk: () => inkStore.dirtyDrafts(), recovery: snapshot,
+      });
+      nativeDisconnectRef.current = run;
+      try { return await run; } finally { nativeDisconnectRef.current = null; }
+    },
+    async cancelDisconnect() {
+      const root = document.getElementById("root");
+      if (root) root.inert = false;
+      window.__GAMMA_NATIVE_ACTIVE__ = false;
+      return { ok: true };
+    },
+    async restorePosition(raw) {
+      const payload = nativeReturnRequest(raw, location.origin);
+      if (!payload) return { ok: false, reason: "invalid-position" };
+      if (!wsReady || authUser === null) return { ok: false, reason: "not-ready" };
+      if (payload.user !== sessionUser || payload.workspace !== getCurrentWorkspace() || shareMode) return { ok: false, reason: "identity-mismatch" };
+      const key = payload.requestID || JSON.stringify(payload);
+      if (nativeReturnPendingRef.current?.pending && nativeReturnPendingRef.current.key === window.__GAMMA_NATIVE_CANCELLED_REQUEST__) {
+        cancelPdfRestore();
+        nativeReturnPendingRef.current = null;
+      }
+      if (window.__GAMMA_NATIVE_CANCELLED_REQUEST__ === key) return { ok: false, reason: "cancelled" };
+      if (nativeReturnPendingRef.current?.key === key) return nativeReturnPendingRef.current.promise;
+      if (nativeReturnPendingRef.current?.pending) return { ok: false, reason: "restore-in-progress" };
+      const state = { key, pending: true };
+      nativeReturnPendingRef.current = state;
+      const isCurrent = () => nativeReturnPendingRef.current === state && window.__GAMMA_NATIVE_CANCELLED_REQUEST__ !== key;
+      state.promise = (async () => {
+        try {
+          // Verify before navigation, including retained WK views whose current
+          // page can differ from the native reader's most recent document.
+          const data = await apiJson(`${API}/blocks/${encodeURIComponent(payload.pageID)}/subtree`);
+          if (!isCurrent()) return { ok: false, reason: "cancelled" };
+          if (data.block?.properties?.doc_id !== payload.docID) return { ok: false, reason: "document-mismatch" };
+          if (nativeIdentityRef.current.user !== payload.user || nativeIdentityRef.current.workspaceID !== payload.workspace) return { ok: false, reason: "identity-mismatch" };
+          cancelPdfRestore();
+          cancelCoarseRestoreRef.current();
+          const url = await openBlock(payload.pageID, { canApply: isCurrent });
+          if (!isCurrent()) return { ok: false, reason: "cancelled" };
+          if (!url) return { ok: false, reason: "open-failed" };
+          setPdfHidden(false);
+          cancelPdfRestore();
+          cancelCoarseRestoreRef.current();
+          restoredPdfUrlRef.current = url;
+          restoringForRef.current = payload.pageID;
+          const token = restoreTokenRef.current;
+          let previous = "", stable = 0;
+          for (let tries = 0; tries < 300; tries++) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            if (!isCurrent()) return { ok: false, reason: "cancelled" };
+            if (restoreTokenRef.current !== token) return { ok: false, reason: "navigation-changed" };
+            const identity = nativeIdentityRef.current;
+            if (identity.user !== payload.user || identity.workspaceID !== payload.workspace) return { ok: false, reason: "identity-mismatch" };
+            if (identity.pageID !== payload.pageID || identity.docID !== payload.docID || identity.workspaceID !== payload.workspace) continue;
+            if (pdfRenderedUrlRef.current !== url) continue;
+            const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+            const page = scroller?.querySelector(`.pdfPageWrap[data-page="${payload.viewport.pageIndex + 1}"]`);
+            const box = page?.getBoundingClientRect();
+            if (!box?.width || !box?.height) continue;
+            const signature = [box.width, box.height, box.top + scroller.scrollTop, scroller.clientWidth, scroller.clientHeight, scroller.scrollHeight].join(":");
+            stable = signature === previous ? stable + 1 : 0;
+            previous = signature;
+            if (stable < 4) continue;
+            if (!isCurrent()) return { ok: false, reason: "cancelled" };
+            cancelCoarseRestoreRef.current();
+            if (!applyNativeViewport(scroller, payload.viewport)) continue;
+            tabScrollRef.current[payload.pageID] = { top: scroller.scrollTop, scale: pdfEffScaleRef.current };
+            recordReadPos(payload.pageID, payload.viewport.pageIndex + 1);
+            await nativeControlHandlersRef.current.cancelDisconnect();
+            if (!isCurrent()) return { ok: false, reason: "cancelled" };
+            return { ok: true, reason: "restored" };
+          }
+          return { ok: false, reason: "layout-not-ready" };
+        } catch (error) { return { ok: false, reason: "restore-failed", detail: String(error.message || error) }; }
+        finally {
+          state.pending = false;
+          if (nativeReturnPendingRef.current === state) restoringForRef.current = null;
+        }
+      })();
+      const result = await state.promise;
+      if (!result.ok && nativeReturnPendingRef.current === state) nativeReturnPendingRef.current = null;
+      return result;
+    },
+  };
+  useEffect(() => {
+    const control = { version: 1 };
+    for (const method of ["restorePosition", "prepareDisconnect", "cancelDisconnect"]) {
+      control[method] = payload => nativeControlHandlersRef.current[method](payload);
+    }
+    window.__GAMMA_NATIVE_CONTROL__ = control;
+    window.dispatchEvent(new Event("gamma:native-control-ready"));
+    return () => { if (window.__GAMMA_NATIVE_CONTROL__ === control) delete window.__GAMMA_NATIVE_CONTROL__; };
+  }, []);
+  useEffect(() => {
+    if (!wsReady || !sessionUser || !window.__GAMMA_NATIVE_RETURN__) return;
+    const payload = window.__GAMMA_NATIVE_RETURN__;
+    window.__GAMMA_NATIVE_CONTROL__?.restorePosition(payload).then(result => {
+      if (result.ok && window.__GAMMA_NATIVE_RETURN__ === payload) delete window.__GAMMA_NATIVE_RETURN__;
+    });
+  }, [wsReady, sessionUser]);
+
   function scheduleInk() {
     clearTimeout(inkTimerRef.current);
     inkTimerRef.current = setTimeout(flushInk, 700);
@@ -5770,7 +5948,10 @@ function LibraryApp() {
         properties: { ink_url: "", pdf_page: c.page, ink_strokes: 0 },
       }))]);
     }
-    for (const c of changes) inkStore.setDraft(c.id, c.after);
+    for (const c of changes) {
+      inkDraftScopesRef.current[c.id] = { ...nativeRecoveryScopeRef.current, pageID: focusedBlockId, docID: docId };
+      inkStore.setDraft(c.id, c.after);
+    }
     if (record) {
       const h = inkHistRef.current;
       h.undo.push({ changes, label });
@@ -6516,7 +6697,7 @@ function LibraryApp() {
   // stops shifting under it.
   useEffect(() => {
     coarseRestorePendingRef.current = false;
-    if (pdfHidden || !pdfUrl) return;
+    if (pdfHidden || !pdfUrl || nativeReturnPendingRef.current?.pending || window.__GAMMA_NATIVE_RETURN__) return;
     if (restoredPdfUrlRef.current === pdfUrl) { dbg("restore: already done for this doc"); return; }
     const fid = focusedBlockIdRef.current;
     // Tab switches restore an exact per-page position (tabScrollRef) — the
@@ -6668,6 +6849,7 @@ function LibraryApp() {
   // A share link that can't open yet: sign in (signed-in / specific-people
   // shares), or explain why not.
   if (shareMode && shareGate) {
+    if (embeddedLocal && shareGate === "login") return <LocalRuntimeRecovery />;
     return shareGate === "login" ? (
       <LoginPage
         username={loginUser}
@@ -6688,6 +6870,7 @@ function LibraryApp() {
   if (authUser === null) return <AuthLoading />;
 
   if (authUser === false) {
+    if (embeddedLocal) return <LocalRuntimeRecovery />;
     return (
       <LoginPage
         username={loginUser}
@@ -8476,12 +8659,12 @@ function LibraryApp() {
             <div className="popover userPopover">
               <div className="userCard">
                 <span className="userAvatar" aria-hidden="true">
-                  {authUser.is_guest
+                  {embeddedLocal || authUser.is_guest
                     ? <UserIcon size={20} />
                     : <span className="userAvatarInitial">{authUser.user.charAt(0).toUpperCase()}</span>}
                 </span>
                 <span className="userCardMeta">
-                  <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
+                  <span className="userCardName">{embeddedLocal ? "On this iPad" : authUser.is_guest ? "Guest" : authUser.user}</span>
                   <span className="userCardRole">
                     {authUser.is_guest ? "Temporary workspace"
                       : workspace ? `${workspace.name} · ${workspaceMeta(workspace)}`
@@ -8555,10 +8738,14 @@ function LibraryApp() {
                 </div>
               </details>
               <div className="popoverDivider" />
-              <button className="popoverItem popoverItemDanger" onClick={doLogout}>
-                <LogOutIcon className="popoverItemIcon" size={15} />
-                Log out
-              </button>
+              {embeddedLocal ? (
+                <div className="popoverHint">Use Server in the app toolbar to connect to a remote server.</div>
+              ) : (
+                <button className="popoverItem popoverItemDanger" onClick={doLogout}>
+                  <LogOutIcon className="popoverItemIcon" size={15} />
+                  Log out
+                </button>
+              )}
             </div>
           ) : null}
         </span>

@@ -110,8 +110,9 @@ class SwiftStructureTests(unittest.TestCase):
 
     def test_project_keeps_its_bundle_identity(self):
         project = read(IPAD / "project.yml")
-        self.assertIn("PRODUCT_BUNDLE_IDENTIFIER: com.gamma.pdfnotes.ipad\n", project)
-        self.assertIn("PRODUCT_BUNDLE_IDENTIFIER: com.gamma.pdfnotes.ipad.tests", project)
+        # App Store identity explicitly selected by the owner before local mode.
+        self.assertIn("PRODUCT_BUNDLE_IDENTIFIER: net.blitzbuild.gamma\n", project)
+        self.assertIn("PRODUCT_BUNDLE_IDENTIFIER: net.blitzbuild.gamma.tests", project)
         self.assertIn("SWIFT_VERSION", project)
 
 

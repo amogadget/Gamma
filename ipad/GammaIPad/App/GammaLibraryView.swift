@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Gamma's web library structure: quiet toolbar, recent cards, real folders and
 /// a compact file browser. No mock content or unavailable navigation controls.
@@ -12,6 +13,8 @@ struct GammaLibraryView: View {
     @State private var selecting = false
     @State private var selection = Set<String>()
     @State private var showDownloads = false
+    @State private var showImportPDF = false
+    @State private var importError: String?
 
     var body: some View {
         GeometryReader { geometry in
@@ -25,14 +28,40 @@ struct GammaLibraryView: View {
                         filesSection
                     }.padding(24).frame(maxWidth: 1500, alignment: .leading).frame(maxWidth: .infinity)
                 }
-                .refreshable { await workspace.refreshLibrary(); await workspace.retrySync() }
+                .refreshable { await refreshLibrary() }
+                if workspace.isLocal, let message = workspace.errorMessage {
+                    Text(message).font(.caption).foregroundStyle(.orange)
+                        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("local-library-error")
+                }
                 if workspace.busy {
                     HStack(spacing: 9) { ProgressView().controlSize(.small); Text("Opening document…").font(.caption); Spacer() }
                         .padding(12).background(GammaTheme.surface)
                 }
             }.background(Color(uiColor: .secondarySystemBackground))
         }.tint(GammaTheme.accent)
-        .sheet(isPresented: $showDownloads) { GammaDownloadsView(workspace: workspace) }
+        .sheet(isPresented: $showDownloads) {
+            if !workspace.isLocal { GammaDownloadsView(workspace: workspace) }
+        }
+        .fileImporter(isPresented: $showImportPDF, allowedContentTypes: [UTType.pdf], allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                guard workspace.isLocal, let url = urls.first else { return }
+                Task { await workspace.importLocalPDF(url: url) }
+            case .failure(let error):
+                let error = error as NSError
+                if error.domain != NSCocoaErrorDomain || error.code != NSUserCancelledError {
+                    importError = error.localizedDescription
+                }
+            }
+        }
+        .alert("Unable to import PDF", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button("OK", role: .cancel) { importError = nil }
+        } message: { Text(importError ?? "") }
+        .onChange(of: workspace.isLocal) { _, _ in
+            selecting = false; selection.removeAll(); showDownloads = false; showStatus = false
+            showImportPDF = false; importError = nil; folder = ""; search = ""
+        }
     }
     private func toolbar(compact: Bool) -> some View {
         HStack(spacing: 12) {
@@ -40,9 +69,11 @@ struct GammaLibraryView: View {
                 Image(systemName: "house").font(.system(size: 16)).frame(width: 32, height: 32)
                     .background(folder.isEmpty ? GammaTheme.line : .clear, in: RoundedRectangle(cornerRadius: 5))
             }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Library home")
-            Button { showDownloads = true } label: { Image(systemName: "arrow.down.circle") }
-                .accessibilityLabel("Downloads")
-            Text("Gamma").font(.system(size: 15, weight: .semibold))
+            if !workspace.isLocal {
+                Button { showDownloads = true } label: { Image(systemName: "arrow.down.circle") }
+                    .accessibilityLabel("Downloads")
+            }
+            Text(workspace.isLocal ? "On This iPad" : "Gamma").font(.system(size: 15, weight: .semibold))
             if !folder.isEmpty {
                 Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.tertiary)
                 Button(folder.split(separator: "/").last.map(String.init) ?? folder) {
@@ -60,7 +91,10 @@ struct GammaLibraryView: View {
                 }
             }.padding(.horizontal, 10).frame(width: compact ? 155 : 240, height: 32)
                 .background(GammaTheme.notes, in: RoundedRectangle(cornerRadius: 6))
-            Button { Task { await workspace.refreshLibrary(); await workspace.retrySync() } } label: {
+            if workspace.isLocal {
+                importButton
+            } else {
+            Button { Task { await refreshLibrary() } } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 14)).frame(width: 28, height: 32)
             }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(workspace.busy || workspace.syncing).accessibilityLabel("Refresh library")
             Button { showStatus.toggle() } label: {
@@ -95,6 +129,7 @@ struct GammaLibraryView: View {
             } label: {
                 Image(systemName: "person.crop.circle").font(.system(size: 17)).foregroundStyle(.secondary).frame(width: 30, height: 32)
             }.disabled(workspace.busy || workspace.syncing).accessibilityLabel("Account")
+            }
         }.padding(.horizontal, 16).frame(height: 52).background(GammaTheme.surface)
     }
     private var recentSection: some View {
@@ -120,7 +155,11 @@ struct GammaLibraryView: View {
                                 .background(GammaTheme.surface, in: RoundedRectangle(cornerRadius: 7))
                                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(GammaTheme.line, lineWidth: 1))
                         }.buttonStyle(.plain).disabled(workspace.busy)
-                        .contextMenu { Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline) }
+                        .contextMenu {
+                            if !workspace.isLocal {
+                                Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline)
+                            }
+                        }
                     }
                 }
             }
@@ -150,6 +189,7 @@ struct GammaLibraryView: View {
                 caption(search.isEmpty ? (folder.isEmpty ? "ALL FILES" : "FILES") : "SEARCH RESULTS")
                 Text("\(filtered.count)").font(.system(size: 10)).foregroundStyle(.tertiary)
                 Spacer()
+                if !workspace.isLocal {
                 Button(selecting ? "Done" : "Select") { selecting.toggle(); selection.removeAll() }.font(.caption)
                 if selecting {
                     Button("Select all") { selection = Set(filtered.map(\.id)) }.font(.caption)
@@ -157,6 +197,7 @@ struct GammaLibraryView: View {
                         workspace.enqueueDownloads(workspace.papers.filter { selection.contains($0.id) })
                         selection.removeAll(); selecting = false; showDownloads = true
                     }.font(.caption).disabled(selection.isEmpty || workspace.isOffline)
+                }
                 }
                 Menu {
                     Button("Recently modified") { alphabetical = false }
@@ -185,7 +226,11 @@ struct GammaLibraryView: View {
                                 .background(GammaTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(GammaTheme.line))
                         }.buttonStyle(.plain).disabled(workspace.busy)
-                        .contextMenu { Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline) }
+                        .contextMenu {
+                            if !workspace.isLocal {
+                                Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline)
+                            }
+                        }
                     }
                 }
             } else {
@@ -199,7 +244,11 @@ struct GammaLibraryView: View {
                                 folderChips(paper)
                             }.padding(.horizontal, 8).frame(minHeight: 44).contentShape(Rectangle())
                         }.buttonStyle(.plain).disabled(workspace.busy)
-                        .contextMenu { Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline) }.accessibilityIdentifier("gamma-page-\(paper.id)")
+                        .contextMenu {
+                            if !workspace.isLocal {
+                                Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline)
+                            }
+                        }.accessibilityIdentifier("gamma-page-\(paper.id)")
                     }
                 }
             }
@@ -208,9 +257,23 @@ struct GammaLibraryView: View {
                     Image(systemName: search.isEmpty ? "books.vertical" : "magnifyingglass").font(.system(size: 26, weight: .light))
                     Text(search.isEmpty ? "No PDFs in this folder" : "No matching papers").font(.subheadline)
                     if !search.isEmpty { Button("Clear search") { search = "" }.font(.caption) }
+                    else if workspace.isLocal {
+                        Text("Import a PDF to read, write and record without an account.")
+                            .font(.caption).multilineTextAlignment(.center)
+                        importButton
+                    }
                 }.foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 54)
             }
         }
+    }
+    private var importButton: some View {
+        Button { showImportPDF = true } label: { Label("Import PDF", systemImage: "plus") }
+            .font(.system(size: 13, weight: .medium)).disabled(workspace.busy)
+            .accessibilityIdentifier("import-local-pdf")
+    }
+    private func refreshLibrary() async {
+        await workspace.refreshLibrary()
+        if !workspace.isLocal { await workspace.retrySync() }
     }
     private func caption(_ text: String) -> some View {
         Text(text).font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary)
@@ -223,8 +286,8 @@ struct GammaLibraryView: View {
     }
     private func folderChips(_ paper: GammaPaper) -> some View {
         HStack(spacing: 8) {
-            if selecting { Image(systemName: selection.contains(paper.id) ? "checkmark.circle.fill" : "circle") }
-            if let entry = workspace.offlineEntries[paper.id] {
+            if !workspace.isLocal && selecting { Image(systemName: selection.contains(paper.id) ? "checkmark.circle.fill" : "circle") }
+            if !workspace.isLocal, let entry = workspace.offlineEntries[paper.id] {
                 Image(systemName: entry.state == .ready ? "checkmark.circle.fill" : "arrow.down.circle")
                     .accessibilityLabel(entry.state.rawValue)
             }
@@ -236,7 +299,7 @@ struct GammaLibraryView: View {
         }
     }
     private func open(_ paper: GammaPaper) {
-        if selecting { if !selection.insert(paper.id).inserted { selection.remove(paper.id) } }
+        if !workspace.isLocal && selecting { if !selection.insert(paper.id).inserted { selection.remove(paper.id) } }
         else { Task { await workspace.open(paper) } }
     }
     static func belongs(_ paper: GammaPaper, to folder: String) -> Bool {

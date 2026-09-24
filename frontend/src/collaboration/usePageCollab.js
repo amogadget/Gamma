@@ -74,7 +74,8 @@ export function usePageCollab(opts) {
   }, [session, pageId, enabled]);
 
   return {
-    commit: session.commit, flush: session.flush, hasPending: session.hasPending, peers, me,
+    commit: session.commit, flush: session.flush, hasPending: session.hasPending,
+    recoverySnapshot: session.recoverySnapshot, peers, me,
     sendCursor: session.sendCursor,
     reconnect: () => { if (enabled && pageId) session.connect(pageId); },
   };

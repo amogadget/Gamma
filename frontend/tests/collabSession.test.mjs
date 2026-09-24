@@ -52,6 +52,33 @@ function setup(t, api, { canWrite = true, connect = true } = {}) {
   return h;
 }
 
+test("recovery includes old-page in-flight writes and is detached from live trees", async (t) => {
+  const ack = deferred();
+  const h = setup(t, () => ack.promise);
+  h.edit([block("a", "unsaved old page")]);
+  h.load("page-b", [block("c")]);
+  h.edit([block("c", "unsaved new page")]);
+  const recovery = h.session.recoverySnapshot();
+  assert.equal(recovery.complete, true);
+  assert.deepEqual(recovery.pages.map(p => p.pageID).sort(), ["page-a", "page-b"]);
+  assert(recovery.pages.find(p => p.pageID === "page-a").ops.some(op => op.content === "unsaved old page"));
+  recovery.pages[0].tree[0].content = "mutated export";
+  assert.notEqual(h.session.recoverySnapshot().pages[0].tree[0].content, "mutated export");
+  ack.resolve({ seq: 0, ops: [] });
+  await h.session.flush();
+});
+
+test("permanent save refusals stay recoverable after the normal queue is emptied", async (t) => {
+  const h = setup(t, async () => { throw Object.assign(Error("permission lost"), {status:403}); });
+  h.edit([block("a", "must not disappear")]);
+  await h.session.flush();
+  assert.equal(h.session.hasPending(), false);
+  const recovery = h.session.recoverySnapshot();
+  assert.equal(recovery.complete, true);
+  assert.equal(recovery.rejected[0].pageID, "page-a");
+  assert(recovery.rejected[0].ops.some(op => op.content === "must not disappear"));
+});
+
 test("HTTP ack catches up missing remote edits before advancing the sequence", async (t) => {
   const remote = batch(1, [{ op: "set", id: "b", content: "remote b" }]);
   const own = batch(2, [{ op: "set", id: "a", content: "my a" }], ME);

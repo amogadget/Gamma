@@ -27,12 +27,67 @@ public struct GammaReadingPosition: Equatable, Sendable {
     }
 }
 
+/// Strict Promise reply decoding: neither truthy strings nor numeric 1 are success.
+public struct GammaWebDisconnectResult: Equatable, Sendable {
+    public let ok: Bool
+    public let reason: String?
+    /// Entire recovery object, including its scope and `complete` marker. Native
+    /// never reconstructs or drops unknown fields from the Web recovery schema.
+    public let recovery: Data?
+    public var recoveryComplete: Bool {
+        guard let recovery,
+              let body = (try? JSONSerialization.jsonObject(with: recovery)) as? [String: Any],
+              let marker = body["complete"] as? NSNumber,
+              CFGetTypeID(marker) == CFBooleanGetTypeID() else { return false }
+        return marker.boolValue
+    }
+    public init(ok: Bool, reason: String? = nil, recovery: Data? = nil) {
+        self.ok = ok; self.reason = reason; self.recovery = recovery
+    }
+}
+
+struct GammaWebCommandResult: Equatable {
+    let ok: Bool
+    let reason: String?
+    var recovery: Data? = nil
+    static func parse(_ value: Any) -> GammaWebCommandResult {
+        guard let body = value as? [String: Any], let ok = body["ok"] as? NSNumber,
+              CFGetTypeID(ok) == CFBooleanGetTypeID() else {
+            return Self(ok: false, reason: "invalid-response")
+        }
+        var recovery: Data?
+        if let raw = body["recovery"], !(raw is NSNull) {
+            guard let object = raw as? [String: Any], JSONSerialization.isValidJSONObject(object),
+                  let data = try? JSONSerialization.data(withJSONObject: object) else {
+                return Self(ok: false, reason: "invalid-recovery")
+            }
+            guard data.count <= 32 * 1024 * 1024 else { return Self(ok: false, reason: "recovery-too-large") }
+            recovery = data
+        }
+        return Self(ok: ok.boolValue, reason: ok.boolValue ? nil :
+            (GammaWebMessageValidator.bounded(body["reason"]) ?? "failed"), recovery: recovery)
+    }
+}
+
 /// Origin and deployment-prefix checks shared by navigation and the native bridge.
 public struct GammaWebOrigin: Equatable, Sendable {
     public let scheme: String
     public let host: String
     public let port: Int
     public let deploymentPath: String
+    private var trustedLocal = false
+
+    public init(access: GammaLocalServerAccess) {
+        self.init(url: access.baseURL)
+        trustedLocal = true
+    }
+
+    /// A target may serialize HTTP only after validating against its host authority.
+    func trustedWireOrigin(_ url: URL) -> String? {
+        guard isValidURL(url) else { return nil }
+        if trustedLocal { return "http://127.0.0.1:\(port)" }
+        return Self.wireOrigin(url)
+    }
 
     public init(url: URL) {
         scheme = url.scheme?.lowercased() ?? ""
@@ -43,13 +98,25 @@ public struct GammaWebOrigin: Equatable, Sendable {
     }
 
     public func isValidURL(_ url: URL) -> Bool {
-        guard scheme == "https", !host.isEmpty,
+        guard (scheme == "https" || trustedLocal), !host.isEmpty,
               url.scheme?.lowercased() == scheme, url.host?.lowercased() == host,
               (url.port ?? Self.defaultPort(for: url.scheme?.lowercased() ?? "")) == port,
               url.user == nil, url.password == nil else { return false }
         let path = url.path.isEmpty ? "/" : url.path
         guard !path.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else { return false }
         return path == String(deploymentPath.dropLast()) || path.hasPrefix(deploymentPath)
+    }
+
+    /// Browser URL.origin serialization, separate from native deployment-prefix scope.
+    static func wireOrigin(_ url: URL) -> String? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(), scheme == "https",
+              let host = components.host?.lowercased(), !host.isEmpty,
+              components.user == nil, components.password == nil else { return nil }
+        components.scheme = scheme; components.host = host
+        components.path = ""; components.query = nil; components.fragment = nil
+        if components.port == defaultPort(for: scheme) { components.port = nil }
+        return components.string
     }
 
     public static func defaultPort(for scheme: String) -> Int {

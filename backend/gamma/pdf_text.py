@@ -1,7 +1,7 @@
 """Shared PDF text extraction.
 
-pypdfium2 first (proper word spacing and unicode), PyPDF2 fallback — but only
-when pdfium can't open the file at all: an empty pdfium result is an answer
+Platform provider first (pypdfium2 on desktop, gamma_ios_pdf on iOS), PyPDF2
+fallback only when it can't open the file: an empty provider result is an answer
 (scanned pages have no text layer for PyPDF2 to find either), not a failure.
 Used by the AI context builder, metadata lookup, /pdf-text-status, and the
 search indexer, so extraction fixes land once.
@@ -14,6 +14,7 @@ import threading
 import zlib
 
 from .logbuf import log
+from . import pdf_provider
 
 # Sentinel the AI context builder hands to the model when extraction raised.
 # Compare against the constant, never a rewritten literal.
@@ -52,6 +53,8 @@ _lock = threading.RLock()
 
 
 def _serialize_finalizers() -> None:
+    if pdf_provider.is_ios():
+        return  # The native adapter owns its lifetimes; never import PDFium here.
     try:
         import pypdfium2.internal.bases as bases
     except Exception:  # noqa: BLE001 — pypdfium2 missing or reshaped: nothing to wrap
@@ -72,13 +75,24 @@ _serialize_finalizers()
 
 
 def _open(src):
-    """Open a PDF as ``("pdfium", doc)``, or ``("pypdf2", reader)`` when
-    pdfium can't open the file at all. src is a path str or PDF bytes."""
+    """Open a platform document, or PyPDF2 if the provider cannot read it.
+
+    Empty text is not failure. On iOS only input/open errors permit fallback;
+    a missing native bridge or programming error must not masquerade as a bad
+    PDF. Desktop keeps its existing broad PDFium-open fallback.
+    """
+    ios = pdf_provider.is_ios()
+    name = "gamma_ios_pdf" if ios else "pypdfium2"
+    # Import/link failures on iOS are deployment errors, never PDF input errors.
+    provider = pdf_provider.load_provider() if ios else None
     try:
-        import pypdfium2 as pdfium
-        return "pdfium", pdfium.PdfDocument(src)
+        if provider is None:
+            provider = pdf_provider.load_provider()
+        return ("ios" if ios else "pdfium"), provider.PdfDocument(src)
     except Exception as e:
-        log.warning(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
+        if ios and not isinstance(e, (ValueError, OSError)):
+            raise
+        log.warning(f"[pdf-text] {name} open failed ({e}), falling back to PyPDF2")
         from PyPDF2 import PdfReader
         return "pypdf2", PdfReader(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src))
 

@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "scope": "First cross-build gate only: pydantic-core, not the complete Gamma wheel closure",
+  "python": "3.13",
+  "support_revision": "3.13-b15",
+  "maturin": "1.15.0",
+  "rust_toolchain": "1.98.1",
+  "deployment_target": "17.0",
+  "package": {
+    "name": "pydantic_core",
+    "version": "2.46.2",
+    "source_url": "https://files.pythonhosted.org/packages/43/bb/4742f05b739b2478459bb16fa8470549518c802e06ddcf3f106c5081315e/pydantic_core-2.46.2.tar.gz",
+    "sha256": "37bb079f9ee3f1a519392b73fda2a96379b31f2013c6b467fe693e7f2987f596",
+    "source_directory": "pydantic_core-2.46.2",
+    "extension": "pydantic_core._pydantic_core",
+    "minimum_rust": "1.88"
+  },
+  "targets": {
+    "simulator": {
+      "sdk": "iphonesimulator",
+      "rust": "aarch64-apple-ios-sim",
+      "clang": "arm64-apple-ios17.0-simulator",
+      "multiarch": "arm64-iphonesimulator",
+      "extension_suffix": ".cpython-313-iphonesimulator.so",
+      "wheel_platform": "ios_17_0_arm64_iphonesimulator",
+      "macho_platform": 7
+    },
+    "device": {
+      "sdk": "iphoneos",
+      "rust": "aarch64-apple-ios",
+      "clang": "arm64-apple-ios17.0",
+      "multiarch": "arm64-iphoneos",
+      "extension_suffix": ".cpython-313-iphoneos.so",
+      "wheel_platform": "ios_17_0_arm64_iphoneos",
+      "macho_platform": 2
+    }
+  }
+}

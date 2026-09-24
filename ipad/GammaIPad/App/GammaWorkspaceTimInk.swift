@@ -42,7 +42,7 @@ extension GammaWorkspace {
         guard snapshot.blocks.contains(where: \.isTimInk) else { return snapshot }
         guard let cache, cache.workspace == api.workspace,
               cache.username == api.authenticatedUsername,
-              cache.server == GammaCache.canonicalServer(api.baseURL) else {
+              cache.server == api.cacheServerIdentity else {
             throw GammaAPI.APIError.message("Handwriting session does not match the cached account and workspace.")
         }
         try cache.assertWorkspace(snapshot.workspace, what: "handwriting snapshot")

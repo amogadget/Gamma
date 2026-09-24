@@ -12,7 +12,7 @@ actually wired to:
                                  so the ``hls__`` naming convention holds.
 - ``assets/<stem>.edn``        — highlight geometry (``{:highlights [...]}``).
 - ``assets/<stem>/<page>_<uuid>_<stamp>.png`` — area-highlight crops, rendered
-                                 with pypdfium2 (skipped silently if rendering
+                                 with the platform PDF provider (skipped if rendering
                                  fails; the annotation block still exports).
 - ``logseq/config.edn``        — minimal marker so importers accept the folder.
 
@@ -223,13 +223,13 @@ def render_area_images(pdf_path, stem, highlights, scale=2.0):
         return []
     out = []
     try:
-        import pypdfium2 as pdfium
-        from . import pdf_text
+        from . import pdf_provider, pdf_text
+        provider = pdf_provider.load_provider()
 
         # pdfium is not thread-safe: the render holds pdf_text's lock and
         # closes what it opens (pdf_text.py explains why).
         with pdf_text._lock:
-            _render_areas(pdfium, pdf_path, stem, areas, scale, out)
+            _render_areas(provider, pdf_path, stem, areas, scale, out)
     except Exception:
         return out
     return out

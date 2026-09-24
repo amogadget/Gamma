@@ -46,7 +46,7 @@ from PyPDF2.generic import (
     RectangleObject,
 )
 
-from . import pdf_text, vector_text
+from . import pdf_provider, pdf_text, vector_text
 from .logbuf import log
 from .note_markup import TEXT, latex_spans, parse_note
 from .pdf_export import ExportPdfReader, parse_css_color
@@ -376,6 +376,8 @@ def _page_occupancy(pdfium_page, to_display, disp_w, disp_h) -> _Space:
     if pdfium_page is not None:
         # max_depth=1: a form XObject's own bounds already cover its contents,
         # and nested objects' bounds are in the form's space, not the page's.
+        # On iOS get_objects supplies estimated raster occupancy cells in PDF
+        # user space, not native object parity; _frame still maps them below.
         for obj in pdfium_page.get_objects(max_depth=1):
             try:
                 l, b, r, t = obj.get_bounds()
@@ -433,10 +435,10 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
 
 def _draw_notes(pdf_bytes, writer, by_page, uploads_dir):
     try:
-        import pypdfium2 as pdfium
-        doc = pdfium.PdfDocument(pdf_bytes)
+        provider = pdf_provider.load_provider()
+        doc = provider.PdfDocument(pdf_bytes)
     except Exception as e:
-        log.warning(f"[pdf-notes] pdfium open failed ({e}); placing notes in the margins")
+        log.warning(f"[pdf-notes] PDF provider open failed ({e}); placing notes in the margins")
         doc = None
 
     images = XObjectStore(writer, uploads_dir)

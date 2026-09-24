@@ -58,6 +58,53 @@ export function captureNativeViewport(scroller) {
   return null;
 }
 
+// Restore a page-local anchor at the scroller's visible top/left. Browser
+// clamping at document edges is intentional; never use document-height ratios.
+export function applyNativeViewport(scroller, value) {
+  const position = nativeViewport(value);
+  if (!position || !scroller?.clientWidth || !scroller?.clientHeight) return false;
+  const page = scroller.querySelector(`.pdfPageWrap[data-page="${position.pageIndex + 1}"]`);
+  if (!page) return false;
+  const box = page.getBoundingClientRect(), view = scroller.getBoundingClientRect();
+  if (!box.width || !box.height) return false;
+  scroller.scrollTo({
+    top: scroller.scrollTop + box.top + box.height * position.anchorY - view.top - (scroller.clientTop || 0),
+    left: scroller.scrollLeft + box.left + box.width * position.anchorX - view.left - (scroller.clientLeft || 0),
+    behavior: "instant",
+  });
+  return true;
+}
+
+export function nativeReturnRequest(value, origin) {
+  if (!value || ![value.pageID, value.docID, value.user, value.workspace].every(handoffID)) return null;
+  if (typeof value.server !== "string" || value.server.replace(/\/$/, "") !== origin.replace(/\/$/, "")) return null;
+  const viewport = nativeViewport(value.viewport);
+  return viewport ? { ...value, viewport } : null;
+}
+
+// Dependency-injected so dirty/no-PDF/signed-out and failure cases can be pinned
+// without React. A failed save never consumes a draft or claims success.
+export async function prepareNativeDisconnect({ settle, flush, flushInk, hasPending, dirtyInk, recovery, timeoutMs = 10000 }) {
+  let timer;
+  const work = (async () => {
+  try {
+    await settle();
+    await flush(); // new ink blocks must exist before their upload/PATCH
+    await flushInk();
+    await flush();
+    if (hasPending() || dirtyInk().length) return { ok: false, reason: "unsaved-edits", recovery: recovery() };
+    return { ok: true, reason: "flushed" };
+  } catch (error) {
+    return { ok: false, reason: "flush-failed", detail: String(error?.message || error), recovery: recovery() };
+  }
+  })();
+  try {
+    return await Promise.race([work, new Promise(resolve => {
+      timer = setTimeout(() => resolve({ ok: false, reason: "flush-timeout", recovery: recovery() }), timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 export function nativePDFRequest({ pageID, docID, title, user, workspace, viewport }) {
   if (![pageID, docID, user, workspace].every(handoffID)) return null;
   const position = viewport == null ? null : nativeViewport(viewport);
