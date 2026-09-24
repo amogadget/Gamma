@@ -142,12 +142,55 @@ not thread-safe and overlapping extractions fail both — and reads up to
 `MAX_PAGES` (5000, a runaway guard that logs when it bites; pages past it are
 invisible to search AND read_page, so keep it far above real documents).
 
-When the request carries a `selection` (quoted PDF passages), the single-paper
-text context is selection-centered instead of head-of-document:
-`selection_context` (`ai_context.py`) locates each passage's PDF page by
-normalized-text match (`_locate_passage`, page-seam aware) and spends the
-budget on a small head slice plus windows starting at those pages, labeled with
-their page numbers; unlocatable selections fall back to the plain head excerpt.
+### Selected PDF passages
+
+A PDF selection reaches the chat with its position. App keeps
+`pdfSelections` as `{text, page, box}` (`pdf/pdfSelectionSpot.js`:
+`rangeSpot` for a live selection, which gives the page its start sits on and
+the union of its rects there, and `highlightSpot` for a clicked highlight's
+stored position). `box` is `[x0, y0, x1, y1]` as fractions of the page,
+top-left origin. The request sends them as `selections`, at most 6 × 4000
+chars. The older `selection` string ("---"-joined text) is still read when
+`selections` is empty (`ai_context.request_selections`).
+
+The single-paper text context then centres on the passages instead of the
+start of the paper (`selection_context`):
+
+- **Placing.** Each passage is matched on normalized text
+  (`_locate_passage`, page-seam aware), on the viewer's page first and then
+  anywhere. A phrase the paper repeats therefore lands where it was
+  selected. A passage whose text isn't found (a formula's glyph soup, or
+  anything under 12 chars) still gets the viewer's page, placed by its box's
+  top.
+- **Window.** The budget goes to a small head slice (dropped when a window
+  already reaches the top) plus one window per passage. The window opens up to
+  2500 chars *before* the passage, where its set-up and definitions are,
+  crossing into the previous page when needed. Each page part carries its
+  `[PDF page N]` label. Passages inside an earlier window share it.
+- **Section.** Each passage is labelled with the section it falls under.
+  The PDF's own outline is read first (`pdf_text.outline`): the path of
+  entries before the spot, with figure bookmarks and a lone title entry
+  left out. An entry on the spot's own page counts only when its title
+  stands as a heading line before it (`_title_offset`), so the word
+  "Attention" in the prose is not the "3.2 Attention" heading. Without an
+  outline, the nearest heading-shaped line before the spot is used: the
+  numbered, Roman-numeral, lettered and named-section shapes (`_heading_line`,
+  which rejects reference entries, tables of contents and body lines like
+  "852 nm").
+- **Picture.** When a passage's text wasn't found, or reads as a formula or
+  table (`text_unreliable`: math symbols, private-use glyphs, many
+  one-character tokens), `selection_crops` renders its box from the PDF
+  (`pdf_text.render_page(..., box=)`), grown to a readable strip and padded.
+  At most 3 pictures per message; they ride with the user's own images.
+
+The question labels each passage "Selected passage (PDF page 7; section
+"Methods › Noise model"; a picture … is attached)" (`final_prompt`, from the
+located entries `gather_inputs` puts in the open paper's coverage as
+`selection: {passages: [{page, section, found, crop}]}`). The reply's chip
+reads "Model saw text around p. 7 · Methods › Noise model", plus "Picture of
+the selection sent" when one went. Nothing placed at all falls back to the
+plain head excerpt. With a native PDF attachment there is no window and no
+picture, and the passages carry the viewer's page only.
 
 ### Mentioning library papers
 

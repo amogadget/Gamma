@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
+import { highlightSpot, rangeSpot } from "../pdf/pdfSelectionSpot";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
 import ImportReviewDialog from "../transfers/ImportReviewDialog";
@@ -2842,15 +2843,18 @@ function LibraryApp() {
   // User management moved into Settings → Users (settings/SettingsDialog.jsx UsersSettings,
   // admins only) — App just opens that pane and lends it the shared pieces
   // (confirm dialog, status pill, session re-key after a self-rename).
-  // PDF passages the next chat question focuses on. Ctrl (additive) appends
-  // — whether from text selection or highlight clicks; plain replaces.
+  // PDF passages the next chat question focuses on, as {text, page, box}
+  // (pdf/pdfSelectionSpot.js — where it sits, so the server can place it
+  // and picture a formula). Ctrl (additive) appends — whether from text
+  // selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
-  function addPdfSelection(text, additive) {
+  function addPdfSelection(text, additive, spot) {
     const part = (text || "").trim().slice(0, 4000);
     if (!part) return;
+    const item = { text: part, page: spot?.page || 0, box: spot?.box || null };
     setPdfSelections((prev) => additive
-      ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
-      : [part]);
+      ? (prev.some((s) => s.text === part) || prev.length >= 6 ? prev : [...prev, item])
+      : [item]);
   }
   // Note chips for the next chat message — blocks attached with Ctrl+click /
   // the ⋮⋮ menu's "Add to chat" ({kind: "block", id, text}; the server serves
@@ -2898,7 +2902,7 @@ function LibraryApp() {
     if (h.position?.area) {
       pdfCaptureRef.current?.(h).then((img) => { if (img) addChatImage(img); });
     } else {
-      addPdfSelection(h.content?.text, additive);
+      addPdfSelection(h.content?.text, additive, highlightSpot(h.position));
     }
   }
   // Styled in-app dialogs replacing window.confirm / link decisions.
@@ -3394,7 +3398,7 @@ function LibraryApp() {
         const node = sel.anchorNode;
         const el = node?.nodeType === 3 ? node.parentElement : node;
         if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
-        addPdfSelection(text, additive);
+        addPdfSelection(text, additive, rangeSpot(sel.getRangeAt(0)));
       }, 10);
     }
     // Touch has no mouseup after a long-press/handle selection, so iPad picks
@@ -3415,7 +3419,7 @@ function LibraryApp() {
         const node = sel.anchorNode;
         const el = node?.nodeType === 3 ? node.parentElement : node;
         if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
-        addPdfSelection(text, false);
+        addPdfSelection(text, false, rangeSpot(sel.getRangeAt(0)));
       }, 350);
     }
     document.addEventListener("mouseup", onMouseUp);
