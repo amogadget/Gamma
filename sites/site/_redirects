@@ -10,3 +10,7 @@
 /releases            https://github.com/tim4431/Gamma/releases 302
 /docker              https://github.com/tim4431/Gamma/pkgs/container/gamma 302
 /store               https://apps.microsoft.com/detail/9N8WGWR2J2MV 302
+# Gamma Cloud accounts (cloud/, docs/dev/cloud_accounts.md)
+/login               https://account.gammapdf.com/login 302
+/account             https://account.gammapdf.com/ 302
+/signup              https://account.gammapdf.com/register 302

@@ -16,7 +16,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
-from ..auth import require_user, require_ws
+from ..auth import is_guest_workspace, require_user, require_ws
 from ..db import connect_pages_db, page_now, pdf_upload_path, ws_uploads_dir
 from ..blocks_store import last_child_position
 from ..foldertags import clean_path, parse_tags
@@ -301,9 +301,8 @@ def import_reviewed_markdown_file(request: Request, file: UploadFile = File(...)
 
 def _review_gamma(request, file, selected=None, preview=False):
     from .. import ws_backup
-    from .auth import _is_guest_workspace
     ws = require_ws(request, write=True)
-    if _is_guest_workspace(ws):
+    if is_guest_workspace(ws):
         raise HTTPException(status_code=403, detail="the guest workspace cannot import backups")
     with tempfile.TemporaryDirectory(prefix="gamma-import-review-") as td:
         path = Path(td) / "import.zip"

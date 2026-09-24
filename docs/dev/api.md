@@ -100,6 +100,9 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   login still works there). Sessions are enforced server-side against
   `SESSION_MAX_AGE` (expired rows are deleted in the middleware) and are revoked
   when the account's password is changed.
+- A cloud identity (Sign in with Gamma Cloud, [cloud_accounts.md](cloud_accounts.md))
+  ends in the same `sessions` row as a password login: the callback mints it,
+  nothing downstream can tell the difference.
 - `/api/login` and `/api/login-guest` are rate-limited per IP/username
   (`gamma/ratelimit.py`, in-process fixed windows → 429), as are share-link
   visitors' writes and unknown share tokens (above; those log a warning
@@ -117,7 +120,11 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 ### Session & account (`auth.py`)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/login`, `/login-guest`, `/logout` | session management |
+| POST | `/login`, `/login-guest`, `/logout` | session management (`/login` refuses an account with an empty password hash — one only its cloud identity signs in) |
+| GET | `/server-config` | public: what the login page offers besides a password — `{cloud: {enabled, issuer}, password_login, registration}` ([cloud_accounts.md](cloud_accounts.md)) |
+| GET | `/auth/cloud/start?next=&link=1` | Sign in with Gamma Cloud: stores the pending PKCE sign-in and redirects to the account server; `link=1` needs a session and attaches the cloud identity to that account |
+| GET | `/auth/cloud/callback?code=&state=` | the account server's return: verifies the ID token, resolves or creates the local account per the policy (`gamma/cloud_auth.py`), mints a session and redirects to `next`; a refusal goes back to `/?cloud_error=` |
+| GET / POST | `/auth/cloud/status`, `/auth/cloud/unlink` | the signed-in account's own cloud identity (username, plan, e-mail, linked at); unlink is refused for an account without a password |
 | GET | `/session` | who am I, plus `workspaces: [{id, name, kind, role, access, public_role, personal, default, members}]` (memberships + every public workspace) and `default_workspace` (quota lives in `/quota`) |
 | GET | `/accounts` | the account directory for the invite / owner pickers: `{accounts: [{username, is_admin}]}`, non-guest accounts only (signed-in non-guest callers) |
 | GET | `/export` (+ `/export-progress`) | backup zip of a workspace (everything or `uploads=0`; the `gamma-backup-1` zip of `gamma/ws_backup.py`): the request's, `?ws=` (any member), or — admins — `?user=` for an account's default workspace |
@@ -134,6 +141,10 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | GET | `/workspaces/{id}/backups/{name}/download` | the snapshot as a zip — the same zip `/export` gives (any member) |
 | POST | `/workspaces/{id}/backups/{name}/restore?mode=` | restore it in place: `replace` (owner) / `merge` (editor), the same rules as `/import-data` |
 | DELETE | `/workspaces/{id}/backups/{name}` | delete a snapshot (owner) |
+| GET/POST | `/backup-tasks` | the account's scheduled backup tasks (`routers/backup_tasks.py`, `gamma/backup_schedule.py`; signed-in non-guest) / create one `{name, enabled, scope: selected\|all_owned, workspaces[], cron, uploads, retention_mode: days\|count, retention_value}`; `cron` is five UTC fields, targets must be workspaces the owner owns (at most 100 tasks) |
+| PUT/DELETE | `/backup-tasks/{id}` | replace the task (same body; 409 while it runs) / delete it, keeping its snapshots |
+| POST | `/backup-tasks/{id}/run` | queue a run now, paused or not (409 while it runs) |
+| POST | `/backup-tasks/preview` | `{cron}` → `{runs: [next three ISO times], timezone: "UTC"}` |
 | PUT/DELETE | `/workspaces/{id}/members/{user}` | shared workspaces: invite or set a role `{role}`, incl. owner (owner) / remove (owner) or leave (yourself) |
 | GET | `/workspaces/find-page/{page_id}` | which of my workspaces holds the page (deep links without `ws`) |
 
@@ -338,7 +349,7 @@ the request's workspace — the extension names none, so its personal one.
 ### AI (`ai.py`) — all config is per-user GUI entries, no env API keys
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/ai/chat` | chat; NDJSON stream of `{context}` (first line: per-page coverage — native/text, pages shown of total; `doc_id` `""` for a page without a PDF) then `{delta}`/`{action}`/`{progress}`/`{usage}`/`{error}`; `usage` is the provider's token report `{input, output, cache_read, cache_write}`, one line per provider turn (the client sums an agent reply's rounds; non-stream replies carry one summed `usage` field); `progress` previews an edit_block/create_block call still being written (target id + markdown so far). Context is `pages` (up to 7 page ids, de-duplicated; they also become the tool scope's `context_pages`) or `page_id` (one; its PDF attachment derived server-side; `doc_id` is accepted as a compatibility input and resolves to its page), plus model id, effort, images, files, the agent scope, and the notes pointers `focus_block_id` (cursor block), `context_blocks` (attached block ids), `note_passages` (Ctrl-selected note text). See [ai.md](ai.md) |
+| POST | `/ai/chat` | chat; NDJSON stream of `{context}` (first line: per-page coverage — native/text, pages shown of total; `doc_id` `""` for a page without a PDF; the open paper's entry adds `selection: {passages: [{page, section, found, crop}]}` when passages were selected) then `{delta}`/`{action}`/`{progress}`/`{usage}`/`{error}`; `usage` is the provider's token report `{input, output, cache_read, cache_write}`, one line per provider turn (the client sums an agent reply's rounds; non-stream replies carry one summed `usage` field); `progress` previews an edit_block/create_block call still being written (target id + markdown so far). Context is `pages` (up to 7 page ids, de-duplicated; they also become the tool scope's `context_pages`) or `page_id` (one; its PDF attachment derived server-side; `doc_id` is accepted as a compatibility input and resolves to its page), plus model id, effort, images, files, the agent scope, the selected PDF passages `selections` (`[{text, page, box}]`, box `[x0, y0, x1, y1]` page fractions; the older `"---"`-joined `selection` string is still read), and the notes pointers `focus_block_id` (cursor block), `context_blocks` (attached block ids), `note_passages` (Ctrl-selected note text). See [ai.md](ai.md) |
 | GET | `/ai/models` | model registry (each model carries `native_pdf`: whether its provider accepts the PDF file itself) + default prompts (feeds the model switchers and prompt editor) |
 | GET | `/ai/settings` | masked provider list (key hints only) |
 | POST/PUT/DELETE | `/ai/providers[/{id}]` | manage provider entries |

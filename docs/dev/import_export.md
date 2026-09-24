@@ -53,32 +53,33 @@ is remembered: the switch starts from the Settings preference each time, so the
 setting stays the standing policy.
 
 Zotero, Markdown (ZIP or one file), Obsidian/Notion ZIPs and Gamma exports
-continue into the shared `transfers/ImportReviewDialog.jsx`: Upload → Review →
-Import → Summary. `importApi.js` supplies the format adapter, `xhrUpload.js`
-reports real uploaded/total bytes, and `importReview.js` owns selection,
-filtering and tree construction. Upload progress ends when the browser finishes
-sending bytes; checking/importing show an indeterminate progress bar. The report
-stays in the dialog, including warnings, without navigating or reloading the app.
+share one review flow: Upload → Review → Import → Summary.
 
-`POST /api/import/review` receives the file and its source (`zotero`,
-`markdown-zip`, `markdown-file`, `gamma`), optional folder and strip preference.
-It returns the two trees' data and a `review_id`. Import uses
-`POST /api/import/review/{id}` with JSON `{selected: [source item IDs]}`; it
-reuses the upload and checks current library state. Source IDs (and grouped
-`selection_ids` for duplicate Zotero records) make selection independent of
-destination IDs. Missing, Warnings and Selected filters only change visibility;
-hidden selections remain selected. Folder checkboxes affect descendants;
-Select all/Deselect all affect the whole plan. Nothing imports on preview or cancel.
+- `POST /api/import/review` takes the file, its `source` (`zotero`,
+  `markdown-zip`, `markdown-file`, `gamma`), an optional `folder` and `strip`.
+  It stages the upload, runs the source's preview and returns the two trees
+  plus a `review_id`. `POST /api/import/review/{id}` with
+  `{selected: [...]}` imports from the staged upload against the current
+  library; `DELETE` discards it.
+- Staging (`gamma/import_staging.py`): a directory per review under the data
+  directory, bound to the account and workspace, expiring after two hours
+  (`TTL`; expired ones are swept on the next upload). Commit takes a claim
+  (`running/` mkdir; 409 when held), writes `result.json` and deletes the
+  payload, so a repeated commit answers the saved report. Staging has its own
+  1 GB cap (`import_staging.MAX_BYTES`) and is not metered by the account quota.
+- Selection ids are source ids (`page:<id>` / `chat:<id>` for a Gamma
+  export, Zotero item keys, ...); duplicate Zotero records share
+  `selection_ids`. `parse_selection` (`gamma/import_review.py`): `None`
+  (no field) imports everything, `[]` imports nothing.
+- Frontend (`src/transfers/`): `ImportReviewDialog.jsx` owns the steps and
+  the report; `ImportTree.jsx` renders one tree with its checkboxes (a folder
+  toggles its descendants); `importReview.js` owns selection, filters and
+  tree construction (filters only hide rows; hidden selections stay
+  selected); `importApi.js` the adapter + the three calls;
+  `shared/lib/xhrUpload.js` the upload progress. Checking/importing show an
+  indeterminate bar.
 
-`gamma/import_staging.py` stores temporary uploads outside library data, bound
-to the account and workspace. Every request rechecks workspace write access.
-A filesystem claim prevents concurrent commit across workers, and the saved
-result makes a retry after a lost response safe. The payload is removed after
-success; closing review deletes its staging directory. Abandoned uploads expire
-after two hours and are cleaned on the next upload. Compressed uploads have a
-1 GB limit. This additive selection flow is separate from Settings' full backup
-replacement. Logseq and in-PDF annotations keep their existing source-specific
-import controls.
+Logseq and in-PDF annotations keep their own import controls.
 
 ## Plain Markdown uploads
 
@@ -202,16 +203,18 @@ pages or uploads. Both endpoints use `plan_zotero_archive`, so attachment
 resolution and warnings agree. The staged review flow reuses the upload,
 rechecks the current library, and leaves actual results and warnings in the dialog.
 
-The parser accepts standalone and inline PDF attachments, both MIME namespaces,
-and literal or resource paths. Lookup normalizes relative dot segments and
-percent encoding as well as ZIP filename encodings. If a filename changed,
-only a unique PDF in that same `files/<attachment-id>` directory can be used;
-ambiguous or cross-item matches are never guessed. Additional PDFs become
-separate pages in the item's collections, with stable attachment keys.
-Missing/invalid PDFs, unsupported or unlinked files, recovered filenames and
-preserved existing PDFs are reported. Empty directories do not supply PDF
-bytes; a URL in metadata is not a bundled attachment. Reimporting a complete
-export attaches a recovered PDF to an existing metadata-only page.
+- Inputs: standalone and inline PDF attachments, both MIME namespaces,
+  literal or resource paths. Lookup normalizes dot segments, percent
+  encoding and ZIP filename encodings. A URL in metadata is not an
+  attachment; an empty directory supplies no bytes.
+- `resolve_pdf_entry`: when the filename changed, only a unique PDF in the
+  same `files/<attachment-id>` directory is used; ambiguous or cross-item
+  matches are never guessed.
+- Extra PDFs of one item become extra pages in its collections, keyed
+  `<key>#pdf:<path>`. Reimporting a complete export attaches a recovered
+  PDF to an existing metadata-only page.
+- Warned: missing or invalid PDFs, unsupported or unlinked files, recovered
+  filenames, existing PDFs kept.
 
 ## Zotero RDF export
 
@@ -505,11 +508,10 @@ upload → image-XObject registry.
 
 ## Annotated-PDF export
 
-Both the annotation and visible-note writers use `ExportPdfReader`, which
-resolves dangling indirect references to PDF null objects. Some otherwise
-readable PDFs contain missing optional objects; PyPDF2 returns Python `None`
-for these and its writer otherwise fails with a blank `AssertionError`.
-The repair is in memory during export; the stored original is unchanged.
+Both the annotation and visible-note writers read through `ExportPdfReader`.
+PyPDF2 reads a dangling indirect reference as `None` and its writer then
+fails with an empty `AssertionError`; `ExportPdfReader` substitutes a
+`NullObject`. The stored original is unchanged.
 
 `/api/pages/{id}/export-pdf`: highlights become standard `/Highlight` (or
 `/Square` for area notes) annotations with the note text in the popup

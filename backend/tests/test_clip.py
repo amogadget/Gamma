@@ -296,7 +296,10 @@ def test_folders_lists_ancestors_and_labels(guest, upstream, meta_calls):
 
 def test_folders_sort_by_recent_views_then_modified(guest, meta_calls):
     page_ids = []
-    paths = ["Z/recent", "Y/older", "A/unread", "B/modified", "C/tie", "Z/recent"]
+    # Folder names unique to this test: the guest workspace is shared by the
+    # whole run, and another module's page in a folder of the same name would
+    # change that folder's newest modification.
+    paths = ["FZ/recent", "FY/older", "FA/unread", "FB/modified", "FC/tie", "FZ/recent"]
     for i, path in enumerate(paths):
         r = guest.post("/api/clip", json={
             "source_url": f"https://example.org/folder-recency/{i}", "folder": path,
@@ -309,7 +312,7 @@ def test_folders_sort_by_recent_views_then_modified(guest, meta_calls):
             conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?",
                          (f"2026-09-{12 if i in (3, 4) else 10:02d}T00:00:00.000Z", page_id))
 
-    expected = {"Z", "Z/recent", "Y", "Y/older", "A", "A/unread", "B", "B/modified", "C", "C/tie"}
+    expected = {"FZ", "FZ/recent", "FY", "FY/older", "FA", "FA/unread", "FB", "FB/modified", "FC", "FC/tie"}
 
     def folder_order():
         r = guest.get("/api/library/folders")
@@ -321,7 +324,7 @@ def test_folders_sort_by_recent_views_then_modified(guest, meta_calls):
     # Without usable history, newest modifications win; names break ties.
     for value in (None, {"invalid": True}, [None, {"id": [], "at": 1}]):
         assert guest.put("/api/prefs/recent-views", json={"value": value}).status_code == 200
-        assert folder_order() == ["B", "B/modified", "C", "C/tie", "A", "A/unread", "Y", "Y/older", "Z", "Z/recent"]
+        assert folder_order() == ["FB", "FB/modified", "FC", "FC/tie", "FA", "FA/unread", "FY", "FY/older", "FZ", "FZ/recent"]
 
     # Views outrank newer edits; an older page in the same folder cannot
     # overwrite its latest view. Deleted pages cannot introduce folders.
@@ -332,10 +335,10 @@ def test_folders_sort_by_recent_views_then_modified(guest, meta_calls):
         {"id": "deleted-page", "at": "2026-09-16T00:00:00.000Z"},
     ]
     assert guest.put("/api/prefs/recent-views", json={"value": history}).status_code == 200
-    assert folder_order() == ["Z", "Z/recent", "Y", "Y/older", "B", "B/modified", "C", "C/tie", "A", "A/unread"]
+    assert folder_order() == ["FZ", "FZ/recent", "FY", "FY/older", "FB", "FB/modified", "FC", "FC/tie", "FA", "FA/unread"]
     history[0]["at"] = "2026-09-15T00:00:00.000Z"
     assert guest.put("/api/prefs/recent-views", json={"value": history}).status_code == 200
-    assert folder_order()[:4] == ["Y", "Y/older", "Z", "Z/recent"]
+    assert folder_order()[:4] == ["FY", "FY/older", "FZ", "FZ/recent"]
 
 
 def test_clip_note_creates_web_clips_page_and_appends(guest):

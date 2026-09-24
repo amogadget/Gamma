@@ -10,16 +10,27 @@ was picked. The current mechanics live in
 [dev/collab.md](../dev/collab.md) and [dev/migrations.md](../dev/migrations.md);
 nothing here is implemented.
 
+**Superseded (2026-09-21).** The shape below — sharded multi-tenant nodes
+behind an edge router — was replaced by the plan in
+[todos/gamma-cloud-plan.md](../../todos/gamma-cloud-plan.md): a paid
+customer gets a container of their own (the unchanged self-hosted image),
+the free tier lives in the desktop app, one small shared instance hosts
+published pages, and one account server ([dev/cloud_accounts.md](../dev/cloud_accounts.md),
+built) is the identity every Gamma server accepts. The couplings listed
+here are still the reasons: with one container per customer none of them
+has to be undone. This note stays as the record of why sharding was
+considered and what it would have cost.
+
 ## Where the code assumes one machine
 
 Four couplings were found; they differ a lot in how hard they are to undo.
 
 **Uploads are a local directory.** `storage.store_pdf` / `store_file` write
-bytes under a content hash into `workspaces/<id>/uploads/`,
-`find_upload_file` returns a `Path`, and the uploads route serves the file
-with Range support, which pdf.js's range transport depends on. The module is
-small (about 230 lines) and every consumer wants a local path (about 70
-call sites: the uploads route, export zips, the manifest in `pdf_meta`, text
+bytes under a content hash into `workspaces/<id>/uploads/`, and
+`find_upload_file` returns a `Path`. The uploads route serves the file with
+Range support, which pdf.js's range transport depends on. The module is
+small (about 230 lines). Every consumer wants a local path (about 70 call
+sites: the uploads route, export zips, the manifest in `pdf_meta`, text
 extraction in `pdf_text`, backups). This is the easy one.
 
 **Databases are SQLite, one set per workspace.** `pages.db` holds the block
@@ -41,9 +52,8 @@ in `pdf_text`), PyPDF2 exports and AI calls run in the threadpool. That
 rules out serverless runtimes: Cloudflare's Python Workers are Pyodide
 without native libraries or long connections. A container is required.
 
-The good news is that every data path already takes a workspace id and the
-per-workspace directories are isolated, which is exactly what sharding by
-workspace needs.
+Every data path already takes a workspace id and the per-workspace
+directories are isolated, which is what sharding by workspace needs.
 
 ## The shape picked
 

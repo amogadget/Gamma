@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class SchemaOutdated(RuntimeError):
@@ -138,6 +138,22 @@ USERS_SCHEMA = [
         default_workspace TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
     )""",
+    # A cloud identity linked to an account (gamma/cloud_auth.py): the
+    # account server's stable subject, the last verified claims (handle,
+    # plan, email) and — desktop client only — the refresh token, Fernet-
+    # encrypted with the data directory's key. One per account and provider.
+    """CREATE TABLE IF NOT EXISTS identities (
+        provider TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        username TEXT NOT NULL REFERENCES users(username),
+        email TEXT NOT NULL DEFAULT '',
+        claims TEXT NOT NULL DEFAULT '{}',
+        refresh_token TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        last_login_at TEXT NOT NULL,
+        PRIMARY KEY (provider, subject)
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS identities_account ON identities(provider, username)""",
     """CREATE TABLE IF NOT EXISTS sessions (
         token TEXT PRIMARY KEY,
         username TEXT NOT NULL REFERENCES users(username),

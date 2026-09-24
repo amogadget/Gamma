@@ -1,17 +1,22 @@
 # GitHub Actions
 
-Six workflows live in `.github/workflows/`. A merge to `main` publishes
+Seven workflows live in `.github/workflows/`. A merge to `main` publishes
 only the Docker image and, when the site or its inputs changed, the website. The desktop app and the extension are released by
 dispatching their workflows — the `release` skill does that — and nothing
-is bumped or tagged by hand: versions are computed from the tags.
+is bumped or tagged by hand: versions are computed from the tags. The
+account server (`cloud/`) and the website (`sites/`) are separate from all
+of that: each has its own check and its own publish (`cloud.yml`,
+`site.yml`), dispatched from any branch (the `build-cloud` / `build-site`
+skills), and a PR that touches only one of them skips `check`.
 
 | Workflow | File | Runs when | Produces |
 |---|---|---|---|
-| `check` | `check.yml` | every pull request to `main` | pass/fail: brand asset consistency, backend pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
+| `check` | `check.yml` | every pull request to `main`, except one that only touches the account server or the website | pass/fail: brand asset consistency, backend pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
 | `desktop` | `desktop.yml` | manual dispatch only (`release` skill) | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
 | `extension` | `extension.yml` | manual dispatch only (`release` skill) | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
-| `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
-| `site` | `site.yml` | a push to `main` touching `sites/`, the artwork and demos it copies, or `PRIVACY.md`; or manual dispatch | gammapdf.com: `sites/dist` built and deployed as a Cloudflare Worker (static assets only; needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`; [sites/README.md](../../sites/README.md)) |
+| `docker` | `docker.yml` | every push to `main` except one that only touches the account server or the website; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
+| `cloud` | `cloud.yml` | a pull request touching `cloud/`; manual dispatch from any branch (`update-account-server` skill) | pass/fail: the account server's pytest; when dispatched and green, `ghcr.io/tim4431/gamma-cloud:latest` + `:sha-<short>` (`cloud/Dockerfile`, amd64) |
+| `site` | `site.yml` | a PR or a push to `main` touching `sites/`, the artwork and demos it copies, or `PRIVACY.md`; manual dispatch from any branch (`build-site` skill) | pass/fail: the site builds and its Worker passes a dry run; on a push or dispatch, gammapdf.com: `sites/dist` deployed as a Cloudflare Worker (static assets only; needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`; [sites/README.md](../../sites/README.md)) |
 | `Codex plugin package` | `codex-plugin.yml` | PRs touching the plugin or its tooling, or manual dispatch | installer tests on Windows/macOS/Linux and preview plugin release assets (pins `checkout@v4`/`setup-python@v5`/`upload-artifact@v4`, older than the rule below) |
 
 The `desktop` workflow also builds the versioned Codex plugin ZIP, its setup
@@ -20,8 +25,13 @@ same release (`tools/release_codex_plugin.py`).
 
 ```
 PR → main ──▶ check (pytest, npm test + build, e2e, extension zip)   ← merge skill waits for this
-merge ───────▶ docker.yml  ghcr :latest                              ← every merge
-         └──▶ site.yml    gammapdf.com                              ← only when sites/ or its inputs changed
+merge ───────▶ docker.yml  ghcr :latest                              ← every merge (not cloud/- or sites/-only ones)
+         └──▶ site.yml    check → gammapdf.com                      ← only when sites/ or its inputs changed
+PR touching cloud/ ──▶ cloud.yml: test                            ← instead of check, for cloud/-only PRs
+PR touching sites/ ──▶ site.yml: check                            ← instead of check, for sites/-only PRs
+build-site ──▶ site.yml --ref <branch>: check → gammapdf.com        ← no merge needed
+update-account-server ──▶ cloud.yml --ref <branch>: test → ghcr gamma-cloud :latest :sha-<short>
+                          then pull + restart on the VPS          ← no merge needed
 release skill ─┬──▶ desktop.yml  meta: version = max(package.json, newest v* tag + patch)
  (gh workflow  │        build Win/mac/Linux with that version pinned, smoke on all three
   run)         │        publish: Release v<version> (notes = commits since previous tag)
@@ -139,24 +149,62 @@ The Chrome Web Store upload stays manual
 
 ## `check.yml`
 
-Four parallel Ubuntu jobs on every PR to `main`: backend pytest (Python
-3.12, `requirements.txt` + `requirements-dev.txt`, `-n auto` over pytest-xdist), the frontend unit tests
-+ build (Node 22, `npm test` then `npm run build`), the browser suite
-(`npm run e2e -- --continue` against a backend started from the checkout
-with `GAMMA_E2E_PYTHON=python` — both requirements files, since a scenario
-builds its Zotero fixture from a backend test module — Playwright's Chromium installed with its
-system deps; on a failure the harness's `failures/` folders — screenshots,
-page problems, the error, the server log tail — are uploaded as the
-`e2e-failures` artifact), and a manifest parse + zip of the extension. No
-installers. The `merge` skill waits for it before merging; a red check is
-fixed on the branch as normal work.
+Five parallel Ubuntu jobs on every PR to `main`: brand asset consistency,
+backend pytest (Python 3.12, `requirements.txt` + `requirements-dev.txt`,
+`-n auto` over pytest-xdist), the frontend unit tests + build (Node 22,
+`npm test` then `npm run build`), the browser suite
+(`npm run e2e -- --continue` against a backend started from the checkout with
+`GAMMA_E2E_PYTHON=python` — both requirements files, since a scenario
+builds its Zotero fixture from a backend test module — Playwright's
+Chromium installed with its system deps; on a failure the harness's
+`failures/` folders — screenshots, page problems, the error, the server
+log tail — are uploaded as the `e2e-failures` artifact), and a manifest
+parse + zip of the extension. No installers. A PR that changes only
+`cloud/`, `cloud.yml`, the `update-account-server` skill or
+[cloud_accounts.md](cloud_accounts.md) — or only `sites/`, `site.yml`, the
+`build-site` skill or `PRIVACY.md` — skips it (`paths-ignore`); `cloud.yml`
+and `site.yml` check those. (A PR touching the brand artwork the site
+copies still runs `check`: its `branding` job owns those files.) The `merge` skill waits for it before merging; a
+red check is fixed on the branch as normal work.
 
 ## `docker.yml`
 
-buildx for amd64 + arm64, `latest` on every push to `main`. When dispatched
+buildx for amd64 + arm64, `latest` on every push to `main` (the same
+`paths-ignore` as `check.yml`: an account-server- or website-only merge
+rebuilds nothing — neither is in the image). When dispatched
 with a `version` input (the desktop publish job does this on the release
 tag) it also pushes `<version>` and `<major.minor>`. Setup notes:
 [docs/dev/debugging.md](debugging.md) and the memory note on GHCR.
+
+## `cloud.yml`
+
+The account server ([cloud_accounts.md](cloud_accounts.md)) outside the
+release flow. `test`: its pytest with `cloud/requirements*.txt` — on a PR
+that touches `cloud/`, and first on every dispatch. `publish` (dispatch
+only, after a green `test`): `cloud/Dockerfile` for amd64, tagged `latest`
+and `sha-<short>`, pushed to `ghcr.io/tim4431/gamma-cloud`. Dispatch it
+from the branch that holds the work
+(`gh workflow run cloud.yml --ref dev`) — nothing needs to reach `main`.
+So `:latest` is whatever was
+published last, from whichever branch; the `sha-` tag and the image's
+revision label say which commit. The `build-cloud` skill dispatches it;
+`update-account-server` builds through it, then deploys. Like every
+dispatch, it needs the file on `main` once before the first run.
+
+## `site.yml`
+
+gammapdf.com ([sites/README.md](../../sites/README.md)); it depends on no
+app code, only on `sites/` and the files its build copies. `check`: `npm
+ci`, `npm run build`, the key pages present in `dist/` (index, 404,
+privacy, `_redirects`, `_headers`, the favicon), no `<!--#include` left
+unexpanded, and `wrangler deploy --dry-run` (bundles the Worker and reads
+`wrangler.jsonc` — no credentials). Runs on a PR touching those paths and
+first on every deploy. `deploy` (a push to `main` touching those paths, or
+a dispatch from any branch — the `build-site` skill, `gh workflow run
+site.yml --ref dev`): builds again and `wrangler deploy`s with the
+`CLOUDFLARE_*` secrets. The live site is the last deploy from whichever
+branch; the next merge to `main` touching the site replaces a branch
+deploy with `main`'s.
 
 ## Running and watching by hand
 
@@ -166,6 +214,8 @@ gh workflow run desktop.yml --ref main -f publish=false      # build check only
 gh workflow run desktop.yml --ref main -f prerelease=true -f version=1.2.0-rc1
 gh workflow run extension.yml --ref main                     # extension release — the `release` skill
 gh workflow run docker.yml --ref v0.2.3 -f version=0.2.3     # re-tag an image
+gh workflow run site.yml --ref dev                           # check + deploy gammapdf.com — the `build-site` skill
+gh workflow run cloud.yml --ref dev                          # test + publish the account server — the `build-cloud` skill
 
 gh run list --limit 5
 gh run watch <run-id> --exit-status
@@ -188,7 +238,7 @@ shows which exist.
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGN_ENDPOINT`, `AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE`, optional `AZURE_SIGN_PUBLISHER` | `desktop.yml`, Windows leg: Azure Trusted Signing |
 | `MAC_CERT_P12`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | `desktop.yml`, macOS leg: Developer ID + notarization (replaces the ad-hoc signature) |
 | `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET` | `desktop.yml`, Windows leg: Microsoft Store submission via `msstore` ([release.md](../../desktop/docs/release.md#microsoft-store) says where each value comes from) |
-| `GITHUB_TOKEN` (automatic) | releases and tags, the docker dispatch, the GHCR push |
+| `GITHUB_TOKEN` (automatic) | releases and tags, the docker dispatch, the GHCR pushes (`gamma`, `gamma-cloud`) |
 
 Set them from a terminal with `gh secret set NAME` (prompts for the value);
 never paste secret values into chat or files.
@@ -196,7 +246,8 @@ never paste secret values into chat or files.
 ## Adding or changing a workflow
 
 - One deliverable per workflow, a `pull_request` path filter for checks
-  (release workflows are dispatch-only), and the tag-derived version rule
+  (release workflows are dispatch-only; `cloud.yml` is the one workflow that
+  both checks and publishes, since its deliverable has no release series), and the tag-derived version rule
   above for anything that publishes.
 - The Linux Electron steps need `xvfb-run`; the unpacked `linux-unpacked`
   dir needs `--no-sandbox` (the `.deb` postinst fixes that for installs).

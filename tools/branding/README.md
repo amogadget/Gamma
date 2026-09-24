@@ -50,5 +50,5 @@ Light/Dark app themes remain in `frontend/src/shared/styles/app.css`.
 
 README feature illustrations share the logo placement, warm paper background, amber
 curves and card shadow defined in `branding.py`, with 72 px headings and 28 px
-introductory copy on a 1920 ? 1080 canvas. The real recordings use the matching
+introductory copy on a 1920 × 1080 canvas. The real recordings use the matching
 16:9 paper frame in `tools/readme-media/media_output.py`.

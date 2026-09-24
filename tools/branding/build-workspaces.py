@@ -1,10 +1,11 @@
 """Regenerate the light workspace illustrations: two people typing into the same
 page at the same time, each in their own block, while a third reads along."""
-from branding import MARK, write_svg, typewriter, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
+from branding import MARK, FONT, write_svg, scene_heading, typewriter, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
 
 LOOP = 8  # seconds per loop: both edits are typed, held, then the page resets
 K = lambda *ts: ';'.join(f'{t / LOOP:.4f}' for t in ts)
 
+heading = scene_heading([(332, 'Your space.'), (424, 'A shared place.')], [(494, 'Keep personal libraries. Build knowledge together.'), (536, 'Papers, highlights and notes, organized by workspace.')])
 svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: your space, a shared place</title>
   <desc id="desc">Keep Reading list and Project notes in separate personal workspaces. In the shared Quantum lab workspace, you are an owner, Maya is an editor, and Sam is a viewer. Organize papers in folders and collaborate on linked highlights and notes with live edits and cursors: you and Maya type into two blocks of the same page at the same time. Personal workspaces have one owner; individual pages can be shared by link.</desc>
@@ -23,12 +24,9 @@ MARK
     </g>
   </defs>
   {SCENE_BACKGROUND}
-  <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <g font-family="{FONT}">
     {SCENE_LOGO}
-    <text x="120" y="332" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">Your space.</text>
-    <text x="120" y="424" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">A shared place.</text>
-    <text x="122" y="494" font-size="28" fill="#6b6a65">Keep personal libraries. Build knowledge together.</text>
-    <text x="122" y="536" font-size="28" fill="#6b6a65">Papers, highlights and notes, organized by workspace.</text>
+    {heading}
 
     <!-- Separate personal libraries belong to one account. -->
     <rect x="120" y="602" width="664" height="316" rx="20" fill="#ffffff" stroke="#e3e0d8" stroke-width="1.5" filter="url(#shadow)"/>

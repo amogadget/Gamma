@@ -59,6 +59,38 @@ def test_chat_resolves_reference_context_and_tools(org, ai_provider, monkeypatch
     assert len(calls) == 2
 
 
+def test_chat_sends_selection_place_and_formula_picture(org, ai_provider, monkeypatch):
+    """A structured selection reaches the provider labelled with its page
+    and section, and a formula's region goes along as a rendered picture."""
+    from gamma import ai_context
+    import gamma.routers.ai as ai
+    c, ids = org
+    pages = ["Title\nAbstract\nWe study cats.", "2 Methods\nThe Hamiltonian is\nH = ∑ ω σ\nwhere ω is the drive."]
+    monkeypatch.setattr(ai_context, "pdf_path", lambda ws, doc: "fake.pdf")
+    monkeypatch.setattr(ai_context, "extract_pages", lambda src: pages)
+    monkeypatch.setattr(ai_context, "outline", lambda src: [])
+    monkeypatch.setattr(ai_context, "ensure_indexed", lambda *args: None)
+    monkeypatch.setattr(ai_context, "render_page",
+                        lambda src, page_no, max_side, box=None: ((b"png", "image/png", 4, 4), 2))
+    seen = {}
+
+    def fake_open(messages, system, entry, rt, pdf_b64s=None, **kw):
+        seen.update(messages=messages, images=kw.get("images"))
+        return FakeResp([{"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}}])
+
+    monkeypatch.setattr(ai, "_open_ai", fake_open)
+    response = c.post("/api/ai/chat", json={"prompt": "explain", "page_id": ids["a"], "stream": True,
+        "selections": [{"text": "H = ∑ ω σ", "page": 2, "box": [0.1, 0.4, 0.5, 0.45]}]})
+    assert response.status_code == 200, response.text
+    question = seen["messages"][-1]["content"]
+    assert 'Selected passage (PDF page 2; section "2 Methods"; a picture' in question
+    assert "Text around the selected passage (PDF page 2" in question
+    assert seen["images"] == [("image/png", "cG5n")]
+    first = json.loads(response.text.splitlines()[0])["context"][0]
+    # Too short to anchor on text: placed on the viewer's page by its box.
+    assert first["selection"]["passages"] == [{"page": 2, "section": "2 Methods", "found": False, "crop": True}]
+
+
 def test_context_deduplicates_and_rejects_non_pages(org):
     from gamma.ai_context import gather_inputs
     from gamma.routers.ai import AIChatRequest
@@ -80,16 +112,16 @@ def test_pdf_references_preserve_selection_metadata_and_budget(org, monkeypatch)
     monkeypatch.setattr(ai_context, "ensure_indexed", lambda *args: None)
     monkeypatch.setattr(ai_context, "document_map", lambda *args: "p.3: cavity results")
 
-    def selection(ws, doc, quote, budget):
-        calls.append((quote, budget))
-        return "[PDF page 3]\nSelected cavity results"
+    def selection(ws, doc, passages, budget):
+        calls.append(([p["text"] for p in passages], budget))
+        return "[PDF page 3]\nSelected cavity results", [{"page": 3, "section": "", "found": True, "crop": False}]
 
     monkeypatch.setattr(ai_context, "selection_context", selection)
     payload = AIChatRequest(prompt="Compare", page_id=ids["a"],
         pages=[ids["a"], ids["note"], "missing"], selection="cavity results",
         multi_context_char_limit=6000, agent_scope="page")
     _, context, coverage = ai_context.gather_inputs(ids["ws"], payload, False)
-    assert calls == [("cavity results", 3000)]
+    assert calls == [(["cavity results"], 3000)]
     assert "Ada One" in context and "2019" in context and "Nature" in context
     assert "[PDF page 3]" in context and "private annotation" not in context
     assert f"Document map for Gamma page ID: {ids['a']}" in context

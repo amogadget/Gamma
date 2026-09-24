@@ -497,19 +497,50 @@ async function main() {
             await s.openServer(id);
             return null;
           } catch (e) {
-            s.loadLauncher(e.message);
+            s.loadLauncher(e, id);
             return e.message;
           }
         }, id);
         assert(err, 'open rejected');
         await waitFor(() => isLauncher(content.url()), 'launcher shown');
-        await content.waitForSelector('#status.err');
-        const txt = await content.textContent('#status');
-        assert(/ERR_CONNECTION_REFUSED|refused|failed/i.test(txt), txt);
-        return txt.slice(0, 60);
+        await content.waitForSelector('#fail:not([hidden])');
+        const txt = await content.textContent('#failTitle');
+        assert(/could not reach/i.test(txt), txt);
+        // Chromium's own wording is kept, but as the detail, not the headline.
+        assert(/ERR_CONNECTION_REFUSED/.test(await content.textContent('#failDetail')), 'raw error kept');
+        assert(await content.locator('#failLogBox').isHidden(), 'no server log for a remote');
+        return txt;
       } finally {
         await hook(app, (s, id) => s.registry.remove(id, {}), id);
       }
+    });
+
+    // A sidecar that dies during startup: the launcher explains it instead of
+    // printing the tail of the log file (lib/startup.js + the #fail panel).
+    await step('a server that will not start is explained, not dumped', async () => {
+      const log = [
+        'INFO:     127.0.0.1:37568 - "GET /api/session HTTP/1.1" 200 OK',
+        '[startup] the data directory (C:\\data\\ws) is at schema version 13, newer than this Gamma (version 7). Run the Gamma release that wrote it.',
+        '--- server exited (code 1) ---',
+      ].join('\n');
+      const d = await hook(app, (s, log) => s.startup.diagnose(log, 'exit'), log);
+      assert.equal(d.action, 'update', JSON.stringify(d));
+      assert(/newer version of Gamma/i.test(d.summary), d.summary);
+
+      await hook(app, (s, arg) => {
+        const e = new Error(arg.d.summary);
+        e.startup = { ...arg.d, log: arg.log };
+        s.loadLauncher(e, arg.id);
+      }, { d, log, id: ids.alpha });
+      await waitFor(() => isLauncher(content.url()), 'launcher shown');
+      await content.waitForSelector('#fail:not([hidden])');
+      assert(/newer version of Gamma/i.test(await content.textContent('#failTitle')), 'summary shown');
+      assert(/schema version 13/.test(await content.textContent('#failDetail')), "the server's own line shown");
+      assert(/Check for updates/.test(await content.textContent('#failActs')), 'the fix is offered');
+      assert(await content.locator('#failLog').isHidden(), 'the raw log stays folded away');
+      await content.click('#failClose');
+      assert(await content.locator('#fail').isHidden(), 'dismissable');
+      return d.summary;
     });
 
     await step('navigation guard: foreign URLs open outside, the window stays', async () => {

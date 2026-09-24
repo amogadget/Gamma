@@ -68,6 +68,11 @@ class PdfDocument(_Context):
             raise IndexError("PDF page index out of range")
         return _Page(self, index)
 
+    def get_toc(self):
+        """Preorder bookmarks, with zero-based levels and page destinations."""
+        return iter(_Bookmark(self, *entry) for entry in
+                    _native.outline(self._check()))
+
     def close(self):
         handle = self._handle
         if handle is not None:
@@ -75,6 +80,23 @@ class PdfDocument(_Context):
             # readers. The capsule destructor is the fallback for unclosed docs.
             _native.close(handle)
             self._handle = None
+
+
+class _Bookmark:
+    def __init__(self, document, level, title, index):
+        self._document, self.level, self._title, self._index = document, level, title, index
+
+    def get_title(self):
+        self._document._check()
+        return self._title
+
+    def get_dest(self):
+        self._document._check()
+        return self if self._index is not None else None
+
+    def get_index(self):
+        self._document._check()
+        return self._index
 
 
 class _Page(_Context):
@@ -98,7 +120,7 @@ class _Page(_Context):
         self._check()
         return _TextPage(self)
 
-    def render(self, scale=1, rev_byteorder=True):
+    def render(self, scale=1, rev_byteorder=True, crop=(0, 0, 0, 0)):
         if rev_byteorder is not True:
             raise ValueError("gamma_ios_pdf exposes RGBA only (rev_byteorder=True)")
         scale = float(scale)
@@ -109,10 +131,23 @@ class _Page(_Context):
         sw, sh = w * scale, h * scale
         if not math.isfinite(sw) or not math.isfinite(sh):
             raise ValueError("PDF raster exceeds pixel limit")
-        width, height = math.ceil(sw), math.ceil(sh)
+        crop = tuple(float(v) for v in crop)
+        if len(crop) != 4 or any(not math.isfinite(v) or v < 0 for v in crop):
+            raise ValueError("PDF crop must contain four finite nonnegative margins")
+        left, bottom, right, top = crop
+        if left + right >= w or bottom + top >= h:
+            raise ValueError("PDF crop leaves no page area")
+        margins = tuple(v * scale for v in crop)
+        if any(not math.isfinite(v) for v in margins):
+            raise ValueError("PDF raster exceeds pixel limit")
+        # Match PDFium's rounding: ceil full dimensions and each margin.
+        l, b, r, t = map(math.ceil, margins)
+        width, height = math.ceil(sw) - l - r, math.ceil(sh) - b - t
         if (min(width, height) < 1 or max(width, height) > MAX_RENDER_SIDE
                 or width * height > MAX_RENDER_PIXELS):
             raise ValueError("PDF raster exceeds pixel limit")
+        if any(crop):
+            return _Bitmap(_native.render(self._check(), self._index, scale, *crop))
         return _Bitmap(_native.render(self._check(), self._index, scale))
 
     def get_objects(self, max_depth=1):

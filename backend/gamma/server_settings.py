@@ -65,6 +65,12 @@ def _parse(raw, default: int, lo: int, hi: int) -> int:
     return value if lo <= value <= hi else default
 
 
+def _get_raw(key: str) -> str:
+    with connect_users_db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else ""
+
+
 def _set_raw(key: str, value: str) -> None:
     with connect_users_db() as conn:
         conn.execute(

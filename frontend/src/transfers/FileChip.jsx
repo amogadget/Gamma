@@ -15,7 +15,9 @@
 import React, { createContext, useContext, useEffect, useReducer, useState } from "react";
 import { DownloadIcon, ExternalLinkIcon, FileIcon, PaperIcon, PlusIcon } from "../shared/ui/Icons";
 import { ContextMenu, MenuItem } from "../shared/ui/Menus";
-import { API, apiJson, assetUrl, getCurrentWorkspace, getExpectedUser, withShare, withWorkspace } from "../shared/lib/utils";
+import { API, apiJson, assetUrl } from "../shared/lib/utils";
+import { xhrUpload } from "../shared/lib/xhrUpload";
+export { xhrUpload };
 
 // What the page around the chip provides: navigation and promotion come from
 // App (they need the page's folder and openBlock); a chip rendered with no
@@ -101,10 +103,8 @@ let reporter = null;
 export function setUploadReporter(r) { reporter = r; }
 
 // Multipart POST of one file → the JSON reply, or null on refusal/failure
-// (callers treat null as "nothing inserted"). XMLHttpRequest rather than
-// fetch because only it reports upload progress; it bypasses the fetch
-// wrapper, so the workspace header and the tab-identity guard are set by
-// hand. Shared with the image upload.
+// (callers treat null as "nothing inserted"), reported as a background-tasks
+// row (shared/lib/xhrUpload.js does the request). Shared with the image upload.
 export function postFile(endpoint, file) {
   let abort = null;
   const id = reporter?.start(file, () => abort?.()); // the tasks popover's stop button
@@ -115,37 +115,6 @@ export function postFile(endpoint, file) {
     onAbortable: (fn) => { abort = fn; },
   }).then((data) => { reporter?.done(id, true, ""); return data; },
     (err) => { reporter?.done(id, false, String(err?.message || err)); return null; });
-}
-
-// Multipart POST → the JSON reply. XMLHttpRequest rather than fetch because
-// only it reports upload progress and can be aborted mid-body; it bypasses
-// the fetch wrapper, so the workspace header and the tab-identity guard are
-// set by hand. Rejects with an Error carrying `status` / `data` like the
-// fetch wrapper's, or `aborted: true` after onAbortable's function ran.
-// Shared by every upload: block files and images (postFile above), PDFs
-// (App.jsx resolvePdfSource).
-export function xhrUpload(endpoint, form, { onProgress, onAbortable } = {}) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", withShare(withWorkspace(endpoint)));
-    xhr.withCredentials = true;
-    const expected = getExpectedUser();
-    if (expected) xhr.setRequestHeader("X-Gamma-User", expected);
-    if (getCurrentWorkspace()) xhr.setRequestHeader("X-Gamma-Workspace", getCurrentWorkspace());
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(e.loaded, e.total); };
-    xhr.onload = () => {
-      let data = null;
-      try { data = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status >= 200 && xhr.status < 300) { resolve(data); return; }
-      const err = new Error(String(data?.detail || xhr.statusText || `HTTP ${xhr.status}`));
-      err.status = xhr.status; err.data = data;
-      reject(err);
-    };
-    xhr.onerror = () => reject(new Error("network error"));
-    xhr.onabort = () => { const err = new Error("stopped"); err.aborted = true; reject(err); };
-    onAbortable?.(() => xhr.abort());
-    xhr.send(form);
-  });
 }
 
 // POST /api/upload-file → {url, name} | null: any non-image file a block

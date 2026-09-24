@@ -1,0 +1,10 @@
+# Build the image from a copy of the source instead of pulling it from GHCR
+# (a patch under test):
+#   rsync/scp the repository's cloud/ folder to ./src, then
+#   docker compose -f compose.yml -f compose.build.yml up -d --build
+services:
+  account:
+    image: gamma-cloud:local
+    build:
+      context: ./src
+      dockerfile: deploy/Dockerfile.local

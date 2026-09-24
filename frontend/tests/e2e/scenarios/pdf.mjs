@@ -155,7 +155,7 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
         { role: "ai", text: `The greeting is here [p. 2](${href}).` }],
     } });
     await page.reload();
-    const link = page.locator('a.chatPageLink', { hasText: "p. 2" });
+    const link = page.locator('a.gammaLink-citation', { hasText: "p. 2" });
     await link.waitFor();
     assert((await link.getAttribute("href")).includes("quote="), "saved citation retains its quote");
     await link.click();
@@ -203,6 +203,36 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("pdf: a citation pasted into a note is a card that opens the passage in place", async () => {
+    const quote = "Page two says hello world";
+    const note = await account.api("/api/blocks", { method: "POST", body: {
+      parent_id: pageId,
+      // As pasted from a chat answer (relative), and as copied from a server
+      // this library no longer lives on (absolute, another host).
+      content: `See [p. 2](/?page=${pageId}&pdf_page=2&quote=${encodeURIComponent(quote)})`
+        + ` and [moved](https://old-host.invalid:9001/?page=${pageId}&pdf_page=2&quote=${encodeURIComponent(quote)})`,
+    } });
+    await page.reload();
+    await waitForPdf(page);
+    const card = page.locator(`.blockRow a.gammaLink-citation`, { hasText: "p. 2" });
+    await card.waitFor();
+    assertEq(await page.locator(".blockRow a.linkChip").count(), 0, "a Gamma link is never an external link chip");
+    const url = page.url();
+    await card.click();
+    const mark = page.locator('[data-page="2"] .pdfCitationMark').first();
+    await mark.waitFor();
+    assertEq(page.url(), url, "the citation opens in place, without navigating");
+    await page.keyboard.press("Escape");
+    await until(async () => await mark.count() === 0, { what: "citation dismissed" });
+    // The same link written against the old server still resolves: the id is
+    // what identifies the page, not the host.
+    await page.locator(".blockRow a.gammaLink-citation", { hasText: "moved" }).click();
+    await mark.waitFor();
+    await page.keyboard.press("Escape");
+    await account.api(`/api/blocks/${note.id}`, { method: "DELETE" });
+    assertNoProblems(page);
+  });
+
   await step("pdf: a citation stays clickable when a stream update arrives during a click", async () => {
     await page.reload();
     await waitForPdf(page);
@@ -226,7 +256,7 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     await page.waitForFunction(() => !!window.citationStream);
     const href = `/?page=${pageId}&pdf_page=2&quote=${encodeURIComponent("Page two says hello world")}`;
     await page.evaluate(href => window.citationStream.delta(`See [streamed passage](${href}).\n\nContinuing`), href);
-    const link = page.locator("a.chatPageLink", { hasText: "streamed passage" });
+    const link = page.locator("a.gammaLink-citation", { hasText: "streamed passage" });
     await link.waitFor();
     await link.scrollIntoViewIfNeeded();
     const box = await link.boundingBox();
@@ -245,18 +275,61 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("pdf: a selection goes to the chat with its page and region, and the reply says where it was placed", async () => {
+    await page.reload();
+    await waitForPdf(page, 2);
+    const requests = [];
+    // What the server reports it did with the selection (ai_context.selection_context).
+    const coverage = { context: [{ title: "Rydberg paper", doc_id: docId, native: false, native_requested: false,
+      partial: true, chars: 900, pages: 0, pages_shown: 0,
+      selection: { passages: [{ page: 2, section: "Results", found: false, crop: true }] } }] };
+    await page.route("**/api/ai/chat", async (route) => {
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({ contentType: "application/x-ndjson",
+        body: `${JSON.stringify(coverage)}\n${JSON.stringify({ delta: "It says hello." })}\n` });
+    });
+    try {
+      // The chat takes the selection from a mouseup inside the viewer.
+      await page.evaluate(() => {
+        const span = [...document.querySelectorAll('[data-page="2"] .textLayer span')]
+          .find((s) => s.textContent.includes("says hello"));
+        const off = span.textContent.indexOf("says hello");
+        const range = document.createRange();
+        range.setStart(span.firstChild, off);
+        range.setEnd(span.firstChild, off + "says hello".length);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        span.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      });
+      await page.locator(".chatSelChips").getByText("Selection", { exact: true }).waitFor();
+      await page.locator("textarea.chatInputArea").fill("What does this say?");
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      await until(() => requests.length === 1, { what: "the chat request" });
+      const [sel] = requests[0].selections;
+      assertEq(sel.text, "says hello");
+      assertEq(sel.page, 2, "the page the selection starts on");
+      assert(Array.isArray(sel.box) && sel.box.length === 4 && sel.box[0] < sel.box[2] && sel.box[1] < sel.box[3]
+        && sel.box.every((v) => v >= 0 && v <= 1), `box as page fractions: ${JSON.stringify(sel.box)}`);
+      await page.getByText("Model saw text around p. 2 · Results").waitFor();
+      await page.getByText("Picture of the selection sent").waitFor();
+    } finally {
+      await page.unroute("**/api/ai/chat");
+    }
+    assertNoProblems(page);
+  });
+
   await step("pdf: chat paper recommendations and bare identifiers open clickable source links", async () => {
     const doi = "https://doi.org/10.1103/PhysRevA.69.062320";
     await account.api(`/api/chats/${pageId}`, { method: "PUT", body: { messages: [
       { role: "ai", text: `[Cavity quantum electrodynamics](${doi})\n\nDOI: **10.1103/PhysRevA.69.062320**\n\narXiv:cond-mat/0402216` },
     ] } });
     await page.reload();
-    const title = page.locator("a.chatLinkCard", { hasText: "Cavity quantum electrodynamics" });
+    const title = page.locator("a.gammaLinkCard", { hasText: "Cavity quantum electrodynamics" });
     await title.waitFor();
     assertEq(await title.getAttribute("href"), doi, "paper title links to the search result's DOI");
-    const identifier = page.locator("strong a.chatLinkCard", { hasText: "10.1103/PhysRevA.69.062320" });
+    const identifier = page.locator("strong a.gammaLinkCard", { hasText: "10.1103/PhysRevA.69.062320" });
     assertEq(await identifier.getAttribute("href"), doi, "saved bare DOI is clickable");
-    assertEq(await page.locator("a.chatLinkCard", { hasText: "arXiv:cond-mat/0402216" }).getAttribute("href"),
+    assertEq(await page.locator("a.gammaLinkCard", { hasText: "arXiv:cond-mat/0402216" }).getAttribute("href"),
       "https://arxiv.org/abs/cond-mat/0402216", "legacy arXiv identifier is clickable");
     // Verify actual navigation without contacting the publisher.
     const chatUrl = page.url();
@@ -282,7 +355,7 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
       { role: "ai", text: `[other source](${href})` },
     ] } });
     await page.reload();
-    await page.locator("a.chatPageLink", { hasText: "other source" }).click();
+    await page.locator("a.gammaLink-citation", { hasText: "other source" }).click();
     await page.waitForSelector('[data-page="1"] .pdfCitationMark');
     assert((await page.textContent('[data-page="1"] .textLayer')).includes(quote), "citation resolved against the requested document");
     for (const [text, message] of [["This passage does not exist.", "could not be located"], ["Repeated source passage.", "More than one passage"]]) {

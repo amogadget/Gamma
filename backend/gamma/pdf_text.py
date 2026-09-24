@@ -264,12 +264,45 @@ def _encode_bitmap(bitmap) -> tuple[bytes, str]:
     return buf.getvalue(), "image/jpeg"
 
 
-def render_page(src, page_no: int, max_side: int = RENDER_MAX_SIDE):
+def outline(src) -> list[tuple[int, str, int]]:
+    """The PDF's own table of contents (its bookmarks) as ``(level, title,
+    1-based page)`` in document order; entries without a page destination
+    are skipped. [] when the file has none or can't be read."""
+    with _lock:
+        try:
+            kind, pdf = _open(src)
+            if kind == "pypdf2":
+                return []
+            try:
+                entries = []
+                for item in pdf.get_toc():
+                    dest = item.get_dest()
+                    index = dest.get_index() if dest else None
+                    title = (item.get_title() or "").strip()
+                    if index is not None and title:
+                        entries.append((item.level, title, index + 1))
+                return entries
+            finally:
+                pdf.close()
+        except Exception as e:
+            log.warning(f"[pdf-text] outline read failed: {e}")
+            return []
+
+
+# A cropped region is rendered sharper than a whole page (a formula is small),
+# but never past this zoom — 4× = 288 dpi.
+_CROP_MAX_SCALE = 4.0
+
+
+def render_page(src, page_no: int, max_side: int = RENDER_MAX_SIDE, box=None):
     """Rasterize one page (1-based) for a vision model: ``(image, pages)``
     where image is ``(bytes, media_type, width, height)`` — the page scaled
     so its longer side is ``max_side`` px — or None when the page number is
     out of range; ``(None, 0)`` when the file can't be rendered (unreadable,
-    or only PyPDF2 could open it). Holds the pdfium lock like every walk."""
+    or only PyPDF2 could open it). ``box`` = ``(x0, y0, x1, y1)`` as
+    fractions of the page, top-left origin, renders just that region (its
+    longer side at ``max_side`` px, zoom capped). Holds the pdfium lock like
+    every walk."""
     with _lock:
         try:
             kind, pdf = _open(src)
@@ -282,8 +315,16 @@ def render_page(src, page_no: int, max_side: int = RENDER_MAX_SIDE):
                 page = pdf[page_no - 1]
                 try:
                     w, h = page.get_size()
+                    crop = (0, 0, 0, 0)
                     scale = max_side / max(w, h, 1)
-                    bitmap = page.render(scale=scale, rev_byteorder=True)
+                    if box:
+                        x0, y0, x1, y1 = box
+                        # pdfium crops by the amount cut off each side
+                        # (left, bottom, right, top) in PDF units.
+                        crop = (x0 * w, (1 - y1) * h, (1 - x1) * w, y0 * h)
+                        scale = min(max_side / max((x1 - x0) * w, (y1 - y0) * h, 1),
+                                    _CROP_MAX_SCALE)
+                    bitmap = page.render(scale=scale, crop=crop, rev_byteorder=True)
                     try:
                         data, media_type = _encode_bitmap(bitmap)
                         return (data, media_type, bitmap.width, bitmap.height), total

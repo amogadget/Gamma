@@ -25,6 +25,7 @@ or says it is a manual look (**manual**).
 | 1.5 | Relaunch → the last server reopens by itself, data intact, chrome already in the persisted theme | auto: *relaunch reopens the last server with its data intact* |
 | 1.6 | *Reopen last server at launch* switched off → launcher at start | manual (toggle in the launcher, restart) |
 | 1.7 | Cold start of the frozen server stays well under the 60 s health budget on a slow disk | manual: watch the *Starting …* status; `logs/<id>.log` has the uvicorn banner |
+| 1.8 | A server that will not start explains itself on the launcher (cause, the server's own line, the fixing button, log folded away) | auto: *a server that will not start is explained, not dumped*; manual: open a data dir written by a newer Gamma |
 
 ## 2. Switching (the reason the shell bar exists)
 

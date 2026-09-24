@@ -516,3 +516,13 @@
   padding: 0 6px;
   font-size: calc(10px * var(--ui-font-scale, 1));
 }
+
+/* Quick open (Ctrl+P): the page palette, docked near the top like VS Code's. */
+.quickOpenOverlay { align-items: flex-start; padding-top: 12vh; }
+.quickOpen { width: min(560px, calc(100vw - 32px)); padding: 8px; gap: 0; }
+.quickOpenInput { display: flex; align-items: center; gap: 8px; padding: 0 4px 6px; color: var(--text-muted); }
+.quickOpenInput .searchInput { flex: 1; }
+.quickOpenList { max-height: min(420px, 55vh); overflow-y: auto; }
+.quickOpenRow { border-radius: 4px; }
+.quickOpenTag { flex-shrink: 0; font-style: normal; font-size: calc(10px * var(--ui-font-scale, 1)); color: var(--text-dim); }
+.quickOpen .chatMentionHint { padding: 6px 6px 0; }

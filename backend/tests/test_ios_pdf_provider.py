@@ -54,7 +54,7 @@ def native(monkeypatch):
     bridge = types.ModuleType("_gamma_ios_pdf")
     handle = object()
     for name in ("open_data", "open_path", "close", "page_count", "page_geometry",
-                 "page_text", "render", "occupancy"):
+                 "page_text", "render", "occupancy", "outline"):
         setattr(bridge, name, Mock())
     bridge.open_data.return_value = bridge.open_path.return_value = handle
     bridge.page_count.return_value = 1
@@ -126,6 +126,23 @@ def test_text_sizes_count_and_render_route_real_adapter(native, monkeypatch):
     assert png_rows(data) == b"\0" + bytes((255, 0, 0, 255)) * 3 + b"\0" + bytes((0, 0, 255, 255)) * 3
     native.render.assert_called_once_with(native.open_data.return_value, 0, 1.0)
     assert native.close.call_count == 4
+
+
+def test_outline_routes_real_adapter(native):
+    native.outline.return_value = [(0, " Intro ", 0), (1, "Nested 文", 2),
+                                   (0, "External", None), (0, "", 0)]
+    assert pdf_text.outline(b"pdf") == [(0, "Intro", 1), (1, "Nested 文", 3)]
+    native.outline.assert_called_once_with(native.open_data.return_value)
+    native.close.assert_called_once()
+
+
+def test_region_render_does_not_allocate_huge_full_page(native):
+    native.page_geometry.return_value.update(width=10000, height=20000)
+    image, count = pdf_text.render_page(b"pdf", 1, box=(.1, .2, .11, .21))
+    assert image is not None and count == 1
+    args = native.render.call_args.args
+    assert args[:3] == (native.open_data.return_value, 0, 4.0)
+    assert args[3:] == pytest.approx((1000, 15800, 8900, 4000))
 
 
 def test_empty_text_is_not_a_fallback(native, monkeypatch):

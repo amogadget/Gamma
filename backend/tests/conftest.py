@@ -109,12 +109,31 @@ def guest(client):
     return client
 
 
+_USER_OWNERS: dict = {}
+
+
+def _caller_file():
+    """The test module whose code asked for the account (a fixture imported
+    from another module counts for the module that defines it)."""
+    import inspect
+    return Path(inspect.stack()[2].filename).name
+
+
 def make_user(username, password, is_admin=0):
     """Create (idempotently) a password account plus its personal workspace.
-    Returns the workspace id."""
+    Returns the workspace id.
+
+    The whole run shares one data directory, so an account name belongs to
+    the module that first creates it: a second module asking for the same
+    name (with whatever password) would pass or fail depending on file
+    order. Prefix names with the module's area (`bk_admin`, `ca_alice`)."""
     import bcrypt
     from gamma import workspaces
     from gamma.db import connect_users_db, page_now
+
+    owner = _USER_OWNERS.setdefault(username.lower(), _caller_file())
+    if owner != _caller_file():
+        pytest.fail(f"account {username!r} is already used by {owner}; pick a module-unique name")
 
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():

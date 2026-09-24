@@ -13,15 +13,15 @@ through barrel files. `main.jsx` remains the Vite entry point.
 | `editor/` | Outliner (`BlockTree.jsx`), CodeMirror (`BlockCmEditor.jsx`), undo history, Markdown and LaTeX editing, and slash commands |
 | `guide/` | First-run and contextual guides: `anchors.js` (the `data-guide` registry), `events.js` (event bus), `triggers.js` (eligibility and account-scoped progress), `useGuide.js` + `GuideOverlay.jsx` (engine, invitation and spotlight), `tours/` (one data file per tour) — [docs/dev/onboarding.md](../../docs/dev/onboarding.md) |
 | `ink/` | Handwriting codec and geometry, input sampling, draft storage, and `InkLayer.jsx` |
-| `library/` | Library cards and browsing controls (`FileBrowser.jsx`), folder/page rules, title scoring, and `library.css` |
+| `library/` | Library cards and browsing controls (`FileBrowser.jsx`), the Ctrl+P page palette (`QuickOpen.jsx`), folder/page rules, title scoring, and `library.css` |
 | `native/` | The iPad client's browser half: the handoff message, reading and placing the `pdf_ink` blocks the iPad writes, audio segments, Note Replay's timeline/player and its per-stroke layer (see "Native (iPad) integration" below) |
 | `pdf/` | `PdfViewer.jsx`, document loading, citations, translation, and scroll alignment |
 | `search/` | Workspace search (`SearchPanel.jsx`) |
 | `settings/` | `SettingsDialog.jsx`, individual settings panes, shared pane controls (`SettingsKit.jsx`), navigation, integration setup, and `settings.css` |
 | `sharing/` | The page Share popover (`SharePopover.jsx`): link, access, invited people, stop sharing |
-| `transfers/` | Import/export dialogs (`ImportExport.jsx`), format rules, and upload/file chips (`FileChip.jsx`) |
+| `transfers/` | Import/export dialogs (`ImportExport.jsx`), the import review (`ImportReviewDialog.jsx`, `ImportTree.jsx`, `importApi.js`, `importReview.js`), format rules, and upload/file chips (`FileChip.jsx`) |
 | `shared/model/` | Block tree helpers (`blockModel.js`), block operations (`blockOps.js`), and highlight colors |
-| `shared/lib/` | API transport and helpers (`utils.js`), the pure asset-URL scoping rule (`assetUrl.js`), search text normalization, and canvas sizing |
+| `shared/lib/` | API transport and helpers (`utils.js`), the pure asset-URL scoping rule (`assetUrl.js`), the multipart upload (`xhrUpload.js`), search text normalization, and canvas sizing |
 | `shared/ui/` | Reused widgets, menus, icons, and menu hover intent |
 | `shared/illustrations/` | Decorative settings/import previews and their local image assets |
 | `shared/styles/` | `app.css`: theme, base controls, and cross-application styles |

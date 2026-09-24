@@ -1,9 +1,17 @@
 # gammapdf.com: build sites/dist from the page sources plus the README
 # artwork and demos, and deploy it as a Cloudflare Worker (static assets
-# only). Runs on a push to main that touches the site or anything it copies,
-# or on manual dispatch. Needs the CLOUDFLARE_API_TOKEN and
-# CLOUDFLARE_ACCOUNT_ID secrets (sites/README.md). Overview:
-# docs/dev/github_actions.md.
+# only). The site depends on no app code, so it has its own check and its
+# own deploy, independent of check.yml / docker.yml:
+#
+# - a pull request touching the site or anything it copies runs `check`
+#   only (build, every include expanded, the pages present, a wrangler dry
+#   run — no credentials needed);
+# - a push to main touching those paths checks and deploys;
+# - a manual dispatch from ANY branch (the `build-site` skill:
+#   `gh workflow run site.yml --ref dev`) checks and deploys that branch.
+#
+# Deploying needs the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets
+# (sites/README.md). Overview: docs/dev/github_actions.md.
 name: site
 
 on:
@@ -17,14 +25,52 @@ on:
       - "frontend/public/media/icons/favicon.svg"
       - "PRIVACY.md"
       - ".github/workflows/site.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "sites/**"
+      - "docs/assets/branding/**"
+      - "docs/assets/demos/**"
+      - "docs/assets/screenshots/01-annotated-pdf.png"
+      - "frontend/public/media/icons/favicon.svg"
+      - "PRIVACY.md"
+      - ".github/workflows/site.yml"
   workflow_dispatch:
 
 concurrency:
-  group: site
+  group: site-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
   cancel-in-progress: true
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sites/package-lock.json
+      - working-directory: sites
+        run: |
+          npm ci
+          npm run build
+      - name: Pages assembled
+        working-directory: sites
+        run: |
+          for f in index.html 404.html privacy/index.html _redirects _headers media/favicon.svg; do
+            test -s "dist/$f" || { echo "::error::dist/$f is missing"; exit 1; }
+          done
+          if grep -rl '<!--#include' dist --include='*.html'; then
+            echo "::error::an include was not expanded"; exit 1
+          fi
+      - name: Worker and config (dry run)
+        working-directory: sites
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker"
+
   deploy:
+    if: github.event_name != 'pull_request'
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -43,3 +89,4 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: sites
           command: deploy
+      - run: echo "::notice::Deployed gammapdf.com from ${{ github.ref_name }} @ ${{ github.sha }}"

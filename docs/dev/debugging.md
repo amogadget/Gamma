@@ -99,7 +99,12 @@ throwaway data directory, and `--dist loadfile` keeps each file's tests on
 one worker in file order (tests inside a file may build on each other;
 files never may). The shared `client` fixture carries the cookie of the last
 login on that worker, so a "not signed in" check uses the `anon` fixture (a
-fresh client), never `client`. Run them with the project venv's
+fresh client), never `client`. One data directory serves every file on a
+worker, so an account name belongs to the module that creates it: prefix
+names with the module's area (`bk_admin`, `ca_alice`), create them through
+`conftest.make_user`, and pick folder names no other module uses in the
+guest workspace. `make_user` fails the run when a second module asks for a
+name another module already created. Run them with the project venv's
 interpreter (`venv/Scripts/python.exe` on Windows): the two vector-math
 tests need `ziamath` from `requirements.txt`, and a system/conda `python`
 without it fails them with "ziamath is not importable" rather than a

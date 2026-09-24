@@ -57,6 +57,19 @@ export function SessionConflictPage({ tabUser, activeUser, onReload }) {
   );
 }
 
+// The cloud sign-in callback sends a refused sign-in back here as
+// `?cloud_error=`: shown once, then dropped from the address bar.
+function takeCloudError() {
+  try {
+    const url = new URL(window.location.href);
+    const message = url.searchParams.get("cloud_error");
+    if (!message) return "";
+    url.searchParams.delete("cloud_error");
+    window.history.replaceState(null, "", url.pathname + (url.search || "") + url.hash);
+    return message;
+  } catch { return ""; }
+}
+
 export function LoginPage({
   username,
   password,
@@ -65,11 +78,21 @@ export function LoginPage({
   onPasswordChange,
   onSubmit,
   onGuestLogin,
+  cloudLogin,
   subtitle,
 }) {
+  const [cloudError] = React.useState(takeCloudError);
+  const next = window.location.pathname + window.location.search;
   return (
     <AuthShell>
       <p className="loginSubtitle">{subtitle || "Annotate PDFs, Share Your Thinking"}</p>
+      {cloudLogin?.enabled ? (
+        <a className="loginBtn loginCloudBtn" href={`/api/auth/cloud/start?next=${encodeURIComponent(next)}`}
+          title={`Sign in through ${cloudLogin.issuer}`}>
+          Sign in with Gamma Cloud
+        </a>
+      ) : null}
+      {cloudError ? <div className="loginError" role="alert">{cloudError}</div> : null}
       <form onSubmit={onSubmit}>
         <input
           type="text"

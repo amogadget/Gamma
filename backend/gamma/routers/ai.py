@@ -100,7 +100,13 @@ class AIChatRequest(BaseModel):
     doc_id: str = ""
     history: list = Field(default_factory=list)  # [{role: "user"|"ai", text: str}, ...]
     model: str = ""       # model registry id ("provider:model"), must be in AI_MODELS
-    selection: str = ""   # text the user selected in the PDF — focus the answer on it
+    # PDF passages the user selected — focus the answer on them:
+    # `selections` = [{text, page (1-based, where the viewer saw it start),
+    # box ([x0, y0, x1, y1] fractions of that page, top-left origin)}]; the
+    # older `selection` string ("---"-joined text, no positions) is read
+    # when it is empty (ai_context.request_selections).
+    selection: str = ""
+    selections: list = Field(default_factory=list, max_length=12)
     # What the user pointed the message at inside the NOTES: the block their
     # cursor is on (the agent's "this block"), blocks they attached as chips
     # (ids — resolved server-side to id-labelled text so the agent can edit
@@ -1305,11 +1311,16 @@ def ai_chat(payload: AIChatRequest, request: Request):
     count_usage = ai_usage.recorder("chat", entry, rt)
 
     def prepared(allow_native):
-        pdf_b64s, context, coverage = _gather_inputs(ws, payload, allow_native)
+        # Pictures of selected regions whose text is unreliable ride with
+        # the user's own images.
+        crops = []
+        pdf_b64s, context, coverage = _gather_inputs(ws, payload, allow_native, crops=crops)
         state["coverage"] = coverage
+        state["images"] = images + crops
+        located = next((c["selection"]["passages"] for c in coverage if c.get("selection")), None)
         # Agent chats replay each saved reply's tool calls/results so the
         # model keeps what it already listed/read/changed across turns.
-        messages = _build_messages(payload, context, with_tools=bool(tools))
+        messages = _build_messages(payload, context, with_tools=bool(tools), located=located)
         # A custom prompt always applies; the built-in one only when there's a document
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
         if context or pdf_b64s:
@@ -1330,7 +1341,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
             pdf_b64s, messages, system = prepared(native)
             try:
                 resp = _open_ai(messages, system, entry, rt, pdf_b64s,
-                                effort=effort, timeout=180, images=images, stream=stream,
+                                effort=effort, timeout=180, images=state["images"], stream=stream,
                                 tools=tools)
                 if not native and True in attempts:
                     _NATIVE_PDF_REJECTED.add(entry["provider"])
@@ -1432,7 +1443,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                                 "raise it in Settings → Assistant)*")
                 return
             resp = _open_ai(messages, system, entry, rt, pdf_b64s, effort=effort,
-                            timeout=180, images=images, stream=True, tools=tools)
+                            timeout=180, images=state["images"], stream=True, tools=tools)
 
     try:
         if payload.stream:

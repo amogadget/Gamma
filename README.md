@@ -1,7 +1,4 @@
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-hero-light.svg">
-  <img alt="Gamma PDF — read papers, keep what you learn: a highlighted paper next to its outliner notes with a live-rendered equation" src="./docs/assets/branding/gamma-hero-light.svg" width="100%">
-</picture>
+<img alt="Gamma PDF — read papers, keep what you learn: a highlighted paper next to its outliner notes with a live-rendered equation" src="./docs/assets/branding/gamma-hero-light.svg" width="100%">
 
 # Gamma PDF Annotator
 
@@ -21,10 +18,7 @@ Every picture below is clickable and opens the matching part of the [user guide]
 
 ## Read from any place
 
-<a href="./docs/user_guide.md#offline-copies"><picture>
-  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-anywhere-light.svg">
-  <img alt="One library on the lab server, open on a desktop, an iPad and a phone; a note typed from the iPad appears on every other device as the sync between them runs" src="./docs/assets/branding/gamma-anywhere-light.svg" width="100%">
-</picture></a>
+<a href="./docs/user_guide.md#offline-copies"><img alt="One library on the lab server, open on a desktop, an iPad and a phone; a note typed from the iPad appears on every other device as the sync between them runs" src="./docs/assets/branding/gamma-anywhere-light.svg" width="100%"></a>
 
 Your library lives on your server and opens from any browser: the office desktop, the iPad (with the Pencil), your phone. Reading position, open tabs and zoom follow your account from device to device.
 
@@ -70,10 +64,7 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 
 ## Link and organize
 
-<a href="./docs/user_guide.md#library-and-organization"><picture>
-  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-library-light.svg">
-  <img alt="Gamma fills metadata when a paper is downloaded, organizes papers with folders and labels, searches titles, notes and PDF text, and follows references to other papers with Back returning to the previous reading position" src="./docs/assets/branding/gamma-library-light.svg" width="100%">
-</picture></a>
+<a href="./docs/user_guide.md#library-and-organization"><img alt="Gamma fills metadata when a paper is downloaded, organizes papers with folders and labels, searches titles, notes and PDF text, and follows references to other papers with Back returning to the previous reading position" src="./docs/assets/branding/gamma-library-light.svg" width="100%"></a>
 
 - **Folders** build themselves from the paths you use: drop a paper into `qc/neutral-atom` and you get **qc › neutral-atom**; storage stays flat, so one paper can live in several folders.
 - **Labels** are flat tags for facets like an author or a keyword — one click to filter by.
@@ -87,10 +78,7 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 
 ## Share and work together
 
-<a href="./docs/user_guide.md#workspaces"><picture>
-  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-workspaces-light.svg">
-  <img alt="Personal workspaces next to a shared research library where an owner and an editor type into two blocks of the same page at the same time and a viewer reads along" src="./docs/assets/branding/gamma-workspaces-light.svg" width="100%">
-</picture></a>
+<a href="./docs/user_guide.md#workspaces"><img alt="Personal workspaces next to a shared research library where an owner and an editor type into two blocks of the same page at the same time and a viewer reads along" src="./docs/assets/branding/gamma-workspaces-light.svg" width="100%"></a>
 
 - **Workspaces** — keep separate personal libraries, or collaborate in a shared library created by a server administrator: owners manage members, editors change pages, viewers read.
 - **Share a page** — send a link to an annotated paper; invite people with view or edit rights, or open it to anyone with the link.
@@ -100,10 +88,7 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 
 ## Connect your research
 
-<a href="./docs/user_guide.md#assistants-codex-and-claude-code"><picture>
-  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-connections-light.svg">
-  <img alt="Gamma in the middle of an assistant prompt that mentions @Gamma and a paper, the Obsidian, Notion and Zotero import and export arrows, and the Gamma Connector saving a paper with the publisher sign-in kept per journal" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
-</picture></a>
+<a href="./docs/user_guide.md#assistants-codex-and-claude-code"><img alt="Gamma in the middle of an assistant prompt that mentions @Gamma and a paper, the Obsidian, Notion and Zotero import and export arrows, and the Gamma Connector saving a paper with the publisher sign-in kept per journal" src="./docs/assets/branding/gamma-connections-light.svg" width="100%"></a>
 
 - **Assistants** — the [Gamma plugin for Codex and Claude Code](./plugins/gamma/) lets either assistant search and read your papers, notes and highlights, read-only, for a workspace you approve in the browser: *"@Gamma, in the Rydberg arrays paper, how is the blockade radius measured?"* Setup is one command copied from **Settings → AI → Integrations**; any other MCP client connects with the same URL.
 - **Gamma Connector** — the browser extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, labels — from the arXiv / DOI / publisher tab, and clips links or selections into your notes. Its cookie button saves your **publisher sign-in per journal**, so the server can fetch that journal's PDFs on its own from then on.

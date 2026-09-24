@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
+import { highlightSpot, rangeSpot } from "../pdf/pdfSelectionSpot";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
 import ImportReviewDialog from "../transfers/ImportReviewDialog";
-import { parsePdfCitation } from "../pdf/pdfCitation.js";
+import { parseGammaLink } from "../shared/model/gammaLinks.js";
 import { API, apiJson as baseApiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
   DockWindow,
+  GammaNavContext,
   OpenTabs,
   PopoverAnchor,
   useCopied,
@@ -22,6 +24,7 @@ import BlankPDFDialog from "../library/BlankPDFDialog";
 import ChatDock from "../chat/ChatDock";
 import { createChatSession } from "../chat/chatSession";
 import SearchPanel from "../search/SearchPanel";
+import QuickOpen from "../library/QuickOpen";
 import { ContextMenu, MenuItem, MenuLabel, MenuSelect, SubMenuItem } from "../shared/ui/Menus";
 import {
   ActivityIcon, AlertCircleIcon, ArrowLeftIcon, ArrowUpDownIcon, BookIcon, CheckIcon, CopyIcon, DatabaseIcon, DownloadIcon, ExportIcon,
@@ -501,6 +504,15 @@ function LibraryApp() {
     setWsReady(true);
   }
 
+  // What the login page offers besides a password: read once, unauthenticated.
+  const [serverConfig, setServerConfig] = useState(null);
+  useEffect(() => {
+    if (shareMode) return;
+    let active = true;
+    apiJson(`${API}/server-config`).then((c) => { if (active) setServerConfig(c); }).catch(() => {});
+    return () => { active = false; };
+  }, [shareMode]);
+
   async function checkSession() {
     try {
       const data = await apiJson(`${API}/session`);
@@ -711,8 +723,8 @@ function LibraryApp() {
     inp.click();
   }
 
-  // XMLHttpRequest instead of fetch: it reports upload progress, so a large
-  // zip shows a percent while the bytes go up, then an indeterminate
+  // An XHR upload (shared/lib/xhrUpload.js): it reports upload progress, so
+  // a large zip shows a percent while the bytes go up, then an indeterminate
   // "restoring/merging" hint while the server unzips and swaps the databases.
   // after.openPage: reload into that page instead of the home library (a
   // shared page imported by link keeps its block id, so it opens directly).
@@ -723,50 +735,33 @@ function LibraryApp() {
     const tid = addTransfer({ name: `${merging ? "Merge" : "Restore"} ${f.name}`.slice(0, 60), kind: "upload", info: "uploading…" });
     const fd = new FormData();
     fd.append("file", f);
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API}/import-data?mode=${mode}${other ? `&ws=${encodeURIComponent(other)}` : ""}`);
-    xhr.withCredentials = true;
-    // XHR bypasses the window.fetch wrapper, so the tab-identity guard and
-    // the workspace header must be set by hand — this is the most
-    // destructive endpoint in the app.
-    const expected = getExpectedUser();
-    if (expected) xhr.setRequestHeader("X-Gamma-User", expected);
-    if (getCurrentWorkspace()) xhr.setRequestHeader("X-Gamma-Workspace", getCurrentWorkspace());
     let lastPct = -1;
-    xhr.upload.onprogress = (e) => {
-      const pct = e.total ? Math.min(99, Math.floor((e.loaded / e.total) * 100)) : null;
-      if (pct === lastPct) return; // only re-render on a visible change
-      lastPct = pct;
-      postPill("backup", { msg: pct == null ? "Uploading backup…" : `Uploading backup… ${pct}%`, spinner: true });
-      if (e.total) updateTransfer(tid, { info: `${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}` });
-    };
-    xhr.upload.onload = () => {
-      postPill("backup", { msg: merging ? "Merging backup into your library…" : "Restoring backup…", spinner: true });
-      updateTransfer(tid, { info: merging ? "merging…" : "restoring…" });
-    };
-    xhr.onload = () => {
-      let d = {};
-      try { d = JSON.parse(xhr.responseText); } catch {}
+    xhrUpload(`${API}/import-data?mode=${mode}${other ? `&ws=${encodeURIComponent(other)}` : ""}`, fd, {
+      onProgress: (loaded, total) => {
+        const pct = Math.min(99, Math.floor((loaded / total) * 100));
+        if (pct === lastPct) return; // only re-render on a visible change
+        lastPct = pct;
+        postPill("backup", { msg: `Uploading backup… ${pct}%`, spinner: true });
+        updateTransfer(tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)}` });
+      },
+      onProcessing: () => {
+        postPill("backup", { msg: merging ? "Merging backup into your library…" : "Restoring backup…", spinner: true });
+        updateTransfer(tid, { info: merging ? "merging…" : "restoring…" });
+      },
+    }).then((d) => {
       postPill("backup", null);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        updateTransfer(tid, { status: "done", info: merging ? `${d.pages_added ?? 0} pages added` : "restored" });
-        // Another workspace's data changed, not this one's — nothing here
-        // is stale, so stay put instead of throwing the session away.
-        if (other) setStatus(`${merging ? "Merged into" : "Restored"} ${workspaces.find((w) => w.id === other)?.name || "the workspace"}.`);
-        else if (after.openPage) window.location.href = withWorkspace(`${window.location.pathname}?page=${encodeURIComponent(after.openPage)}`);
-        else window.location.href = withWorkspace(window.location.pathname); // fresh state, no stale ?block=
-      } else {
-        const msg = d.detail || xhr.statusText || "failed";
-        updateTransfer(tid, { status: "error", info: String(msg) });
-        setStatus(`Import failed: ${msg}`);
-      }
-    };
-    xhr.onerror = () => {
+      updateTransfer(tid, { status: "done", info: merging ? `${d?.pages_added ?? 0} pages added` : "restored" });
+      // Another workspace's data changed, not this one's — nothing here
+      // is stale, so stay put instead of throwing the session away.
+      if (other) setStatus(`${merging ? "Merged into" : "Restored"} ${workspaces.find((w) => w.id === other)?.name || "the workspace"}.`);
+      else if (after.openPage) window.location.href = withWorkspace(`${window.location.pathname}?page=${encodeURIComponent(after.openPage)}`);
+      else window.location.href = withWorkspace(window.location.pathname); // fresh state, no stale ?block=
+    }, (err) => {
       postPill("backup", null);
-      updateTransfer(tid, { status: "error", info: "network error" });
-      setStatus("Import failed: network error");
-    };
-    xhr.send(fd);
+      const msg = err?.message || "failed";
+      updateTransfer(tid, { status: "error", info: String(msg) });
+      setStatus(`Import failed: ${msg}`);
+    });
   }
 
   async function doLogout() {
@@ -795,7 +790,11 @@ function LibraryApp() {
   const [inputUrl, setInputUrl] = useState(initialUrl); // current page's source URL (shown in page properties)
   const [addUrl, setAddUrl] = useState(""); // "+" popover: URL to open
   const [pdfUrl, setPdfUrl] = useState("");
-  const [pdfCitation, setPdfCitation] = useState(() => parsePdfCitation(window.location.href, window.location.origin));
+  // A pasted citation URL on a cold load opens the paper at the passage.
+  const [pdfCitation, setPdfCitation] = useState(() => {
+    const link = parseGammaLink(window.location.href, window.location.origin);
+    return link?.kind === "citation" ? link : null;
+  });
   const [docId, setDocId] = useState("");
   const [focusedBlockId, setFocusedBlockId] = useState("");
   const [focusedBlock, setFocusedBlock] = useState(null);
@@ -2338,6 +2337,7 @@ function LibraryApp() {
   const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
+  const [quickOpen, setQuickOpen] = useState(false); // the Ctrl+P page palette
   useEffect(() => {
     if (!openPopover) return;
     function onDown(e) {
@@ -2435,6 +2435,13 @@ function LibraryApp() {
           if (homeFind) { homeFind.focus(); homeFind.select(); return; }
         }
         setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+        // Ctrl+P: the quick-open page palette (library/QuickOpen.jsx) instead
+        // of the browser's print. A share view has no library to pick from.
+        if (shareMode) return;
+        e.preventDefault();
+        setOpenPopover(null);
+        setQuickOpen((v) => !v);
       } else if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
         goBackNavRef.current?.();
@@ -2455,6 +2462,7 @@ function LibraryApp() {
         if (inEditor || applied) e.preventDefault();
       } else if (e.key === "Escape") {
         setOpenPopover(null);
+        setQuickOpen(false);
         setHomeMenu(null);
         setSelectedPages((prev) => (prev.size ? new Set() : prev));
       }
@@ -2885,15 +2893,18 @@ function LibraryApp() {
   // User management moved into Settings → Users (settings/SettingsDialog.jsx UsersSettings,
   // admins only) — App just opens that pane and lends it the shared pieces
   // (confirm dialog, status pill, session re-key after a self-rename).
-  // PDF passages the next chat question focuses on. Ctrl (additive) appends
-  // — whether from text selection or highlight clicks; plain replaces.
+  // PDF passages the next chat question focuses on, as {text, page, box}
+  // (pdf/pdfSelectionSpot.js — where it sits, so the server can place it
+  // and picture a formula). Ctrl (additive) appends — whether from text
+  // selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
-  function addPdfSelection(text, additive) {
+  function addPdfSelection(text, additive, spot) {
     const part = (text || "").trim().slice(0, 4000);
     if (!part) return;
+    const item = { text: part, page: spot?.page || 0, box: spot?.box || null };
     setPdfSelections((prev) => additive
-      ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
-      : [part]);
+      ? (prev.some((s) => s.text === part) || prev.length >= 6 ? prev : [...prev, item])
+      : [item]);
   }
   // Note chips for the next chat message — blocks attached with Ctrl+click /
   // the ⋮⋮ menu's "Add to chat" ({kind: "block", id, text}; the server serves
@@ -2941,7 +2952,7 @@ function LibraryApp() {
     if (h.position?.area) {
       pdfCaptureRef.current?.(h).then((img) => { if (img) addChatImage(img); });
     } else {
-      addPdfSelection(h.content?.text, additive);
+      addPdfSelection(h.content?.text, additive, highlightSpot(h.position));
     }
   }
   // Styled in-app dialogs replacing window.confirm / link decisions.
@@ -3439,7 +3450,7 @@ function LibraryApp() {
         const node = sel.anchorNode;
         const el = node?.nodeType === 3 ? node.parentElement : node;
         if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
-        addPdfSelection(text, additive);
+        addPdfSelection(text, additive, rangeSpot(sel.getRangeAt(0)));
       }, 10);
     }
     // Touch has no mouseup after a long-press/handle selection, so iPad picks
@@ -3460,7 +3471,7 @@ function LibraryApp() {
         const node = sel.anchorNode;
         const el = node?.nodeType === 3 ? node.parentElement : node;
         if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
-        addPdfSelection(text, false);
+        addPdfSelection(text, false, rangeSpot(sel.getRangeAt(0)));
       }, 350);
     }
     document.addEventListener("mouseup", onMouseUp);
@@ -3951,6 +3962,40 @@ function LibraryApp() {
       properties: { ...b.properties, color: newColor }
     }));
     setBlocks(next);
+  }
+
+  // Gamma's own links (chat citations, copied page/block links) open in
+  // place wherever they are rendered — the chat, a note, an embed card —
+  // through GammaNavContext.
+  async function openPageLink(id, citation) {
+    if (shareMode && id !== focusedBlockId) return;
+    if (citation && id === focusedBlockId) pushNav();
+    setPdfCitation(citation ? { ...citation } : null);
+    if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
+    if (citation) { setPdfHidden(false); setPhonePanel(null); }
+  }
+
+  // A [[ref]] chip or a copied block link: scroll to it on this page, else
+  // open the page that holds it.
+  async function openBlockLink(id) {
+    function findBlock(list) {
+      for (const b of list || []) {
+        if (b.id === id) return b;
+        const found = findBlock(b.children || []);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (findBlock(blocks)) {
+      suppressAutosaveRef.current = true;
+      pendingBlockScrollRef.current = id;
+      setBlocks((prev) => expandToBlock(prev, id));
+    } else {
+      pushNav(); // block-ref click = link jump to another page
+      pendingBlockScrollRef.current = id;
+      const rootId = refCache[id]?.page_root_id;
+      await openBlock(rootId && rootId !== id ? rootId : id);
+    }
   }
 
   async function onFetchRefs(ids) {
@@ -6846,6 +6891,13 @@ function LibraryApp() {
     return () => document.removeEventListener('scroll', onScroll, { capture: true });
   }, [pdfUrl, pdfHidden]);
 
+  // One navigation for every Gamma link card on screen (chat, notes, embeds).
+  // Keep this hook above every access-gate return, including share recovery.
+  const gammaNav = useMemo(
+    () => ({ openPage: openPageLink, openBlock: openBlockLink }),
+    [focusedBlockId, blocks, refCache, shareMode],
+  );
+
   // A share link that can't open yet: sign in (signed-in / specific-people
   // shares), or explain why not.
   if (shareMode && shareGate) {
@@ -6858,6 +6910,7 @@ function LibraryApp() {
         onUsernameChange={setLoginUser}
         onPasswordChange={setLoginPass}
         onSubmit={doShareLogin}
+        cloudLogin={serverConfig?.cloud}
         subtitle="Sign in to open this shared page"
       />
     ) : (
@@ -6880,6 +6933,7 @@ function LibraryApp() {
         onPasswordChange={setLoginPass}
         onSubmit={doLogin}
         onGuestLogin={doGuestLogin}
+        cloudLogin={serverConfig?.cloud}
       />
     );
   }
@@ -7966,31 +8020,7 @@ function LibraryApp() {
                   refCache,
                   onFetchRefs,
                   onCacheRef,
-                  onBlockRefClick: async (id) => {
-                    function findBlock(list) {
-                      for (const b of list || []) {
-                        if (b.id === id) return b;
-                        const found = findBlock(b.children || []);
-                        if (found) return found;
-                      }
-                      return null;
-                    }
-                    if (findBlock(blocks)) {
-                      suppressAutosaveRef.current = true;
-                      pendingBlockScrollRef.current = id;
-                      setBlocks((prev) => expandToBlock(prev, id));
-                    } else {
-                      pushNav(); // block-ref click = link jump to another page
-                      pendingBlockScrollRef.current = id;
-                      const cached = refCache[id];
-                      const rootId = cached?.page_root_id;
-                      if (rootId && rootId !== id) {
-                        await openBlock(rootId);
-                      } else {
-                        await openBlock(id);
-                      }
-                    }
-                  },
+                  onBlockRefClick: openBlockLink,
                   // Functional updates: these two fire from editor lifecycle
                   // (CodeMirror onChange, blur on unmount when a row moves in
                   // the tree), where the closure's tree can be a render stale
@@ -8230,13 +8260,7 @@ function LibraryApp() {
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
           openTabs={openTabs}
-          onOpenPage={async (id, citation) => {
-            if (shareMode && id !== focusedBlockId) return;
-            if (citation && id === focusedBlockId) pushNav();
-            setPdfCitation(citation ? { ...citation } : null);
-            if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
-            if (citation) { setPdfHidden(false); setPhonePanel(null); }
-          }}
+          onOpenPage={openPageLink}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatNotes={chatNotes} setChatNotes={setChatNotes} focusedNote={focusedNote}
           chatImages={chatImages} setChatImages={setChatImages}
@@ -8755,6 +8779,7 @@ function LibraryApp() {
   );
 
   return (
+    <GammaNavContext.Provider value={gammaNav}>
     <div
       ref={appRef}
       className={`app layout-horizontal ${pseudoFullscreen ? "pseudoFullscreen" : ""} ${isPhone ? "phoneUI" : ""}`}
@@ -9478,6 +9503,15 @@ function LibraryApp() {
           </div>
         </div>
       ) : null}
+      <QuickOpen
+        open={quickOpen}
+        onClose={() => setQuickOpen(false)}
+        pages={homeBlocks}
+        recentViews={recentViews}
+        openTabs={openTabs}
+        currentPageId={focusedBlockId}
+        onOpen={openPage}
+      />
       <GuideOverlay guide={guide} />
       <SettingsDialog
         activePane={settingsOpen}
@@ -9863,5 +9897,6 @@ function LibraryApp() {
         </ContextMenu>
       ) : null}
     </div>
+    </GammaNavContext.Provider>
   );
 }

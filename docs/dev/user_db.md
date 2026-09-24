@@ -18,6 +18,11 @@ All state is SQLite + files on disk under a data directory (env
   - `users` — accounts (bcrypt), the guest/admin flags, nullable per-user
     storage-limit overrides, `default_workspace` (the personal workspace);
   - `sessions` — session tokens;
+  - `identities` — the Gamma Cloud identity linked to an account
+    (`provider`, the account server's `subject`, `username`, `email`, the
+    last verified `claims` — username, plan — and, desktop client only, the
+    Fernet-encrypted `refresh_token`); one per account and provider
+    ([cloud_accounts.md](cloud_accounts.md));
   - `workspaces` (`id`, `name`, `created_by`, `kind` personal/shared,
     `access` private/public, `public_role`, `quota_mb`) and
     `workspace_members` (`workspace_id`, `username`, `role`
@@ -118,6 +123,18 @@ block writers, which accept an `edit` share through `require_ws_writer` under
 the same page scope. Keep that distinction when touching endpoints. Full
 endpoint/auth table: [api.md](api.md).
 
+**Sign in with Gamma Cloud** (`gamma/cloud_auth.py`,
+[cloud_accounts.md](cloud_accounts.md)) is a second way to mint a session
+row, not a second identity: the callback verifies the account server's ID
+token, finds the `identities` row (or links, claims or provisions one per
+the admin's policy), inserts the same `sessions` row the password login
+does and sets the same cookie. An account the cloud provisioned has an
+EMPTY password hash and the password login refuses it. `manage.py
+set-password` gives it one. The settings live in the `settings` KV:
+`cloud_issuer`, `cloud_client_id`, `cloud_client_secret` (Fernet-encrypted
+with the data directory's key) and `cloud_policy`. A provisioned container
+takes them from `GAMMA_CLOUD_*` instead.
+
 ## First-run seeding
 
 The APP seeds the first admin, not launcher scripts — `seed.ensure_admin_seed()`
@@ -134,6 +151,8 @@ writes a workspace's empty files (and the guest welcome page);
 
 User CRUD: `create-user`, `set-password`, `set-admin`, `rename-user`,
 `delete-user` (also the workspaces only that account owned), `list-users`,
+`list-identities` / `link-identity` / `unlink-identity` (the Gamma Cloud
+identity of an account, [cloud_accounts.md](cloud_accounts.md)),
 `reset-guest`, `setup` (idempotent: guest account + a personal workspace for
 every account + missing files). Workspaces: `list-workspaces`,
 `create-workspace <name> <owner> [shared [public [viewer|editor]]]`, `set-member
@@ -143,7 +162,7 @@ every account + missing files). Workspaces: `list-workspaces`,
 `--delete`, `--restore`, `--prune`). Every command but
 `migrate`/`backups` refuses an outdated data directory. `rename-user`
 updates every row that names the account (users, sessions, shares,
-memberships, prefs) — no files move.
+memberships, prefs, identities) — no files move.
 
 `set-password` revokes the account's existing browser sessions and integration
 tokens, matching password changes through the admin API.

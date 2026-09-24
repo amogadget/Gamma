@@ -1,5 +1,5 @@
-import { API, apiJson, getCurrentWorkspace, getExpectedUser } from "../shared/lib/utils";
-import { uploadJson } from "./xhrUpload";
+import { API, apiJson } from "../shared/lib/utils";
+import { xhrUpload } from "../shared/lib/xhrUpload";
 
 const FORMATS = {
   zotero: { label: "Zotero", endpoint: "zotero", instructions: "Collections become folders. Additional PDFs become separate pages. Existing PDFs are kept." },
@@ -11,15 +11,19 @@ export function importFormat(source, file) {
   if (!format) throw new Error("Unsupported import source");
   return source === "markdown" && !/\.zip$/i.test(file.name) ? { ...format, endpoint: "markdown-file" } : format;
 }
-export function requestImport({ source, file, folder = "", strip }, options) {
+// `onProgress` gets {phase: "upload", loaded, total} while the bytes go up,
+// then {phase: "processing"} while the server reads the archive.
+export function requestImport({ source, file, folder = "", strip }, { signal, onProgress } = {}) {
   const format = importFormat(source, file);
   const body = new FormData();
   body.append("file", file);
   body.append("source", format.endpoint);
   if (source !== "gamma") body.append("folder", folder);
   if (source === "zotero") body.append("strip", String(Boolean(strip)));
-  return uploadJson(`${API}/import/review`, body, {
-    ...options, headers: { "X-Gamma-User": getExpectedUser(), "X-Gamma-Workspace": getCurrentWorkspace() },
+  return xhrUpload(`${API}/import/review`, body, {
+    signal,
+    onProgress: (loaded, total) => onProgress?.({ phase: "upload", loaded, total }),
+    onProcessing: () => onProgress?.({ phase: "processing" }),
   });
 }
 

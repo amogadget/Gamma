@@ -6,11 +6,17 @@ description: Merge the branch's committed work into main via a PR and report the
 # Merge to main
 
 One job: get what is already committed on the branch into `main`. The
-`check` workflow validates the PR; the merge itself triggers only
-`docker.yml` (`ghcr.io/tim4431/gamma:latest`). The desktop app and the
-browser extension are NOT released by a merge — run the `release` skill
-for that (it dispatches `desktop.yml` / `extension.yml` on `main`).
-Details: `docs/dev/github_actions.md`.
+`check` workflow validates the PR (and `cloud` when `cloud/` changed,
+`site` when `sites/` or its inputs changed; `check` is skipped for a PR
+that only touches those); the merge itself triggers `docker.yml`
+(`ghcr.io/tim4431/gamma:latest`; skipped for a merge that only touches
+`cloud/` or `sites/`) and, when the site's inputs changed, `site.yml`,
+which redeploys gammapdf.com from `main`. The desktop app and the browser
+extension are NOT released by a merge — run the `release` skill for that
+(it dispatches `desktop.yml` / `extension.yml` on `main`). The account
+server and the website do not need a merge at all: `update-account-server`
+/ `build-site` publish them from the branch. Details:
+`docs/dev/github_actions.md`.
 
 **Scope: existing commits only.** Uncommitted changes are ongoing work —
 leave them in the tree, never commit them here. If there is nothing
@@ -30,7 +36,9 @@ committed beyond `origin/main`, stop and say so.
    If a PR for the branch is already open, reuse it.
 
 4. **Wait for the check**: `gh pr checks <n> --watch --fail-fast`
-   (backend pytest, frontend unit tests + build, the browser suite, extension zip; ~4 min). Red → report
+   (`check`: backend pytest, frontend unit tests + build, the browser suite,
+   extension zip, ~4 min — skipped for a PR that only touches the account
+   server; `cloud`: the account server's tests, when `cloud/` changed). Red → report
    the failing job (`gh run view <id> --log-failed`) and stop; fixing is
    normal work on the branch, then re-run this skill. Do not merge over a
    red check.
@@ -39,7 +47,8 @@ committed beyond `origin/main`, stop and say so.
 
 6. **Report**: a few seconds after the merge,
    `gh run list --limit 5 --json workflowName,status,event,url,databaseId`
-   shows the Docker run the merge started. Report it with its link. Do not
+   shows the Docker run the merge started (none for an account-server-only
+   merge — say so). Report it with its link. Do not
    wait for it unless asked (`gh run watch <id> --exit-status`).
 
 Follow-ups to offer, not to run: `update-server` once the Docker run has

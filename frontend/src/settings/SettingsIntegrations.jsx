@@ -32,7 +32,7 @@ function CopyField({ label, value, action, rows = 2 }) {
         {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
       </button>
     </div>
-    <span className={`settingDesc integrationCopyStatus${copied ? " ok" : ""}`} role="status">{status}</span>
+    <span className={`settingDesc integrationCopyStatus${copied ? " srOnly" : ""}`} role="status">{status}</span>
   </div>;
 }
 

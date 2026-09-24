@@ -33,6 +33,19 @@
   .adders { display: flex; gap: 8px; margin-top: 12px; }
   .status { margin-top: 16px; color: var(--text-muted); min-height: 20px; font-size: 12px; }
   .status.err { color: var(--danger); white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+
+  /* A server that would not open: what happened, in its own words underneath,
+     and the one thing that would fix it. Raw output stays folded away. */
+  .fail { margin-top: 16px; border: 1px solid var(--border); border-left: 3px solid var(--danger); border-radius: var(--radius-surface); background: var(--bg-card); padding: 12px 14px; }
+  .fail .fHead { display: flex; align-items: flex-start; gap: 8px; }
+  .fail .fHead svg { width: 16px; height: 16px; color: var(--danger); flex-shrink: 0; margin-top: 1px; }
+  .fail .fTitle { font-size: 13px; font-weight: 600; flex: 1; }
+  .fail .fHint { color: var(--text-muted); font-size: 12px; margin-top: 6px; }
+  .fail .fDetail, .fail details pre { font-family: ui-monospace, Consolas, Menlo, monospace; line-height: 1.5; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-control); -webkit-user-select: text; user-select: text; }
+  .fail .fDetail { font-size: 11.5px; color: var(--text-secondary); padding: 6px 8px; margin-top: 8px; white-space: pre-wrap; }
+  .fail .fActs { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .fail details { margin: 10px 0 0; }
+  .fail details pre { margin: 6px 0 0; max-height: 220px; overflow: auto; font-size: 11px; color: var(--text-muted); padding: 8px 10px; }
   .empty { color: var(--text-muted); text-align: center; padding: 30px 16px; border: 1px dashed var(--border-light); border-radius: var(--radius-surface); }
   .empty b { color: var(--text-secondary); }
 
@@ -89,6 +102,21 @@
     <button class="uiBtn" id="btnAddRemote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg>Add remote server…</button>
   </div>
   <div class="status" id="status"></div>
+
+  <div class="fail" id="fail" hidden>
+    <div class="fHead">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+      <div class="fTitle" id="failTitle"></div>
+      <button class="ctlBtn" id="failClose" title="Dismiss"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="fHint" id="failHint"></div>
+    <div class="fDetail" id="failDetail" hidden></div>
+    <div class="fActs" id="failActs"></div>
+    <details id="failLogBox" hidden>
+      <summary>Server output</summary>
+      <pre id="failLog"></pre>
+    </details>
+  </div>
 
   <div class="sectionTitle">Settings</div>
   <div class="settings">
@@ -464,8 +492,43 @@
     refresh();
   };
 
+  // A failed open arrives as ?error= carrying the diagnosis main.js built
+  // (lib/startup.js) as JSON; a payload without one falls back to a line of
+  // status text.
+  function showFailure(f) {
+    $('failTitle').textContent = f.summary;
+    $('failHint').textContent = f.hint || '';
+    $('failHint').hidden = !f.hint;
+    $('failDetail').textContent = f.detail || '';
+    $('failDetail').hidden = !f.detail;
+    $('failLog').textContent = f.log || '';
+    $('failLogBox').hidden = !f.log;
+    $('failLogBox').open = false;
+
+    const acts = $('failActs');
+    acts.innerHTML = '';
+    const act = (label, onClick, primary) => {
+      const b = document.createElement('button');
+      b.className = 'uiBtn sm' + (primary ? ' primary' : '');
+      b.textContent = label;
+      b.onclick = () => onClick(b);
+      acts.appendChild(b);
+    };
+    const server = () => (state ? state.servers.find((s) => s.id === f.server) : null);
+    if (f.action === 'update') {
+      act('Check for updates', () => { gammaShell.updateCheck(); $('btnUpdate').scrollIntoView({ block: 'center', behavior: 'smooth' }); }, true);
+    } else if (f.action === 'data' && f.server) {
+      act('Open data folder', () => gammaShell.revealData(f.server), true);
+    }
+    if (f.server) act('Try again', (b) => { const ws = server(); if (ws) { hideFailure(); openWs(ws, b); } }, f.action === 'retry');
+    if (f.server && f.log) act('Show log file', () => gammaShell.revealLog(f.server));
+    $('fail').hidden = false;
+  }
+  function hideFailure() { $('fail').hidden = true; }
+  $('failClose').onclick = hideFailure;
+
   const err = new URLSearchParams(location.search).get('error');
-  if (err) setStatus(err, true);
+  if (err) showFailure(JSON.parse(err));
   gammaShell.onState(() => refresh());
   refresh();
 </script>

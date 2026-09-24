@@ -14,6 +14,7 @@ const { spawn, spawnSync } = require('child_process');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { startupError } = require('./startup');
 
 const running = new Map(); // workspace id -> { child, port, url, logPath }
 
@@ -78,14 +79,6 @@ async function healthy(url, timeoutMs = 1500) {
   }
 }
 
-function logTail(logPath, lines = 15) {
-  try {
-    return fs.readFileSync(logPath, 'utf8').split(/\r?\n/).slice(-lines).join('\n');
-  } catch {
-    return '(no log)';
-  }
-}
-
 async function start(ws, settings, appInfo) {
   const existing = running.get(ws.id);
   if (existing) {
@@ -129,6 +122,8 @@ async function start(ws, settings, appInfo) {
   const logDir = path.join(appInfo.userDataDir, 'logs');
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${ws.id}.log`);
+  // Where this run's lines begin — the file holds every earlier run too.
+  const logFrom = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0;
   const logStream = fs.createWriteStream(logPath, { flags: 'a' });
   logStream.write(`\n--- ${new Date().toISOString()} start (${backend.mode}) port ${port} ---\n`);
   child.stdout.on('data', (d) => logStream.write(d));
@@ -144,7 +139,7 @@ async function start(ws, settings, appInfo) {
   // Frozen PyInstaller apps cold-start slowly; give it a generous window.
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    if (exited) throw new Error(`Server exited during startup. Last log lines:\n${logTail(logPath)}`);
+    if (exited) throw startupError('exit', logPath, logFrom);
     if (await healthy(url)) {
       const entry = { child, port, url, logPath };
       running.set(ws.id, entry);
@@ -153,7 +148,7 @@ async function start(ws, settings, appInfo) {
     await new Promise((r) => setTimeout(r, 250));
   }
   killChild(child);
-  throw new Error(`Server did not become healthy in 60s. Last log lines:\n${logTail(logPath)}`);
+  throw startupError('timeout', logPath, logFrom);
 }
 
 function killChild(child) {

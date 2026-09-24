@@ -1,6 +1,7 @@
 // The Logseq-style outliner: block rows (markdown rendering, inline
 // editing, [[refs]], link chips, image drop/paste), drag handles, and the tree.
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { textOf } from "../shared/lib/textOf";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import { MergeChip } from "../collaboration/MergeResolver";
@@ -10,8 +11,9 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "../shared/model/blockModel";
 import { COLORS } from "../shared/model/highlightColors.js";
+import { gammaLinkId, gammaLinkIds, parseGammaLink, relativeGammaLink } from "../shared/model/gammaLinks.js";
 import { InkCard } from "../ink/InkLayer";
-import { handleMarkdownCopy } from "../shared/ui/Widgets";
+import { GammaLinkCard, handleMarkdownCopy } from "../shared/ui/Widgets";
 import { MermaidDiagram, mermaidCodeProps } from "../shared/ui/MermaidDiagram";
 import { mapOutsideCodeFences, remarkMermaid, setMermaidWidth } from "../shared/lib/mermaidMarkdown.js";
 import { LinkIcon, PenIcon } from "../shared/ui/Icons";
@@ -156,15 +158,6 @@ function mdPreprocessProse(content, nested) {
     .replace(/!\[\[([a-zA-Z0-9_-]+)\]\]/g, nested ? "[$1](blockref:$1)" : "[$1](blockembed:$1)")
     .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")
     .replace(/==([^=\n]+?)==/g, "<mark>$1</mark>"));
-}
-
-// Plain text of a rendered element tree (link labels arrive as React children).
-function textOf(children) {
-  if (children == null) return "";
-  if (typeof children === "string" || typeof children === "number") return String(children);
-  if (Array.isArray(children)) return children.map(textOf).join("");
-  if (children.props?.children != null) return textOf(children.props.children);
-  return "";
 }
 
 // GitHub URLs get a readable label without any fetch: owner/repo, #issue/PR,
@@ -613,6 +606,21 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
               />
             );
           }
+          // A link into this library (a chat citation pasted into a note,
+          // a copied page/block link) is a card, not an external chip — its
+          // id has to resolve here, which also supplies the page title.
+          // refLabels holds ids this block's content mentions, so an id that
+          // isn't in the library falls through to the external chip below,
+          // whatever host the URL names.
+          const gl = parseGammaLink(href, window.location.origin);
+          const glRef = gl ? refLabels?.[gammaLinkId(gl)] : null;
+          if (gl && (!gl.foreign || glRef)) {
+            return (
+              <GammaLinkCard link={{ ...gl, href }} label={glRef?.page_title || glRef?.content}>
+                {children}
+              </GammaLinkCard>
+            );
+          }
           if (/^https?:\/\//i.test(href || "")) {
             return <LinkChip href={href} text={textOf(children)} />;
           }
@@ -849,10 +857,15 @@ function BlockRow({
   // whose identity changes on every edit.
   const refLabels = useMemo(() => {
     const out = {};
-    for (const [, id] of (block.content || "").matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)) {
+    const add = (id) => {
       const rb = allBlocks?.find((b) => b.id === id) || refCache?.[id];
       if (rb) out[id] = { content: rb.content, page_title: rb.page_title };
-    }
+    };
+    for (const [, id] of (block.content || "").matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)) add(id);
+    // Gamma links (citations, page links) resolve through the same cache: the
+    // title labels the card, and a link that doesn't resolve stays an
+    // ordinary URL.
+    for (const id of gammaLinkIds(block.content || "")) add(id);
     return out;
   }, [block.content, allBlocks, refCache]);
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
@@ -885,10 +898,11 @@ function BlockRow({
     return () => clearTimeout(timer);
   }, [refPopup?.query, block.id]);
 
-  // Resolve cross-note refs found in content
+  // Resolve cross-note refs and Gamma link targets found in content
   useEffect(() => {
     if (!block.content || !onFetchRefs) return;
-    const ids = [...block.content.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1]);
+    const ids = [...block.content.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1])
+      .concat(gammaLinkIds(block.content));
     const unknown = ids.filter((id) => !allBlocks?.find((b) => b.id === id) && !refCache?.[id]);
     if (unknown.length > 0) onFetchRefs(unknown);
   }, [block.content]);
@@ -1050,13 +1064,27 @@ function BlockRow({
     } finally { uploadingRef.current = false; }
   }
 
-  // A gamma block link pastes as mention chip / synced embed / plain URL;
-  // any other URL pastes as-is (the link chip) or as a titled markdown link.
-  function pasteAsItems(blockId) {
-    if (blockId) {
+  // A gamma block link pastes as mention chip / synced embed / plain URL; a
+  // page or citation link pastes as the link card; any other URL pastes
+  // as-is (the link chip) or as a titled markdown link.
+  function pasteAsItems(link) {
+    if (link?.kind === "block") {
+      const blockId = link.blockId;
       return [
         { name: "mention", glyph: "@", label: "Mention", hint: "inline chip", make: () => `[[${blockId}]]` },
         { name: "synced", glyph: "⧉", label: "Synced block", hint: "live embed", make: () => `![[${blockId}]]` },
+        { name: "url", glyph: "🔗", label: "URL", hint: "keep the link" },
+      ];
+    }
+    if (link?.kind === "citation") {
+      return [
+        { name: "gamma", glyph: "❝", label: "Citation", hint: `passage on p. ${link.page}` },
+        { name: "url", glyph: "🔗", label: "URL", hint: "keep the link" },
+      ];
+    }
+    if (link?.kind === "page") {
+      return [
+        { name: "gamma", glyph: "📄", label: "Page link", hint: "card with the title" },
         { name: "url", glyph: "🔗", label: "URL", hint: "keep the link" },
       ];
     }
@@ -1110,6 +1138,23 @@ function BlockRow({
         });
         onPasteBlocks?.(block.id, nodes);
       }).catch(() => {});
+    } else if (item.name === "gamma") {
+      // Stored host-free: the note keeps working when this library moves to
+      // another server (a desktop sidecar, the NAS, a mirror).
+      const url = relativeGammaLink(pm.url, window.location.origin);
+      const pageId = gammaLinkId(pm.link);
+      const fallback = pm.link.kind === "citation" ? `p. ${pm.link.page}` : "page";
+      fetch(`/api/block-search?ids=${encodeURIComponent(pageId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          const b = d?.blocks?.[0];
+          const title = (b?.page_title || b?.content || "").replace(/[[\]\n]/g, " ").trim();
+          const label = pm.link.kind === "citation"
+            ? (title ? `${title}, p. ${pm.link.page}` : fallback)
+            : (title || fallback);
+          doReplace(`[${label}](${url})`);
+        })
+        .catch(() => doReplace(`[${fallback}](${url})`));
     } else if (item.name === "titled") {
       fetch(`/api/link-preview?url=${encodeURIComponent(pm.url)}`)
         .then((r) => (r.ok ? r.json() : null))
@@ -1165,15 +1210,11 @@ function BlockRow({
           selection: { anchor: start + text.length },
           userEvent: "input",
         });
-        let blockId = null;
-        try {
-          const b = new URL(text).searchParams.get("block");
-          if (b && /^[a-zA-Z0-9_-]+$/.test(b)) blockId = b;
-        } catch (_) {}
+        const gammaLink = parseGammaLink(text, window.location.origin);
         const anchor = ta.caretCoords(start);
         // After the onChange the dispatch just fired (it clears pasteMenu).
         requestAnimationFrame(() => {
-          setPasteMenu({ start, end: start + text.length, url: text, items: pasteAsItems(blockId), anchor });
+          setPasteMenu({ start, end: start + text.length, url: text, link: gammaLink, items: pasteAsItems(gammaLink), anchor });
           setPasteIdx(0);
         });
         return;

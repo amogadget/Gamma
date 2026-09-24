@@ -23,7 +23,7 @@ class ProviderTests(unittest.TestCase):
     def setUp(self):
         self.bridge = types.ModuleType("_gamma_ios_pdf")
         for name in ("open_data", "open_path", "close", "page_count", "page_geometry",
-                     "page_text", "render", "occupancy"):
+                     "page_text", "render", "occupancy", "outline"):
             setattr(self.bridge, name, Mock())
         self.handle = object()
         self.bridge.open_data.return_value = self.handle
@@ -146,6 +146,36 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 page.render(rev_byteorder=False)
         self.bridge.render.assert_not_called()
+
+    def test_outline_levels_destinations_and_lifetime(self):
+        self.bridge.outline.return_value = [(0, "文 Intro", 0), (1, "Child", 1),
+                                            (0, "External", None)]
+        with self.provider.PdfDocument(b"pdf") as doc:
+            entries = list(doc.get_toc())
+            self.assertEqual([(e.level, e.get_title(), e.get_dest().get_index()
+                               if e.get_dest() else None) for e in entries],
+                             self.bridge.outline.return_value)
+        with self.assertRaises(ValueError):
+            entries[0].get_title()
+        with self.assertRaises(ValueError):
+            doc.get_toc()
+
+    def test_crop_validates_and_passes_display_margins_to_native(self):
+        self.bridge.page_geometry.return_value.update(width=10000, height=20000)
+        with self.provider.PdfDocument(b"pdf") as doc, doc[0] as page:
+            page.render(scale=4, crop=(10, 19950, 9950, 20))
+            self.bridge.render.assert_called_once_with(self.handle, 0, 4.0,
+                                                       10.0, 19950.0, 9950.0, 20.0)
+            for crop in ((0, 0, 0), (-1, 0, 0, 0), (math.nan, 0, 0, 0),
+                         (0, math.inf, 0, 0), (10000, 0, 0, 0), (0, 0, 0, 20000)):
+                with self.assertRaises(ValueError):
+                    page.render(crop=crop)
+        self.assertEqual(self.bridge.render.call_count, 1)
+
+    def test_zero_crop_is_accepted_for_every_raster(self):
+        with self.provider.PdfDocument(b"pdf") as doc, doc[0] as page:
+            page.render(crop=(0, 0, 0, 0), rev_byteorder=True)
+        self.bridge.render.assert_called_once_with(self.handle, 0, 1.0)
 
     def test_pixel_product_cap_separate_from_side_cap(self):
         self.bridge.page_geometry.return_value.update(width=3000, height=3000)

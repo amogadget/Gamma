@@ -211,9 +211,17 @@ static PyObject *Text(PyObject *self, PyObject *args) {
 // Owns RGBA pixels, top row first, opaque white-composited (premultiplication
 // therefore equals straight alpha). Exactly the same raster feeds area crops.
 static NSData *Raster(PDFPage *page, double scale, size_t *width, size_t *height,
-                      CGAffineTransform *userToPixel) {
+                      CGAffineTransform *userToPixel, double left, double bottom,
+                      double right, double top) {
     CGSize size = DisplaySize(page);
-    double w = ceil(size.width * scale), h = ceil(size.height * scale);
+    if (!isfinite(left) || !isfinite(bottom) || !isfinite(right) || !isfinite(top) ||
+        left < 0 || bottom < 0 || right < 0 || top < 0 ||
+        left + right >= size.width || bottom + top >= size.height)
+        Fail(@"Invalid PDF crop margins");
+    double fullW = ceil(size.width * scale), fullH = ceil(size.height * scale);
+    double offsetX = ceil(left * scale), offsetY = ceil(top * scale);
+    double w = fullW - offsetX - ceil(right * scale);
+    double h = fullH - offsetY - ceil(bottom * scale);
     if (!isfinite(scale) || scale <= 0 || !isfinite(w) || !isfinite(h) ||
         w < 1 || h < 1 || w > 4096 || h > 4096 || w * h > PixelLimit)
         Fail(@"PDF raster exceeds 4096 side / 8 Mi pixel limit or has invalid scale");
@@ -239,7 +247,9 @@ static NSData *Raster(PDFPage *page, double scale, size_t *width, size_t *height
             default: m = CGAffineTransformMake(1, 0, 0, -1, -x, t); break;
         }
         // Bitmap row zero is memory y=0. This maps PDF top-left to row zero.
-        m = CGAffineTransformConcat(m, CGAffineTransformMakeScale(w / size.width, h / size.height));
+        // Allocate only the cropped bitmap, never a zoomed whole-page buffer.
+        m = CGAffineTransformConcat(m, CGAffineTransformMakeScale(fullW / size.width, fullH / size.height));
+        m = CGAffineTransformConcat(m, CGAffineTransformMakeTranslation(-offsetX, -offsetY));
         *userToPixel = m;
         // Quartz user space is bottom-up even though bitmap memory starts at
         // its top row. Establish a top-down device space before applying the
@@ -255,10 +265,12 @@ static NSData *Raster(PDFPage *page, double scale, size_t *width, size_t *height
 static PyObject *Render(PyObject *self, PyObject *args) {
     @autoreleasepool {
         PyObject *capsule; Py_ssize_t index; double scale;
-        if (!PyArg_ParseTuple(args, "Ond", &capsule, &index, &scale)) return NULL;
+        double left = 0, bottom = 0, right = 0, top = 0;
+        if (!PyArg_ParseTuple(args, "Ond|dddd", &capsule, &index, &scale,
+                             &left, &bottom, &right, &top)) return NULL;
         GammaPDFHandle *handle = GammaHandleFromCapsule(capsule); if (!handle) return NULL;
         __block NSData *pixels; __block size_t w, h;
-        if (!Work(^{ CGAffineTransform m; pixels = Raster(Page(handle, index), scale, &w, &h, &m); })) return NULL;
+        if (!Work(^{ CGAffineTransform m; pixels = Raster(Page(handle, index), scale, &w, &h, &m, left, bottom, right, top); })) return NULL;
         return Py_BuildValue("{s:n,s:n,s:n,s:i,s:y#}", "width", (Py_ssize_t)w,
             "height", (Py_ssize_t)h, "stride", (Py_ssize_t)(w * 4), "n_channels", 4,
             "buffer", pixels.bytes, (Py_ssize_t)pixels.length);
@@ -280,7 +292,7 @@ static PyObject *Occupancy(PyObject *self, PyObject *args) {
         if (!Work(^{
             PDFPage *page = Page(handle, index); CGSize size = DisplaySize(page);
             size_t w, h; CGAffineTransform m;
-            NSData *raster = Raster(page, 512.0 / MAX(size.width, size.height), &w, &h, &m);
+            NSData *raster = Raster(page, 512.0 / MAX(size.width, size.height), &w, &h, &m, 0, 0, 0, 0);
             const unsigned char *p = raster.bytes;
             NSUInteger histogram[3][256] = {{0}}; NSUInteger samples = 0;
             for (size_t yy = 0; yy < h; yy++) for (size_t xx = 0; xx < w; xx++) {
@@ -329,7 +341,47 @@ static PyObject *Occupancy(PyObject *self, PyObject *args) {
         return result;
     }
 }
+static PyObject *Outline(PyObject *self, PyObject *capsule) {
+    @autoreleasepool {
+        GammaPDFHandle *handle = GammaHandleFromCapsule(capsule); if (!handle) return NULL;
+        __block NSMutableArray<NSArray *> *entries;
+        if (!Work(^{
+            if (!handle.document) Fail(@"PDF document is closed");
+            entries = [NSMutableArray array];
+            PDFOutline *root = handle.document.outlineRoot;
+            // Iterative preorder preserves arbitrarily nested bookmark levels.
+            NSMutableArray<NSArray *> *stack = [NSMutableArray array];
+            for (NSInteger i = (NSInteger)root.numberOfChildren - 1; i >= 0; i--)
+                [stack addObject:@[[root childAtIndex:(NSUInteger)i], @0]];
+            while (stack.count) {
+                NSArray *next = stack.lastObject; [stack removeLastObject];
+                PDFOutline *item = next[0]; NSNumber *level = next[1];
+                PDFDestination *dest = item.destination;
+                if (!dest && [item.action isKindOfClass:[PDFActionGoTo class]])
+                    dest = ((PDFActionGoTo *)item.action).destination;
+                NSUInteger index = dest.page ? [handle.document indexForPage:dest.page] : NSNotFound;
+                [entries addObject:@[level, item.label ?: @"",
+                    index == NSNotFound ? (id)[NSNull null] : @(index)]];
+                for (NSInteger i = (NSInteger)item.numberOfChildren - 1; i >= 0; i--)
+                    [stack addObject:@[[item childAtIndex:(NSUInteger)i], @(level.integerValue + 1)]];
+            }
+        })) return NULL;
+        PyObject *result = PyList_New((Py_ssize_t)entries.count); if (!result) return NULL;
+        for (NSUInteger i = 0; i < entries.count; i++) {
+            NSArray *entry = entries[i];
+            PyObject *index = entry[2] == [NSNull null] ? Py_NewRef(Py_None) :
+                PyLong_FromUnsignedLongLong([entry[2] unsignedLongLongValue]);
+            if (!index) { Py_DECREF(result); return NULL; }
+            PyObject *row = Py_BuildValue("(nsN)", (Py_ssize_t)[entry[0] integerValue],
+                                         [entry[1] UTF8String], index);
+            if (!row) { Py_DECREF(result); return NULL; }
+            PyList_SET_ITEM(result, (Py_ssize_t)i, row);
+        }
+        return result;
+    }
+}
 static PyMethodDef Methods[] = {
+    {"outline", Outline, METH_O, "Preorder (zero-based level, title, page index or None) bookmarks."},
     {"open_data", OpenBytes, METH_VARARGS, "Open immutable PDF bytes; return owning capsule."},
     {"open_path", OpenPath, METH_VARARGS, "Read a local PDF path within the input cap."},
     {"close", Close, METH_O, "Idempotently release document; invalidate dependent pages."},

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from .. import ratelimit, workspaces, ws_backup
-from ..auth import require_user, requested_ws, set_session_cookie
+from ..auth import is_guest_workspace, require_user, requested_ws, set_session_cookie
 from ..ratelimit import client_ip
 from ..db import connect_users_db, page_now, ws_dir
 from ..seed import ensure_guest_user
@@ -56,10 +56,6 @@ def _target_ws(request: Request, ws: str | None, user: str | None, needed: str) 
     if not workspaces.at_least(role, needed):
         raise HTTPException(status_code=403, detail=f"only a workspace {needed} can do that")
     return target
-
-
-def _is_guest_workspace(ws: str) -> bool:
-    return ws == workspaces.default_workspace("guest")
 
 
 @router.get("/export-progress")
@@ -144,7 +140,7 @@ def import_data(request: Request, file: UploadFile = File(...), mode: str = "rep
     if mode not in ("replace", "merge"):
         raise HTTPException(status_code=400, detail="mode must be 'replace' or 'merge'")
     target = _target_ws(request, ws, user, "owner" if mode == "replace" else "editor")
-    if _is_guest_workspace(target):
+    if is_guest_workspace(target):
         raise HTTPException(status_code=403, detail="the guest workspace cannot import backups")
     with tempfile.TemporaryDirectory(prefix="gamma-import-") as td:
         zpath = Path(td) / "backup.zip"
@@ -161,6 +157,17 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def new_session(username: str) -> str:
+    """Mint a session row for an account; the caller sets the cookie. Shared
+    by the password login and the cloud sign-in callback."""
+    token = secrets.token_urlsafe(32)
+    with connect_users_db() as conn:
+        conn.execute("INSERT INTO sessions (token, username, created_at) VALUES (?, ?, ?)",
+                     (token, username, page_now()))
+        conn.commit()
+    return token
+
+
 @router.post("/login")
 async def login(payload: LoginRequest, request: Request):
     # Throttle guessing: per-IP and per-username fixed windows. bcrypt is slow
@@ -173,19 +180,15 @@ async def login(payload: LoginRequest, request: Request):
             "SELECT username, password_hash, is_guest FROM users WHERE username = ?",
             (payload.username,),
         ).fetchone()
-    if not row or row[2]:  # guest accounts have no password
+    # Guest accounts have no password; a cloud-provisioned account has an
+    # empty hash (only its cloud identity signs it in, gamma/cloud_auth.py).
+    if not row or row[2] or not row[1]:
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not bcrypt.checkpw(payload.password.encode(), row[1].encode()):
         raise HTTPException(status_code=401, detail="invalid credentials")
     ratelimit.reset(f"login:ip:{ip}")
     ratelimit.reset(f"login:user:{payload.username}")
-    token = secrets.token_urlsafe(32)
-    with connect_users_db() as conn:
-        conn.execute(
-            "INSERT INTO sessions (token, username, created_at) VALUES (?, ?, ?)",
-            (token, row[0], page_now()),
-        )
-        conn.commit()
+    token = new_session(row[0])
     resp = JSONResponse({"ok": True, "username": row[0]})
     set_session_cookie(resp, token, request)
     return resp

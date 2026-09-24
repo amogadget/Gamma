@@ -24,45 +24,23 @@ session caches are ignored because their account owner cannot be determined.
 
 ## Periodic backup tasks
 
-Settings → Backups has one central task table. Each account can create up to
-100 named tasks, independently of its workspaces. A task targets selected
-workspaces or all workspaces its owner owns (including future workspaces).
-Multiple tasks can cover the same workspace with different schedules and
-retention. Tasks can be edited, duplicated, paused, queued to run now, or
-deleted without deleting their snapshots.
+Settings → Backups opens with one task table (`BackupTasks.jsx`). A task
+names the workspaces it backs up (all the account owns, or a chosen set),
+whether uploads are included, a schedule and a retention rule. Several tasks
+may cover one workspace.
 
-The editor offers hourly, daily, weekly (multiple weekdays), monthly and custom
-five-field cron schedules. Cron uses **UTC**; the next three runs are previewed
-in the browser's local timezone. Numeric wildcards, lists, ranges and steps are
-supported; Sunday is 0 or 7. Restricted day-of-month and weekday fields use OR
-semantics. Monthly dates absent from a month are skipped. Impossible schedules
-with no occurrence in five years are rejected.
-
-Retention is either an age (days; the editor also offers weeks and 30-day
-months) or a snapshot count per workspace. Only snapshots carrying that task's
-ID are eligible, after all selected backups succeed. The newest snapshot is
-always kept. Manual backups and other tasks' snapshots are untouched; the
-20-manual-snapshot cap stays separate.
+The editor (a `SubDialog`) offers Hourly, Daily, Weekly (chosen weekdays),
+Monthly (a day of the month) and a five-field cron expression. Schedules are
+UTC; the next three runs are previewed in the browser's time zone. Retention
+is an age (days, weeks or 30-day months) or a snapshot count per workspace.
+Only that task's snapshots expire, after a successful run; the newest is
+always kept. Deleting a task keeps its snapshots.
 
 `GET/POST /api/backup-tasks`, `PUT/DELETE /api/backup-tasks/{id}`,
-`POST /api/backup-tasks/{id}/run`, and `POST /api/backup-tasks/preview` manage
-account-owned tasks. Guests and integration tokens cannot manage tasks.
-Workspace ownership (or current admin authority) is checked at save and again
-at execution. Owners can pause or delete a task after losing target access.
+`POST /api/backup-tasks/{id}/run` and `POST /api/backup-tasks/preview`.
+Guests and integration tokens cannot manage tasks.
 
-Configuration and results persist in `backups/tasks/<id>.json`. A per-task OS
-lock prevents overlapping execution by server workers. The backend checks
-every 30 seconds, catches up once after downtime, and retries enabled failed
-tasks after an hour. Run-now queues a task (even if paused), preserving an
-upcoming scheduled run. Shutdown waits for active backups. The UI polls task
-state every five seconds and refreshes snapshots after successful runs.
-
-Older per-workspace `schedule.json` settings are imported once as editable
-tasks, then renamed to `schedule.migrated`. Their existing untagged snapshots
-remain available for manual management. Deleting a selected workspace makes
-its task fail visibly until the selection is updated; all-owned tasks discover
-the current set each run. Backups stay on the server; download copies to store
-elsewhere. Whole-server snapshots remain in Settings → Server.
+Runtime and storage: [docs/dev/workspaces.md](workspaces.md#backups).
 
 ## The Settings dialog
 
@@ -137,7 +115,12 @@ Manage:
   remove origin)
   live in that pill's gear view, stored on the server per mirror
   (`mirrors.poll_s`, `on_change`, `mode`).
-- **Backups**: server-kept snapshots per workspace.
+- **Backups** ([SettingsBackups.jsx](../../frontend/src/settings/SettingsBackups.jsx)):
+  the task table first ([BackupTasks.jsx](../../frontend/src/settings/BackupTasks.jsx):
+  Add task opens the editor `SubDialog`; each row has an Enabled switch and
+  a Run now / Edit / Duplicate / Delete `ActionMenu`), then the server-kept
+  snapshots per workspace (Back up all, and per workspace: back up now,
+  download, restore, delete).
 - **Library maintenance**: workspace storage, search-index rebuilding and
   the per-paper metadata / text / index health table.
 - **Users** (admins): accounts, each with its personal workspaces and
@@ -155,6 +138,21 @@ only on confirmation; the saved address immediately configures assistant
 sign-in and the MCP host allowlist and persists in the server `settings`
 table. An existing `GAMMA_PUBLIC_URL` environment override is shown
 read-only.
+
+**Sign-in** (Server, `SettingsCloudSignIn.jsx` `CloudSignInSettings`) has
+three rows. The account server's address (empty = off, an on/off `uiTag`).
+The **server client**: how this Gamma identifies itself to the account
+server. Empty on a local machine (the built-in public desktop client); a
+hosted server enters the client id and write-only secret it was given. The
+secret field shows once an id is typed; the inputs refuse browser autofill.
+Unknown cloud accounts: a `Segmented` policy, Refuse / Claim / Provision.
+Editing shows one Save button as the section's action. Values are stored in
+the server `settings` table (`cloud_*`), read-only when `GAMMA_CLOUD_ISSUER`
+manages them. The login page reads `GET /api/server-config` and shows "Sign
+in with Gamma Cloud" while it is on. The **Account** pane gets a "Gamma
+Cloud" row (`CloudIdentityRow`): the linked username and plan with an Unlink
+button, or a "Link Gamma Cloud account" button that round-trips through the
+account server ([cloud_accounts.md](cloud_accounts.md)).
 
 Search is backed by [settingsNavigation.js](../../frontend/src/settings/settingsNavigation.js).
 It searches labels and synonyms, filters out inaccessible management pages,

@@ -346,6 +346,36 @@ export async function settingsScenarios(env) {
     } finally { await ctx.close(); }
   });
 
+  await step("settings: a backup task is created, run and deleted from the Backups table", async () => {
+    const { ctx, page } = await setup();
+    try {
+      await openSettings(page);
+      await nav(page, "Backups").click();
+      await page.getByRole("button", { name: "Add task", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Add backup task", exact: true });
+      await dialog.getByPlaceholder("e.g. Nightly research backup").fill("Nightly");
+      await dialog.getByRole("button", { name: "Frequency", exact: true }).click();
+      await page.getByRole("button", { name: "Daily", exact: true }).click();
+      await dialog.locator("ol li").first().waitFor(); // the schedule preview answered
+      await dialog.getByRole("button", { name: "Create task", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+      const rowOf = page.getByRole("region", { name: "Periodic backup tasks" }).locator("tr", { hasText: "Nightly" });
+      await rowOf.waitFor();
+      assert((await rowOf.innerText()).includes("Daily · 03:00"), "the row shows the daily schedule");
+      await rowOf.getByRole("button", { name: "Actions for Nightly", exact: true }).click();
+      await page.getByRole("button", { name: "Run now", exact: true }).click();
+      // the scheduler picks a queued run up within its 30 s round; the table polls every 5 s
+      await until(() => rowOf.innerText().then((t) => /finished|failed/i.test(t)), { timeout: 45000, what: "the queued run to finish" });
+      assert(/finished/i.test(await rowOf.innerText()), "the run finished");
+      await rowOf.getByRole("button", { name: "Actions for Nightly", exact: true }).click();
+      await page.getByRole("button", { name: "Delete task", exact: true }).click();
+      await page.locator(".confirmHead").waitFor();
+      await page.locator(".reportModalBtns button", { hasText: "Delete task" }).click();
+      await rowOf.waitFor({ state: "detached" });
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
   await step("settings: prompt and connection drafts have save, cancel, and dismissal protection", async () => {
     const { ctx, page } = await setup();
     try {

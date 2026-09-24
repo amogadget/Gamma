@@ -28,6 +28,14 @@ SCENE_BACKGROUND = '''<rect width="1920" height="1080" fill="#f6f4ef"/>
   </g>'''
 
 
+def scene_heading(title_lines, sub_lines):
+    """A README scene's heading: 72 px title lines and 28 px introductory lines, each (y, text)."""
+    out = [f'<text x="120" y="{y}" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">{text}</text>'
+           for y, text in title_lines]
+    out += [f'<text x="122" y="{y}" font-size="28" fill="#6b6a65">{text}</text>' for y, text in sub_lines]
+    return '\n    '.join(out)
+
+
 def write_svg(stem, svg):
     target = ASSETS / f'{stem}.svg'
     target.write_text(svg, encoding='utf-8', newline='\n')

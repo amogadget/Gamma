@@ -2,14 +2,25 @@
 # so a broken main (whose merge publishes the Docker image) is caught on
 # the PR instead. Backend tests, frontend unit tests
 # + build, the browser suite against an isolated backend, extension zip;
-# no installers. The merge skill waits for this before merging. Overview:
-# docs/dev/github_actions.md.
+# no installers. The account server (cloud/) is checked by cloud.yml and
+# the website (sites/) by site.yml instead, so a PR that only touches those
+# skips this. The merge skill waits
+# for this before merging. Overview: docs/dev/github_actions.md.
 
 name: check
 
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "cloud/**"
+      - ".github/workflows/cloud.yml"
+      - ".claude/skills/update-account-server/**"
+      - "docs/dev/cloud_accounts.md"
+      - "sites/**"
+      - ".github/workflows/site.yml"
+      - ".claude/skills/build-site/**"
+      - "PRIVACY.md"
 
 concurrency:
   group: check-${{ github.event.pull_request.number }}

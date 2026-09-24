@@ -13,15 +13,18 @@ from .db import connect_pages_db, pdf_upload_path, ws_db_path
 from .foldertags import parse_tags
 from .logbuf import log
 from .net_guard import guarded_urlopen
-from .pdf_text import (PAGE_LABEL_RE, PDF_EXTRACT_FAILED, extract_pages, extract_text, extract_text_pages,
-                       page_count, page_label)
+from .pdf_text import (MAX_PAGES, PAGE_LABEL_RE, PDF_EXTRACT_FAILED, extract_pages, extract_text,
+                       extract_text_pages, outline, page_count, page_label, render_page)
 from .server_settings import can_store
 from .textnorm import normalize_text
 
 
 MAX_ATTACH_PDF_BYTES = 15 * 1024 * 1024
-# Cap on the selected-PDF-passages payload a chat request may carry — the
-# prompt copy (final_prompt) and the context locator (gather_inputs) share it.
+# Caps on the selected PDF passages a chat request may carry (the chat UI
+# holds the same six × 4000) — the prompt copy (final_prompt) and the
+# context locator (gather_inputs) both read them through request_selections.
+MAX_SELECTIONS = 6
+MAX_SELECTION_PASSAGE_CHARS = 4000
 MAX_SELECTION_CHARS = 24_000
 
 # Renamed agent tools: old name → current. Saved chats replay their recorded
@@ -78,17 +81,79 @@ def parse_files(files: list) -> list[str]:
     return parsed
 
 
-def final_prompt(payload) -> str:
+def _selection_box(value):
+    """A selection's region as ``(x0, y0, x1, y1)`` fractions of its page
+    (top-left origin), or None when the value isn't a usable box."""
+    try:
+        x0, y0, x1, y1 = (min(1.0, max(0.0, float(v))) for v in value)
+    except (TypeError, ValueError):
+        return None
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
+
+def request_selections(payload) -> list[dict]:
+    """The PDF passages a chat message is about, as ``{text, page, box}``:
+    ``page`` is the 1-based PDF page the viewer saw the selection start on
+    (0 = unknown) and ``box`` its region on that page (None = unknown).
+    ``selections`` is the structured field; the older ``selection`` string
+    ("---"-joined passages, no positions) is still read when it is absent."""
+    passages = []
+    for item in getattr(payload, "selections", None) or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        page = item.get("page")
+        page = page if isinstance(page, int) and 0 < page <= MAX_PAGES else 0
+        if text:
+            passages.append({"text": text, "page": page,
+                             "box": _selection_box(item.get("box")) if page else None})
+    if not passages:
+        passages = [{"text": p.strip(), "page": 0, "box": None}
+                    for p in re.split(r"\n\s*---\s*\n", getattr(payload, "selection", "") or "")
+                    if p.strip()]
+    kept, room = [], MAX_SELECTION_CHARS
+    for passage in passages[:MAX_SELECTIONS]:
+        text = passage["text"][:min(MAX_SELECTION_PASSAGE_CHARS, room)]
+        if not text:
+            break
+        kept.append({**passage, "text": text})
+        room -= len(text)
+    return kept
+
+
+def _passage_heading(index: int, count: int, where: dict) -> str:
+    """"Passage 2 (PDF page 7; section "3.2 Noise model"):" — where a
+    selected passage sits, as far as it is known."""
+    bits = []
+    if where.get("page"):
+        bits.append(f"PDF page {where['page']}")
+    if where.get("section"):
+        bits.append(f'section "{where["section"]}"')
+    if where.get("crop"):
+        bits.append("a picture of the selected region is attached, because its extracted "
+                    "text is unreliable (a formula, table or odd font): read the picture")
+    name = f"Passage {index + 1}" if count > 1 else "Selected passage"
+    return name + (f" ({'; '.join(bits)})" if bits else "") + ":"
+
+
+def final_prompt(payload, located: list | None = None) -> str:
     """Append the selected PDF passage(s) and selected note text to a user's
-    current prompt."""
+    current prompt. ``located`` is what the context builder learned about
+    each passage (``selection_context``: page, section, attached picture);
+    without it a passage is labelled with the page the viewer reported."""
     prompt = payload.prompt
-    selection = (payload.selection or "").strip()[:MAX_SELECTION_CHARS]
-    if selection:
+    passages = request_selections(payload)
+    if passages:
+        blocks = []
+        for i, passage in enumerate(passages):
+            where = located[i] if located and i < len(located) else {"page": passage["page"]}
+            blocks.append(f'{_passage_heading(i, len(passages), where)}\n"""\n{passage["text"]}\n"""')
+        several = len(passages) > 1
         prompt = (
             f"{prompt}\n\n"
-            "The user has selected the following passage(s) from the page's PDF "
-            'attachment (multiple passages are separated by "---"). '
-            f'Answer specifically about them:\n"""\n{selection}\n"""'
+            f"The user has selected the following passage{'s' if several else ''} from the "
+            f"page's PDF attachment. Answer specifically about {'them' if several else 'it'}:"
+            "\n\n" + "\n\n".join(blocks)
         )
     passages = [str(p).strip() for p in (getattr(payload, "note_passages", None) or [])
                 if str(p).strip()][:MAX_NOTE_PASSAGES]
@@ -240,7 +305,8 @@ def _elide_old_results(history: list) -> dict[int, set]:
     return elided
 
 
-def build_messages(payload, context: str, with_tools: bool = False) -> list[dict]:
+def build_messages(payload, context: str, with_tools: bool = False,
+                   located: list | None = None) -> list[dict]:
     """Build common chat messages, injecting context once before a user turn.
 
     With ``with_tools`` (an agent chat), each saved reply's tool calls are
@@ -248,7 +314,8 @@ def build_messages(payload, context: str, with_tools: bool = False) -> list[dict
     same common shapes the wire builders translate for the live loop — so the
     model remembers what it already listed/read/changed instead of repeating
     the calls each turn. Plain chats must not replay them: providers reject
-    tool blocks without tool definitions in the request.
+    tool blocks without tool definitions in the request. ``located`` labels
+    the selected passages in the question (see ``final_prompt``).
     """
     history = payload.history or []
     elided = _elide_old_results(history) if with_tools else {}
@@ -284,7 +351,7 @@ def build_messages(payload, context: str, with_tools: bool = False) -> list[dict
             content = f"{CONTEXT_INTRO}\n\n{context}\n\nUser question: {content}"
             context_used = True
         messages.append({"role": role, "content": content})
-    content = final_prompt(payload)
+    content = final_prompt(payload, located)
     if context and not context_used:
         content = f"{CONTEXT_INTRO}\n\n{context}\n\nUser question: {content}"
     messages.append({"role": "user", "content": content})
@@ -499,8 +566,17 @@ def pdf_text_cover_from_b64(data: str, limit: int) -> tuple[str, dict]:
 _ANCHOR_CHARS = 200
 _MIN_ANCHOR_CHARS = 12
 _SEAM_CHARS = 500
-_MAX_SELECTIONS = 6           # passages per request; the chat UI "---"-joins them
 _HEAD_GROUNDING_CHARS = 2000  # head slice (title/abstract) kept for grounding
+# How much of a passage's window goes BEFORE it: the set-up, definitions and
+# heading a passage leans on sit just ahead of it, not after.
+_WINDOW_BEFORE_CHARS = 2500
+# Pictures of selected regions whose text is unreliable: at most this many
+# per message, grown to at least this much of the page (a lone symbol
+# needs its line around it), plus a margin.
+_MAX_SELECTION_CROPS = 3
+_CROP_MIN_W, _CROP_MIN_H = 0.3, 0.05
+_CROP_PAD = 0.01
+_CROP_MAX_SIDE = 1200
 
 
 def _normalized_pages(pages: list[str]) -> tuple[list[str], list[str]]:
@@ -513,21 +589,46 @@ def _normalized_pages(pages: list[str]) -> tuple[list[str], list[str]]:
     return norm, seams
 
 
-def _locate_passage(norm: list[str], seams: list[str], passage: str) -> int | None:
-    """1-based PDF page a selected passage starts on (None = not found).
-    Matches the passage's head on normalized text (textnorm rules — the same
-    canon the pdf.js text layer and the extractors converge to), so viewer
-    selections find their spot despite ligature/whitespace differences."""
-    needle = normalize_text(passage).lower()[:_ANCHOR_CHARS]
-    if len(needle) < _MIN_ANCHOR_CHARS:  # too short to be a trustworthy anchor
-        return None
-    for page_no, page_norm in enumerate(norm, start=1):
-        if needle in page_norm:
-            return page_no
-        # A selection starting near the bottom of a page continues onto the
-        # next — the seam covers the boundary and credits the page it starts on.
-        if page_no >= 2 and needle in seams[page_no - 2]:
-            return page_no - 1
+def _raw_offset(raw: str, norm: str, k: int) -> int:
+    """A normalized-text offset mapped back into the raw page text —
+    proportionally, which is exact enough to cut a window around it."""
+    return int(k * len(raw) / max(1, len(norm)))
+
+
+def _locate_passage(pages: list[str], norm: list[str], seams: list[str],
+                    passage: dict) -> tuple[int, int, bool] | None:
+    """Where a selected passage starts: ``(1-based page, offset in that
+    page's raw text, found)``. The text is matched on normalized text
+    (textnorm rules — the same canon the pdf.js text layer and the
+    extractors converge to) on the page the viewer reported first, then
+    anywhere — so a phrase the paper repeats lands where the user selected
+    it. A passage whose text isn't found (a formula's glyph soup) still gets
+    the viewer's page, placed by its box (``found`` False). None = nowhere."""
+    hint = passage.get("page") or 0
+    hint = hint if 1 <= hint <= len(pages) else 0
+    needle = normalize_text(passage["text"]).lower()[:_ANCHOR_CHARS]
+    if len(needle) >= _MIN_ANCHOR_CHARS:  # shorter is no trustworthy anchor
+        def on_page(page_no):
+            k = norm[page_no - 1].find(needle)
+            return None if k < 0 else (page_no, _raw_offset(pages[page_no - 1], norm[page_no - 1], k), True)
+
+        def on_seam(page_no):
+            # A selection starting near the bottom of a page continues onto
+            # the next — the seam covers the boundary and credits the page it
+            # starts on.
+            k = seams[page_no - 1].find(needle) if page_no <= len(seams) else -1
+            return None if k < 0 else (page_no, max(0, len(pages[page_no - 1]) - _SEAM_CHARS) + k, True)
+
+        spot = hint and (on_page(hint) or on_seam(hint))
+        if spot:
+            return spot
+        for page_no in range(1, len(pages) + 1):
+            spot = on_page(page_no) or (page_no >= 2 and on_seam(page_no - 1))
+            if spot:
+                return spot
+    if hint:
+        box = passage.get("box")
+        return hint, int(box[1] * len(pages[hint - 1])) if box else 0, False
     return None
 
 
@@ -544,46 +645,230 @@ def _join_upto(pages: list[str], start: int, limit: int) -> str:
     return "\n\n".join(parts)[:limit]
 
 
-def selection_context(ws: str, doc_id: str, selection: str, budget: int) -> str | None:
-    """Chat context for selected passages: a small head slice (title/abstract
-    grounding) plus text around each passage's PDF page — instead of spending
-    the whole budget on the start of the paper, which rarely covers what the
-    selection is about. Labels carry the page numbers so the model knows where
-    each passage sits. None = nothing located (caller falls back to the plain
-    head-of-document context)."""
+def _span_text(pages: list[str], starts: list[int], g0: int, g1: int) -> str:
+    """The characters [g0, g1) of the pages laid end to end (``starts`` =
+    each page's first position), each page's part under its ``[PDF page N]``
+    label — "continued" when the span enters it mid-page, where the cut is
+    moved to the next line start so the window opens on a whole line."""
+    parts = []
+    for index, page in enumerate(pages):
+        start = starts[index]
+        if start + len(page) <= g0:
+            continue
+        if start >= g1:
+            break
+        a, b = max(0, g0 - start), min(len(page), g1 - start)
+        if a:
+            line = page.find("\n", a, min(b, a + 200))
+            a = line + 1 if line >= 0 else a
+        chunk = page[a:b].strip()
+        if chunk:
+            parts.append(page_label(index + 1, continued=a > 0) + chunk)
+    return "\n\n".join(parts)
+
+
+# Section headings when the PDF has no outline: the numbered, Roman-numeral
+# (APS) and lettered shapes, and the named sections papers share. A heading
+# line has no comma (reference entries do), and doesn't end in a page number
+# (a table of contents) or punctuation (a sentence).
+_NUMBERED_HEADING_RE = re.compile(r"(?:\d+(?:\.\d+){0,3}\.?|[IVX]{1,6}\.|[A-H]\.)\s+[A-Z][A-Za-z].*")
+_NAMED_HEADING_RE = re.compile(
+    r"(?i:abstract|introduction|methods?|results(?: and discussion)?|discussion|"
+    r"conclusions?(?: and outlook)?|summary|references|acknowledge?ments?|"
+    r"appendix(?:\s+\S.{0,60})?|supplementary (?:information|materials?|methods)(?:\s+\S.{0,40})?)\.?")
+# Outline entries that aren't sections (some PDFs bookmark every figure).
+_CAPTION_RE = re.compile(r"(?i)(?:fig(?:ure)?|tab(?:le)?|eq(?:uation)?)\.?\s*\S*\d")
+
+
+def _heading_line(line: str) -> bool:
+    line = line.strip()
+    if not 3 <= len(line) <= 90 or len(line.split()) > 12:
+        return False
+    if _NAMED_HEADING_RE.fullmatch(line):
+        return True
+    return (bool(_NUMBERED_HEADING_RE.fullmatch(line)) and "," not in line
+            and not line[-1].isdigit() and not line.endswith((".", ";", ":")))
+
+
+_HEADING_NUMBER_RE = re.compile(r"^(?:\d+(?:\.\d+)*\.?|[IVX]{1,6}\.|[A-H]\.)\s+")
+
+
+def _title_offset(page: str, title: str) -> int | None:
+    """Where an outline title stands as a heading line on its page — the
+    line itself (numbering aside) or, for a title that wraps, its first
+    line — as a raw offset. None when no line reads as it: a bare word
+    like "Attention" also occurs in the prose, and the prose doesn't count."""
+    want = normalize_text(_HEADING_NUMBER_RE.sub("", title.strip())).lower()
+    if not want:
+        return None
+    offset = 0
+    for line in page.splitlines(keepends=True):
+        got = normalize_text(_HEADING_NUMBER_RE.sub("", line.strip())).lower()
+        if got and (got == want or (len(got) >= 12 and want.startswith(got))):
+            return offset
+        offset += len(line)
+    return None
+
+
+def _outline_section(toc: list, pages: list[str], page_no: int, offset: int) -> str | None:
+    """The outline path ("Results › Noise model") that a spot falls under,
+    "" when no entry precedes it, None when the PDF has no usable outline.
+    An entry on the spot's own page counts only when its heading line is
+    found before the spot; a lone top-level entry is the document's title
+    and is left out."""
+    entries = [e for e in toc if not _CAPTION_RE.match(e[1])]
+    if not entries:
+        return None
+    top = min(level for level, _, _ in entries)
+    if len(entries) > 1 and sum(level == top for level, _, _ in entries) == 1:
+        entries = [e for e in entries if e[0] != top]
+    path: dict[int, str] = {}
+    for level, title, entry_page in entries:
+        if entry_page > page_no or entry_page > len(pages):
+            continue
+        if entry_page == page_no:
+            at = _title_offset(pages[page_no - 1], title)
+            if at is None or at > offset:
+                continue
+        path = {lvl: t for lvl, t in path.items() if lvl < level}
+        path[level] = title[:80]
+    return " › ".join(path[level] for level in sorted(path)[-3:])
+
+
+def _text_section(pages: list[str], page_no: int, offset: int) -> str:
+    """The nearest heading-shaped line before a spot (no outline to ask);
+    looks back at most 30 pages."""
+    for index in range(page_no - 1, max(-1, page_no - 31), -1):
+        text = pages[index][:offset] if index == page_no - 1 else pages[index]
+        for line in reversed(text.splitlines()):
+            if _heading_line(line):
+                return line.strip()
+    return ""
+
+
+# Characters a formula's text layer is made of: Greek, arrows, math
+# operators and symbols, math alphanumerics; private-use glyphs and control
+# characters are a font the text layer can't decode.
+_MATH_CHAR_RE = re.compile("[Ͱ-Ͽ←-⋿⟀-⟯⦀-⫿"
+                           "\U0001d400-\U0001d7ff]")
+_BROKEN_CHAR_RE = re.compile("[-�\x00-\x08\x0e-\x1f]")
+
+
+def text_unreliable(text: str) -> bool:
+    """Whether a selection's extracted text is too mangled to stand on its
+    own — a formula, a table, a symbol font — so the model should see a
+    picture of it. Errs toward yes: a needless crop costs a small image, a
+    missed one costs the formula."""
+    chars = "".join(text.split())
+    if not chars or _BROKEN_CHAR_RE.search(text):
+        return True
+    tokens = text.split()
+    singles = sum(1 for t in tokens if len(t) == 1 and t not in "aAI")
+    return (len(_MATH_CHAR_RE.findall(chars)) / len(chars) > 0.04
+            or (len(tokens) >= 4 and singles / len(tokens) > 0.35))
+
+
+def selection_context(ws: str, doc_id: str, passages: list[dict],
+                      budget: int) -> tuple[str | None, list[dict]]:
+    """Chat context for selected passages (``request_selections``): a small
+    head slice (title/abstract grounding) plus a window around each passage —
+    starting a little before it, where its set-up and definitions are —
+    instead of spending the whole budget on the start of the paper, which
+    rarely covers what the selection is about.
+
+    Returns ``(text, located)``: text is None when nothing could be placed
+    (the caller falls back to the head-of-document context); located has one
+    ``{page, section, found, crop}`` per passage — the page it was placed on
+    (0 = nowhere), the outline section (or nearest heading) it falls under,
+    whether its text was matched — which labels the passages in the
+    question (``final_prompt``) and the reply's context chip."""
+    located = [{"page": p["page"], "section": "", "found": False, "crop": False} for p in passages]
     path = pdf_path(ws, doc_id)
     if not path:
-        return None
+        return None, located
     try:
         pages = extract_pages(str(path))
     except Exception as error:
         log.warning(f"[ai_chat] selection-context extraction error: {error}")
-        return None
-    passages = [p.strip() for p in re.split(r"\n\s*---\s*\n", selection)
-                if p.strip()][:_MAX_SELECTIONS]
+        return None, located
     norm, seams = _normalized_pages(pages)
-    located = [(p, page_no) for p in passages
-               if (page_no := _locate_passage(norm, seams, p))]
-    if not located:
-        return None
+    toc = outline(str(path))
+    spots = []
+    for where, passage in zip(located, passages):
+        spot = _locate_passage(pages, norm, seams, passage)
+        if not spot:
+            continue
+        page_no, offset, found = spot
+        section = _outline_section(toc, pages, page_no, offset)
+        where.update(page=page_no, found=found,
+                     section=section if section is not None else _text_section(pages, page_no, offset))
+        spots.append((page_no, offset, where))
+    if not spots:
+        return None, located
     sections = []
     head = min(_HEAD_GROUNDING_CHARS, budget // 4)
-    head_text = _join_upto(pages, 0, head).strip()
-    if head_text:
-        sections.append(f"Start of the document (for grounding):\n{head_text}")
-    share = max(1, (budget - head) // len(located))
-    windows = 0
-    seen = set()
-    for _, page_no in located:
-        if page_no in seen:  # passages on one page share a window
+    starts, total = [], 0
+    for page in pages:
+        starts.append(total)
+        total += len(page) + 2
+    share = max(1, (budget - head) // len(spots))
+    before = min(_WINDOW_BEFORE_CHARS, share // 3)
+    windows = []  # (g0, g1) already shown — a passage inside one shares it
+    for page_no, offset, where in sorted(spots, key=lambda s: (s[0], s[1])):
+        pos = starts[page_no - 1] + offset
+        if any(g0 <= pos < g1 for g0, g1 in windows):
             continue
-        seen.add(page_no)
-        window = _join_upto(pages, page_no - 1, share).strip()
+        # A window reaching into the head slice starts at the top instead
+        # (and the separate head slice is dropped below).
+        g0 = pos - before if pos - before > head else 0
+        window = _span_text(pages, starts, g0, g0 + share)
         if window:
-            windows += 1
-            sections.append("Text around the selected passage "
-                            f"(starting at PDF page {page_no}):\n{window}")
-    return "\n\n".join(sections) if windows else None
+            windows.append((g0, g0 + share))
+            place = f"PDF page {page_no}" + (f', section "{where["section"]}"' if where["section"] else "")
+            sections.append(f"Text around the selected passage ({place}) — from a little "
+                            f"before it:\n{window}")
+    if not windows:
+        return None, located
+    head_text = _join_upto(pages, 0, head).strip() if windows[0][0] else ""
+    if head_text:
+        sections.insert(0, f"Start of the document (for grounding):\n{head_text}")
+    return "\n\n".join(sections), located
+
+
+def _crop_box(box):
+    """A selection's box grown to the minimum crop size and padded, still
+    inside the page."""
+    x0, y0, x1, y1 = box
+    grow_w = max(0.0, _CROP_MIN_W - (x1 - x0)) / 2 + _CROP_PAD
+    grow_h = max(0.0, _CROP_MIN_H - (y1 - y0)) / 2 + _CROP_PAD
+    return (max(0.0, x0 - grow_w), max(0.0, y0 - grow_h),
+            min(1.0, x1 + grow_w), min(1.0, y1 + grow_h))
+
+
+def selection_crops(ws: str, doc_id: str, passages: list[dict],
+                    located: list[dict]) -> list[tuple[str, str]]:
+    """Pictures of the selected regions whose text can't be trusted — the
+    passage wasn't found in the extracted text, or its text reads as a
+    formula (``text_unreliable``) — rendered from the PDF by the page and
+    box the viewer reported, as ``(media_type, base64)`` image parts. Marks
+    ``crop`` on each passage's located entry so the question says a picture
+    is attached."""
+    images = []
+    path = pdf_path(ws, doc_id)
+    if not path:
+        return images
+    for passage, where in zip(passages, located):
+        if len(images) >= _MAX_SELECTION_CROPS:
+            break
+        if not (passage["page"] and passage["box"]):
+            continue
+        if where["found"] and not text_unreliable(passage["text"]):
+            continue
+        image, _ = render_page(str(path), passage["page"], _CROP_MAX_SIDE, box=_crop_box(passage["box"]))
+        if image:
+            images.append((image[1], base64.standard_b64encode(image[0]).decode("ascii")))
+            where["crop"] = True
+    return images
 
 
 def page_properties_line(properties: dict) -> str:
@@ -701,7 +986,8 @@ def page_report_section(connection, ws: str, page_id: str, pdf_budget: int,
     return "\n\n".join(sections)
 
 
-def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str, list[dict]]:
+def gather_inputs(ws: str, payload, allow_native: bool,
+                  crops: list | None = None) -> tuple[list[str], str, list[dict]]:
     """Collect the chat's context: native PDF attachments and the text
     sections for the request's pages.
 
@@ -722,7 +1008,12 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
     "native_requested" (the user asked for that; requested but not native =
     the provider refused it and text went instead), "partial", "chars",
     "pages", "pages_shown"}`` — so the UI can say "the model saw pages 1–9
-    of 22" instead of leaving the user to guess."""
+    of 22" instead of leaving the user to guess. The open paper's entry
+    also carries ``"selection": {"passages": [...]}`` when the message
+    selected passages in it (``selection_context``'s located entries).
+
+    ``crops``, when given, receives pictures of selected regions whose text
+    is unreliable (``selection_crops``) for the caller to send as images."""
     pdf_b64s = []
     context_sections = []
     coverage = []
@@ -777,22 +1068,24 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
             if doc_id and attached:
                 report(title, doc_id, True)
             elif doc_id:
-                selection = ((payload.selection or "").strip()[:MAX_SELECTION_CHARS]
-                             if single or page_id == payload.page_id else "")
+                passages = (request_selections(payload)
+                            if single or page_id == payload.page_id else [])
                 # With a selection, center the budget on the selected
-                # passages (located by page) instead of the start of the
-                # paper; fall back to the plain head excerpt when nothing
-                # could be located.
-                document_text = (selection_context(ws, doc_id, selection, text_budget)
-                                 if selection else None)
+                # passages instead of the start of the paper; fall back to
+                # the plain head excerpt when nothing could be placed.
+                document_text, located = (selection_context(ws, doc_id, passages, text_budget)
+                                          if passages else (None, []))
+                if passages and crops is not None:
+                    crops.extend(selection_crops(ws, doc_id, passages, located))
+                selected = {"selection": {"passages": located}} if located else {}
                 if document_text:
                     # Selection-centred context: the budget went to windows
                     # around the passages, so there is no head page span.
                     report(title, doc_id, False,
-                           {**none, "partial": True, "chars": len(document_text), "selection": True})
+                           {**none, "partial": True, "chars": len(document_text), **selected})
                 else:
                     document_text, cover = head_context(ws, doc_id, limit=text_budget)
-                    report(title, doc_id, False, cover)
+                    report(title, doc_id, False, {**cover, **selected})
             section = page_report_section(connection, ws, page_id, 0,
                                           document_text=document_text or "",
                                           include_notes=bool(payload.include_notes))
